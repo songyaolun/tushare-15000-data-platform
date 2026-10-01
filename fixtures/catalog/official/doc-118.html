@@ -1,0 +1,150 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=118 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h2 id="_1">公募基金公司</h2>
+<hr/>
+<p>接口：fund_company<br/>
+描述：获取公募基金管理人列表<br/>
+积分：用户需要1500积分才可以调取，一次可以提取全部数据。具体请参阅<a href="https://tushare.pro/document/1?doc_id=13">积分获取办法</a> </p>
+<p><strong>输入参数</strong></p>
+<p>无，可提取全部</p>
+<p><strong>输出参数</strong></p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>name</td>
+<td>str</td>
+<td>Y</td>
+<td>基金公司名称</td>
+</tr>
+<tr>
+<td>shortname</td>
+<td>str</td>
+<td>Y</td>
+<td>简称</td>
+</tr>
+<tr>
+<td>short_enname</td>
+<td>str</td>
+<td>N</td>
+<td>英文缩写</td>
+</tr>
+<tr>
+<td>province</td>
+<td>str</td>
+<td>Y</td>
+<td>省份</td>
+</tr>
+<tr>
+<td>city</td>
+<td>str</td>
+<td>Y</td>
+<td>城市</td>
+</tr>
+<tr>
+<td>address</td>
+<td>str</td>
+<td>Y</td>
+<td>注册地址</td>
+</tr>
+<tr>
+<td>phone</td>
+<td>str</td>
+<td>Y</td>
+<td>电话</td>
+</tr>
+<tr>
+<td>office</td>
+<td>str</td>
+<td>Y</td>
+<td>办公地址</td>
+</tr>
+<tr>
+<td>website</td>
+<td>str</td>
+<td>Y</td>
+<td>公司网址</td>
+</tr>
+<tr>
+<td>chairman</td>
+<td>str</td>
+<td>Y</td>
+<td>法人代表</td>
+</tr>
+<tr>
+<td>manager</td>
+<td>str</td>
+<td>Y</td>
+<td>总经理</td>
+</tr>
+<tr>
+<td>reg_capital</td>
+<td>float</td>
+<td>Y</td>
+<td>注册资本</td>
+</tr>
+<tr>
+<td>setup_date</td>
+<td>str</td>
+<td>Y</td>
+<td>成立日期</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>Y</td>
+<td>公司终止日期</td>
+</tr>
+<tr>
+<td>employees</td>
+<td>float</td>
+<td>Y</td>
+<td>员工总数</td>
+</tr>
+<tr>
+<td>main_business</td>
+<td>str</td>
+<td>Y</td>
+<td>主要产品及业务</td>
+</tr>
+<tr>
+<td>org_code</td>
+<td>str</td>
+<td>Y</td>
+<td>组织机构代码</td>
+</tr>
+<tr>
+<td>credit_code</td>
+<td>str</td>
+<td>Y</td>
+<td>统一社会信用代码</td>
+</tr>
+</tbody>
+</table>
+<p><strong>接口示例</strong></p>
+<div class="codehilite"><pre>pro = ts.pro_api()
+
+df = pro.fund_company()
+</pre></div>
+<p><strong>数据示例</strong></p>
+<div class="codehilite"><pre>               name shortname   province       city                                                                      
+0      工银瑞信基金管理有限公司    工银瑞信基金        北京市        北京市                                              
+1      建信基金管理有限责任公司      建信基金        北京市        北京市                                                
+2        华商基金管理有限公司      华商基金        北京市        北京市                                                  
+3    中邮创业基金管理股份有限公司      中邮基金        北京市        北京市                                              
+4      中国国际金融股份有限公司      中金公司        北京市        北京市                                                
+..              ...       ...        ...        ...                                                                      
+198      汇贤房托管理有限公司    汇贤房托管理  中国香港特别行政区  中国香港特别行政区                                    
+199      富豪资产管理有限公司    富豪资产管理  中国香港特别行政区  中国香港特别行政区                                    
+200      小飞资产管理有限公司    小飞资产管理  中国香港特别行政区  中国香港特别行政区                                    
+201        领航集团有限公司      领航集团       None         境外                                                        
+202  辉立资本管理(香港)有限公司    辉立资本香港       None         境外                                                  
+</pre></div>
+</div></body></html>

@@ -1,0 +1,16 @@
+name: 权益平台离线验收
+trigger:
+  change:
+jobs:
+  offline_quality:
+    name: Python 静态检查与离线验收
+    image: python:3.11-slim
+    steps:
+      - id: install_uv
+        name: 安装固定版本 uv
+        commands:
+          - python -m pip install uv==0.12.21
+      - id: verify
+        name: 执行仓库验收
+        commands:
+          - bash scripts/ci.sh

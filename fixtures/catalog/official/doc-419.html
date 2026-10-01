@@ -1,0 +1,168 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=419 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h2 id="_1">指数历史分钟行情</h2>
+<hr/>
+<p>接口：idx_mins<br/>
+描述：获取交易所指数分钟数据，支持1min/5min/15min/30min/60min行情，提供Python SDK和 http Restful API两种方式<br/>
+限量：单次最大8000行数据，可以通过指数代码和时间循环获取，本接口可以提供超过10年历史分钟数据<br/>
+权限：需单独开权限，正式权限请参阅 <u><a href="https://tushare.pro/document/1?doc_id=290">权限说明</a> </u> ，可以<a href="https://tushare.pro/weborder/#/permission">在线开通</a>分钟权限。</p>
+<p><br/><br/>
+<br/></p>
+<p><strong>输入参数</strong></p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>指数代码，e.g. 000001.SH</td>
+</tr>
+<tr>
+<td>freq</td>
+<td>str</td>
+<td>Y</td>
+<td>分钟频度（1min/5min/15min/30min/60min）</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>datetime</td>
+<td>N</td>
+<td>开始日期 格式：2023-08-25 09:00:00</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>datetime</td>
+<td>N</td>
+<td>结束时间 格式：2023-08-25 19:00:00</td>
+</tr>
+</tbody>
+</table>
+<p><br/><br/>
+<br/></p>
+<p><strong>freq参数说明</strong></p>
+<table>
+<thead>
+<tr>
+<th>freq</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1min</td>
+<td>1分钟</td>
+</tr>
+<tr>
+<td>5min</td>
+<td>5分钟</td>
+</tr>
+<tr>
+<td>15min</td>
+<td>15分钟</td>
+</tr>
+<tr>
+<td>30min</td>
+<td>30分钟</td>
+</tr>
+<tr>
+<td>60min</td>
+<td>60分钟</td>
+</tr>
+</tbody>
+</table>
+<p><br/><br/>
+<br/></p>
+<p><strong>输出参数</strong></p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>指数代码</td>
+</tr>
+<tr>
+<td>trade_time</td>
+<td>str</td>
+<td>Y</td>
+<td>交易时间</td>
+</tr>
+<tr>
+<td>open</td>
+<td>float</td>
+<td>Y</td>
+<td>开盘价</td>
+</tr>
+<tr>
+<td>close</td>
+<td>float</td>
+<td>Y</td>
+<td>收盘价</td>
+</tr>
+<tr>
+<td>high</td>
+<td>float</td>
+<td>Y</td>
+<td>最高价</td>
+</tr>
+<tr>
+<td>low</td>
+<td>float</td>
+<td>Y</td>
+<td>最低价</td>
+</tr>
+<tr>
+<td>vol</td>
+<td>int</td>
+<td>Y</td>
+<td>成交量(股)</td>
+</tr>
+<tr>
+<td>amount</td>
+<td>float</td>
+<td>Y</td>
+<td>成交金额（元）</td>
+</tr>
+</tbody>
+</table>
+<p><br/><br/>
+<br/></p>
+<p><strong>接口用法</strong></p>
+<div class="codehilite"><pre>pro = ts.pro_api()
+
+#获取上证综指000001.SH的历史分钟数据
+df = pro.idx_mins(ts_code='000001.SH', freq='1min', start_date='2023-08-25 09:00:00', end_date='2023-08-25 19:00:00')
+</pre></div>
+<p><br/><br/>
+<br/></p>
+<p><strong>数据样例</strong></p>
+<div class="codehilite"><pre>     ts_code           trade_time      close       open       high        low          vol        amount
+0    000001.SH  2023-08-25 15:00:00  3064.0747  3065.2124  3065.2124  3064.0747  315294700.0  3.375271e+09
+1    000001.SH  2023-08-25 14:59:00  3065.6626  3065.6626  3065.6626  3065.6626          0.0  0.000000e+00
+2    000001.SH  2023-08-25 14:58:00  3065.6626  3065.6570  3065.6626  3065.6570    4073500.0  4.559007e+07
+3    000001.SH  2023-08-25 14:57:00  3065.7598  3065.7424  3065.9077  3065.0298  186465300.0  1.920655e+09
+4    000001.SH  2023-08-25 14:56:00  3065.5800  3065.7822  3066.4700  3065.3257  166403300.0  1.804927e+09
+..         ...                  ...        ...        ...        ...        ...          ...           ...
+236  000001.SH  2023-08-25 09:34:00  3064.0361  3067.4740  3068.0984  3064.0361  394884900.0  4.478565e+09
+237  000001.SH  2023-08-25 09:33:00  3066.8120  3064.5352  3067.5325  3063.8894  448783200.0  5.006195e+09
+238  000001.SH  2023-08-25 09:32:00  3064.6367  3069.6433  3070.4116  3063.8950  525851800.0  5.696113e+09
+239  000001.SH  2023-08-25 09:31:00  3069.0334  3067.8394  3069.0334  3066.2466  826002900.0  9.270067e+09
+240  000001.SH  2023-08-25 09:30:00  3068.6150  3068.6150  3068.6150  3068.6150  241406700.0  2.880646e+09
+</pre></div>
+</div></body></html>

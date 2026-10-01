@@ -1,0 +1,163 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=497 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">期货交易参数</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：fut_trade_param<br/>
+描述：获取郑商所期货交易参数数据（其他交易所上线中）<br/>
+限量：单次最大3000条，可根据代码或日期循环提取<br/>
+积分：需要5000积分可以调取，具体请参阅<a href="https://tushare.pro/document/1?doc_id=13">积分获取办法</a></p>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>N</td>
+<td>交易日期（YYYYMMDD）</td>
+</tr>
+<tr>
+<td>fut_code</td>
+<td>str</td>
+<td>N</td>
+<td>期货代码</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>N</td>
+<td>开始日期（YYYYMMDD）</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>N</td>
+<td>结束日期（YYYYMMDD）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>Y</td>
+<td>交易日期（YYYYMMDD）</td>
+</tr>
+<tr>
+<td>fut_code</td>
+<td>str</td>
+<td>Y</td>
+<td>合约代码或类型</td>
+</tr>
+<tr>
+<td>exchange</td>
+<td>str</td>
+<td>Y</td>
+<td>期货公司会员简称</td>
+</tr>
+<tr>
+<td>trade_unit</td>
+<td>str</td>
+<td>Y</td>
+<td>交易单位</td>
+</tr>
+<tr>
+<td>tick_size</td>
+<td>str</td>
+<td>Y</td>
+<td>最小变动价位</td>
+</tr>
+<tr>
+<td>pre_settle_price</td>
+<td>str</td>
+<td>Y</td>
+<td>上日结算价</td>
+</tr>
+<tr>
+<td>price_limit</td>
+<td>str</td>
+<td>Y</td>
+<td>涨跌停板幅度(%)</td>
+</tr>
+<tr>
+<td>position_limit</td>
+<td>str</td>
+<td>Y</td>
+<td>日持仓限额</td>
+</tr>
+<tr>
+<td>trade_limit</td>
+<td>str</td>
+<td>Y</td>
+<td>交易限额</td>
+</tr>
+<tr>
+<td>min_order_qty</td>
+<td>str</td>
+<td>Y</td>
+<td>最小开仓量下单量</td>
+</tr>
+<tr>
+<td>max_limit_order_qty</td>
+<td>str</td>
+<td>Y</td>
+<td>限价单最大下单量</td>
+</tr>
+<tr>
+<td>max_market_order_qty</td>
+<td>str</td>
+<td>Y</td>
+<td>市价单最大下单量</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre># 导入sdk包
+import tushare as ts
+
+# 配置凭据，如果已全局配置了，可以忽略。
+ts.set_token('&lt;REDACTED&gt;')
+
+# 获取接口实例
+pro = ts.pro_api()
+
+# 拉取接口(fut_trade_param)数据
+获取PX2612.ZCE的数据
+df=pro.fut_trade_param(fut_code='PX2612.ZCE')
+
+#获取20260914的数据
+df=pro.fut_trade_param(trade_date='20260914',fields='trade_date,fut_code, exchange, trade_unit, tick_size')
+print(df)
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<div class="codehilite"><pre>  trade_date    fut_code exchange trade_unit tick_size
+0     20260914  PX2612.ZCE     CZCE          5       2.0
+1     20260914  SM2610.ZCE     CZCE          5       2.0
+2     20260914  OI2609.ZCE     CZCE         10       1.0
+3     20260914  OI2611.ZCE     CZCE         10       1.0
+4     20260914  AP2703.ZCE     CZCE         10       1.0
+..         ...         ...      ...        ...       ...
+234   20260914  ZC2705.ZCE     CZCE        100       0.2
+235   20260914  ZC2706.ZCE     CZCE        100       0.2
+236   20260914  SH2708.ZCE     CZCE         30       1.0
+237   20260914  SM2609.ZCE     CZCE          5       2.0
+238   20260914  PX2701.ZCE     CZCE          5       2.0
+</pre></div>
+</div></body></html>

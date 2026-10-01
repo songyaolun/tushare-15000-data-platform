@@ -1,0 +1,110 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=458 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">获取可转债评级历史记录</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：cb_rating<br/>
+描述：获取可转债评级历史记录<br/>
+限量：单次最大3000条，可根据代码循环提取<br/>
+积分：需要2000积分可以调取，具体请参阅<a href="https://tushare.pro/document/1?doc_id=13">积分获取办法</a></p>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>转债代码，支持多值输入</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>转债代码</td>
+</tr>
+<tr>
+<td>ann_date</td>
+<td>str</td>
+<td>Y</td>
+<td>评级发布日期</td>
+</tr>
+<tr>
+<td>rating_date</td>
+<td>str</td>
+<td>Y</td>
+<td>评级日期</td>
+</tr>
+<tr>
+<td>rating_com_name</td>
+<td>str</td>
+<td>Y</td>
+<td>评级机构</td>
+</tr>
+<tr>
+<td>rating_way</td>
+<td>str</td>
+<td>Y</td>
+<td>评级方式</td>
+</tr>
+<tr>
+<td>rating_type</td>
+<td>str</td>
+<td>Y</td>
+<td>评级类别</td>
+</tr>
+<tr>
+<td>rating</td>
+<td>str</td>
+<td>Y</td>
+<td>信用等级</td>
+</tr>
+<tr>
+<td>rating_outlook</td>
+<td>str</td>
+<td>Y</td>
+<td>评级展望</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre># 请补充示例代码
+pro = ts.pro_api()
+
+
+#获取可转债行情
+df = pro.cb_daily(ts_code='128119.SZ', fields='ts_code,ann_date, rating_date,rating_com_name,rating,rating_outlook')
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<div class="codehilite"><pre>    ts_code   ann_date   rating_date  rating_com_name       rating     rating_outlook
+0  128119.SZ  20260402    20260330    联合资信评估股份有限公司    BB+           None
+1  128119.SZ  20260211    20260209    联合资信评估股份有限公司    BBB           None
+2  128119.SZ  20251118    20251113    联合资信评估股份有限公司     A-           None
+3  128119.SZ  20250627    20250626    联合资信评估股份有限公司     A+       列入评级观察名单
+4  128119.SZ  20240620    20240614    联合资信评估股份有限公司     A+             稳定
+5  128119.SZ  20230622    20230621    联合资信评估股份有限公司    AA-           None
+6  128119.SZ  20220630    20220629    联合资信评估股份有限公司    AA-           None
+7  128119.SZ  20210527    20210526    联合资信评估股份有限公司     AA           None
+8  128119.SZ  20200919    20200916      联合信用评级有限公司     AA           None
+9  128119.SZ  20200709    20190911      联合信用评级有限公司     AA           None
+</pre></div>
+</div></body></html>

@@ -1,0 +1,133 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=490 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">因子值</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：factor_value<br/>
+描述：获取Tushare因子库里各因子的数值，目前是基于daily的时间序列数值。<br/>
+限量：单次最大提取6000条数据，可根据股票代码或日期或因子名循环提取<br/>
+权限：因子库为单独权限接口，每日18点半~19点半之间更新。对个人用户2000元一年，机构用户2万元一年，5000积分以上可试用，请在“<a href="https://tushare.pro/weborder/#/permission" target="_blank">权限中心</a>”勾选<code>因子库</code>开通。</p>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>N</td>
+<td>股票代码</td>
+</tr>
+<tr>
+<td>factor_name</td>
+<td>str</td>
+<td>N</td>
+<td>因子名称（基于因子列表的名称）</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>N</td>
+<td>交易日期：YYYYMMDD格式</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>N</td>
+<td>开始日期：YYYYMMDD格式</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>N</td>
+<td>结束日期：YYYYMMDD格式</td>
+</tr>
+</tbody>
+</table>
+<p>注：ts_code和factor_name至少要输入一个参数</p>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>factor_name</td>
+<td>str</td>
+<td>Y</td>
+<td>因子名称</td>
+</tr>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>证券代码</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>Y</td>
+<td>交易日期，格式YYYYMMDD</td>
+</tr>
+<tr>
+<td>factor_value</td>
+<td>float</td>
+<td>Y</td>
+<td>因子值</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre># 导入sdk包
+import tushare as ts
+
+
+# 获取接口实例
+pro = ts.pro_api()
+
+# 按日期提取某日所有股票的某个因子的全部数据
+df = pro.factor_value(trade_date='20260812', factor_name='MACD')
+
+# 按股票提取全部因子某一天的数据
+df = pro.factor_value(trade_date='20260812', ts_code='600000.SH')
+
+print(df)
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<div class="codehilite"><pre>               factor_name    ts_code trade_date  factor_value
+0   bias_std_turn_63d_504d  000566.SZ   20100104     -0.220831
+1   bias_std_turn_63d_504d  000623.SZ   20100104     -0.341817
+2   bias_std_turn_63d_504d  000731.SZ   20100104     -0.229821
+3   bias_std_turn_63d_504d  000525.SZ   20100104     -0.073316
+4  bias_std_turn_126d_504d  000767.SZ   20100104      0.115651
+5       bias_turn_42d_252d  000713.SZ   20100104      0.026199
+6        avg_turnover_252d  000100.SZ   20100104      0.000233
+7   bias_std_turn_63d_504d  000571.SZ   20100104      0.291333
+8   bias_std_turn_63d_504d  000629.SZ   20100104     -0.789451
+9   bias_std_turn_63d_504d  000738.SZ   20100104     -0.228540
+</pre></div>
+<h3 id="_7">数据转换（宽表格式）</h3>
+<p>当按日期查询全市场因子值时，返回的是长表格式（每行一只股票）。可使用 <code>pivot_table</code> 转换为宽表格式（每列一只股票），便于横向对比：</p>
+<div class="codehilite"><pre>df = pro.factor_value(trade_date='20260812', factor_name='MACD')
+
+df_pivot = df.pivot_table(
+    index=['factor_name', 'trade_date'],
+    columns='ts_code',
+    values='factor_value'
+).reset_index()
+</pre></div>
+<h3 id="_8">宽表效果：</h3>
+<div class="codehilite"><pre>ts_code factor_name trade_date  000001.SZ  000002.SZ  000006.SZ  ...  920978.BJ    920992.BJ
+0              MACD 20260812  -6.387727   0.33698   8.421715  ...     0.622232     0.305102
+</pre></div>
+</div></body></html>

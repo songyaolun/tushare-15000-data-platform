@@ -1,0 +1,124 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=462 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">公募基金业绩基准库</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：mkt_idx_bmk<br/>
+描述：获取官方发布的ETF业绩比较基准列表信息，分为一类库、二类库<br/>
+限量：单次最大500条，单次可以提取全部列表<br/>
+积分：需要5000积分可以调取，具体请参阅<a href="https://tushare.pro/document/1?doc_id=13">积分获取办法</a></p>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>N</td>
+<td>指数代码</td>
+</tr>
+<tr>
+<td>bmk_type</td>
+<td>str</td>
+<td>N</td>
+<td>基准类型：策略指数、行业主题指数、行业主题指数、宽基指数</td>
+</tr>
+<tr>
+<td>bmk_level</td>
+<td>str</td>
+<td>N</td>
+<td>基准分类： 一类库、二类库</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>TS代码</td>
+</tr>
+<tr>
+<td>symbol</td>
+<td>str</td>
+<td>Y</td>
+<td>代码</td>
+</tr>
+<tr>
+<td>name</td>
+<td>str</td>
+<td>Y</td>
+<td>指数简称</td>
+</tr>
+<tr>
+<td>fullname</td>
+<td>str</td>
+<td>Y</td>
+<td>指数名称</td>
+</tr>
+<tr>
+<td>bmk_level</td>
+<td>str</td>
+<td>Y</td>
+<td>基准库分层 一类库、二类库</td>
+</tr>
+<tr>
+<td>bmk_type</td>
+<td>str</td>
+<td>Y</td>
+<td>基准类型 策略、宽基、行业主题</td>
+</tr>
+<tr>
+<td>bmk_src</td>
+<td>str</td>
+<td>Y</td>
+<td>指数编制机构</td>
+</tr>
+<tr>
+<td>idx_type</td>
+<td>str</td>
+<td>Y</td>
+<td>指数类型 策略类指数；规模类指数；主题类指数；综合类指数；行业类指数；风格类指数</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre>#获取上证指数
+df = pro.mkt_idx_bmk(ts_code='000001.SH')
+
+#获取宽基指数
+df = pro.mkt_idx_bmk(bmk_type='宽基')
+
+#获取一类库数据
+df = pro.mkt_idx_bmk(bmk_level='一类库')
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<div class="codehilite"><pre>      ts_code  symbol    name      fullname bmk_level bmk_type bmk_src idx_type
+0   000001.SH  000001    上证指数        上证综合指数       一类库       宽基    中证指数    综合类指数
+1   000002.SH  000002    A股指数        上证A股指数       二类库       宽基    中证指数    规模类指数
+2   000010.SH  000010   上证180       上证180指数       二类库       宽基    中证指数    规模类指数
+3   000015.SH  000015    红利指数        上证红利指数       二类库       策略    中证指数    策略类指数
+4   000016.SH  000016    上证50        上证50指数       一类库       宽基    中证指数    规模类指数
+5   000097.SH  000097    高端装备  上证高端装备制造60指数       二类库     行业主题    中证指数    主题类指数
+6  000171.CSI  000171    新兴成指  中国战略新兴产业成份指数       一类库     行业主题    中证指数    主题类指数
+7   000300.SH  000300   沪深300       沪深300指数       一类库       宽基    中证指数    规模类指数
+8   000510.SH  000510  中证A500      中证A500指数       一类库       宽基    中证指数    规模类指数
+9   000680.SH  000680    科创综指     上证科创板综合指数       一类库       宽基    中证指数    综合类指数
+</pre></div>
+</div></body></html>

@@ -1,0 +1,117 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=453 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">交易所重点提示证券</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：stk_alert<br/>
+描述：根据证券交易所交易规则的有关规定，交易所每日发布重点提示证券<br/>
+限量：单次最大1000条，可根据代码或日期循环提取<br/>
+积分：需要6000积分可以调取，具体请参阅<a href="https://tushare.pro/document/1?doc_id=13">积分获取办法</a></p>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>N</td>
+<td>股票代码（可以通过stock_basic获取）示例:000001.SZ</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>N</td>
+<td>交易所重点提示起始日期（YYYYMMDD格式）示例:20260312</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>N</td>
+<td>开始日期（YYYYMMDD格式）示例:20260312</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>N</td>
+<td>结束日期（YYYYMMDD格式）示例:20260312</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>股票代码</td>
+</tr>
+<tr>
+<td>name</td>
+<td>str</td>
+<td>Y</td>
+<td>股票名称</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>Y</td>
+<td>交易所重点提示起始日期</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>Y</td>
+<td>交易所重点提示参考截至日期</td>
+</tr>
+<tr>
+<td>type</td>
+<td>str</td>
+<td>Y</td>
+<td>提示类型</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre># 导入sdk包
+import tushare as ts
+
+# 配置凭据token
+ts.set_token('&lt;REDACTED&gt;')
+
+# 初始化接口实例
+pro = ts.pro_api()
+
+#获取2026年3月11日的当日所有重点提示证券
+df = pro.stk_alert(trade_date='20260311')
+
+#获取股票”豫能控股“2025年以来每个交易日的重点提示
+df = pro.stk_alert(ts_code='001896.SZ', start_date='20250101', end_date='20251231')
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<div class="codehilite"><pre>     ts_code            name  start_date    end_date       type
+0  513310.SH            中韩芯片  2026-03-16  2026-03-27  交易所重点提示证券
+1  001896.SZ            豫能控股  2026-03-16  2026-03-27  交易所重点提示证券
+2  600599.SH           *ST熊猫  2026-03-13  2026-03-26  交易所重点提示证券
+3  301373.SZ            凌玮科技  2026-03-11  2026-03-24  交易所重点提示证券
+4  600599.SH           *ST熊猫  2026-03-11  2026-03-24  交易所重点提示证券
+5  002969.SZ            嘉美包装  2026-03-11  2026-03-24  交易所重点提示证券
+6  600355.SH           *ST精伦  2026-03-09  2026-03-20  交易所重点提示证券
+7  600696.SH           *ST岩石  2026-03-09  2026-03-20  交易所重点提示证券
+8  000711.SZ            ST京蓝  2026-03-04  2026-03-17  交易所重点提示证券
+</pre></div>
+</div></body></html>

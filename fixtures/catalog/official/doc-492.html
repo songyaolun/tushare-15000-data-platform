@@ -1,0 +1,214 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=492 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">期货复权行情</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：fut_daily_adj<br/>
+描述：获取主力合约的复权日线行情<br/>
+限量：单次最大3000条，可根据代码或日期循环提取<br/>
+积分：需要5000积分可以调取，具体请参阅<a href="https://tushare.pro/document/1?doc_id=13">积分获取办法</a></p>
+<p><font color="red"><br/>
+注意：<br/>
+    复权数据是参考股票计算，在主力合约切换时以新的合约和旧的合约的收盘价相比得出<br/>
+</font></p>
+<div class="codehilite"><pre>主力发生变化的交易日:
+每个切换点 k 取切换前一日新旧主力的同日收盘价之比 `r_k = C_new / C_old`（C 取 raw_1day 当日真实收盘），
+复权因子从最早段起为 1.0，每越过一个切换点累乘 `1/r_k`：
+切换前段（首日 .. 第一个切换前一日）：adj = 1.0；
+第 k 段（第 k 次切换日及之后，直到下一个切换）：adj = Π_{j&lt;=k} (1/r_j)。
+</pre></div>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>N</td>
+<td>交易日期（格式：YYYYMMDD）</td>
+</tr>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>N</td>
+<td>合约代码</td>
+</tr>
+<tr>
+<td>exchange</td>
+<td>str</td>
+<td>N</td>
+<td>交易所代码(CFFEX,CZCE,DCE,GFEX,INE,SHFE)</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>N</td>
+<td>开始日期（格式：YYYYMMDD）</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>N</td>
+<td>结束日期（格式：YYYYMMDD）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>TS代码</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>Y</td>
+<td>交易代码</td>
+</tr>
+<tr>
+<td>pre_close</td>
+<td>float</td>
+<td>Y</td>
+<td>昨收盘价</td>
+</tr>
+<tr>
+<td>pre_settle</td>
+<td>float</td>
+<td>Y</td>
+<td>昨结算价</td>
+</tr>
+<tr>
+<td>open</td>
+<td>float</td>
+<td>Y</td>
+<td>开盘价</td>
+</tr>
+<tr>
+<td>high</td>
+<td>float</td>
+<td>Y</td>
+<td>最高价</td>
+</tr>
+<tr>
+<td>low</td>
+<td>float</td>
+<td>Y</td>
+<td>最低价</td>
+</tr>
+<tr>
+<td>close</td>
+<td>float</td>
+<td>Y</td>
+<td>收盘价</td>
+</tr>
+<tr>
+<td>settle</td>
+<td>float</td>
+<td>Y</td>
+<td>结算价</td>
+</tr>
+<tr>
+<td>change1</td>
+<td>float</td>
+<td>Y</td>
+<td>涨跌1,收盘价-昨结算价</td>
+</tr>
+<tr>
+<td>change2</td>
+<td>float</td>
+<td>Y</td>
+<td>涨跌2,结算价-昨结算价</td>
+</tr>
+<tr>
+<td>vol</td>
+<td>float</td>
+<td>Y</td>
+<td>成交量(手)</td>
+</tr>
+<tr>
+<td>amount</td>
+<td>float</td>
+<td>Y</td>
+<td>成交金额(万元)</td>
+</tr>
+<tr>
+<td>oi</td>
+<td>float</td>
+<td>Y</td>
+<td>持仓量(手)</td>
+</tr>
+<tr>
+<td>oi_chg</td>
+<td>float</td>
+<td>Y</td>
+<td>持仓量变化</td>
+</tr>
+<tr>
+<td>delv_settle</td>
+<td>float</td>
+<td>N</td>
+<td>交割结算价</td>
+</tr>
+<tr>
+<td>exchange</td>
+<td>str</td>
+<td>Y</td>
+<td>交易所</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre># 导入sdk包
+import tushare as ts
+
+# 配置凭据，如果已全局配置了，可以忽略。
+ts.set_token('&lt;REDACTED&gt;')
+
+# 获取接口实例
+pro = ts.pro_api()
+
+# 拉取接口(fut_daily_adj)数据
+pro = ts.pro_api()
+
+#获取IF.CFX合约20180101～20181113期间的行情
+df = pro.fut_daily_adj(ts_code='IF.CFX', start_date='20180101', end_date='20181113')
+
+#获取2018年11月13日大商所全部合约行情数据
+df = pro.fut_daily_adj(trade_date='20260907', exchange='DCE', fields='ts_code,trade_date,pre_close,pre_settle,open,high,low,close,settle,vol')
+
+#获取2026年9月7日大商所全部合约行情数据
+df=pro.fut_daily_adj(trade_date='20260907',fields='ts_code,trade_date,pre_close,pre_settle')
+print(df)
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<div class="codehilite"><pre>    ts_code trade_date   pre_close  pre_settle
+0      IF.CFX   20260907   7188.6210   7186.4029
+1     IFL.CFX   20260907   7357.1309   7354.8609
+2    IFL1.CFX   20260907   5168.7921   5166.7294
+3    IFL2.CFX   20260907   5696.1245   5694.8457
+4    IFL3.CFX   20260907   4386.6971   4384.8949
+..        ...        ...         ...         ...
+195    YL.DCE   20260907   2551.8884   2537.1713
+196    ZC.ZCE   20260907   2381.9820   2381.9820
+197   ZCL.ZCE   20260907   1057.3599   1057.3599
+198    ZN.SHF   20260907  30220.9139  30220.9139
+199   ZNL.SHF   20260907  34471.3651  34503.6296
+</pre></div>
+</div></body></html>

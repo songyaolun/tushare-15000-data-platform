@@ -1,0 +1,318 @@
+{
+  "daily": [
+    {
+      "code": 0,
+      "msg": "",
+      "data": {
+        "fields": [
+          "ts_code",
+          "trade_date",
+          "open",
+          "high",
+          "low",
+          "close",
+          "pre_close",
+          "pct_chg",
+          "vol",
+          "amount"
+        ],
+        "items": [
+          [
+            "000001.SZ",
+            "20240102",
+            10.0,
+            12.0,
+            9.0,
+            11.0,
+            10.0,
+            10.0,
+            20.0,
+            22.0
+          ]
+        ]
+      }
+    }
+  ],
+  "stock_basic": [
+    {
+      "code": 0,
+      "msg": "",
+      "data": {
+        "fields": [
+          "ts_code",
+          "name",
+          "industry",
+          "list_date",
+          "list_status"
+        ],
+        "items": [
+          [
+            "000001.SZ",
+            "离线示例股票",
+            "示例行业",
+            "20200101",
+            "L"
+          ]
+        ]
+      }
+    }
+  ],
+  "moneyflow": [
+    {
+      "code": 0,
+      "msg": "",
+      "data": {
+        "fields": [
+          "ts_code",
+          "trade_date",
+          "buy_sm_vol",
+          "net_mf_amount",
+          "buy_sm_amount",
+          "sell_sm_amount"
+        ],
+        "items": [
+          [
+            "000001.SZ",
+            "20240102",
+            10.0,
+            2.0,
+            5.0,
+            3.0
+          ]
+        ]
+      }
+    }
+  ],
+  "fund_daily": [
+    {
+      "code": 0,
+      "msg": "",
+      "data": {
+        "fields": [
+          "ts_code",
+          "trade_date",
+          "open",
+          "high",
+          "low",
+          "close",
+          "pre_close",
+          "pct_chg",
+          "vol",
+          "amount"
+        ],
+        "items": [
+          [
+            "510300.SH",
+            "20240102",
+            10.0,
+            12.0,
+            9.0,
+            11.0,
+            10.0,
+            10.0,
+            20.0,
+            22.0
+          ]
+        ]
+      }
+    }
+  ],
+  "fut_daily": [
+    {
+      "code": 0,
+      "msg": "",
+      "data": {
+        "fields": [
+          "ts_code",
+          "trade_date",
+          "open",
+          "high",
+          "low",
+          "close",
+          "pre_close",
+          "pct_chg",
+          "vol",
+          "amount",
+          "oi"
+        ],
+        "items": [
+          [
+            "IF2401.CFX",
+            "20240102",
+            10.0,
+            12.0,
+            9.0,
+            11.0,
+            10.0,
+            10.0,
+            20.0,
+            22.0,
+            100.0
+          ]
+        ]
+      }
+    }
+  ],
+  "cb_daily": [
+    {
+      "code": 0,
+      "msg": "",
+      "data": {
+        "fields": [
+          "ts_code",
+          "trade_date",
+          "open",
+          "high",
+          "low",
+          "close",
+          "pre_close",
+          "pct_chg",
+          "vol",
+          "amount"
+        ],
+        "items": [
+          [
+            "110001.SH",
+            "20240102",
+            10.0,
+            12.0,
+            9.0,
+            11.0,
+            10.0,
+            10.0,
+            20.0,
+            22.0
+          ]
+        ]
+      }
+    }
+  ],
+  "sw_daily": [
+    {
+      "code": 0,
+      "msg": "",
+      "data": {
+        "fields": [
+          "ts_code",
+          "trade_date",
+          "open",
+          "high",
+          "low",
+          "close",
+          "pre_close",
+          "pct_chg",
+          "vol",
+          "amount",
+          "name"
+        ],
+        "items": [
+          [
+            "801010.SI",
+            "20240102",
+            10.0,
+            12.0,
+            9.0,
+            11.0,
+            10.0,
+            10.0,
+            20.0,
+            22.0,
+            "离线示例行业"
+          ]
+        ]
+      }
+    }
+  ],
+  "ths_hot": [
+    {
+      "code": 0,
+      "msg": "",
+      "data": {
+        "fields": [
+          "ts_code",
+          "trade_date",
+          "data_type",
+          "rank_time",
+          "rank",
+          "pct_chg"
+        ],
+        "items": [
+          [
+            "000001.SZ",
+            "20240102",
+            "热股",
+            "15:00",
+            1,
+            10.0
+          ]
+        ]
+      }
+    }
+  ],
+  "cn_cpi": [
+    {
+      "code": 0,
+      "msg": "",
+      "data": {
+        "fields": [
+          "month",
+          "nt_val",
+          "nt_yoy"
+        ],
+        "items": [
+          [
+            "202312",
+            100.0,
+            1.0
+          ]
+        ]
+      }
+    }
+  ],
+  "dividend": [
+    {
+      "code": 0,
+      "msg": "",
+      "data": {
+        "fields": [
+          "ts_code",
+          "end_date",
+          "ann_date",
+          "div_proc",
+          "stk_div",
+          "ex_date"
+        ],
+        "items": [
+          [
+            "000001.SZ",
+            "20231231",
+            "20240102",
+            "实施",
+            0.1,
+            "20240110"
+          ]
+        ]
+      }
+    }
+  ],
+  "fund_adj": [
+    {
+      "code": 0,
+      "msg": "",
+      "data": {
+        "fields": [
+          "ts_code",
+          "trade_date",
+          "adj_factor"
+        ],
+        "items": [
+          [
+            "510300.SH",
+            "20240102",
+            1.0
+          ]
+        ]
+      }
+    }
+  ]
+}

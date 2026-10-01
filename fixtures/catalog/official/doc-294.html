@@ -1,0 +1,131 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=294 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h2 id="_1">每日筹码分布</h2>
+<hr/>
+<p>接口：cyq_chips<br/>
+描述：获取A股每日的筹码分布情况，提供各价位占比，数据从2018年开始，每天18~19点之间更新当日数据<br/>
+来源：Tushare社区<br/>
+限量：单次最大6000条，可以按股票代码和日期循环提取<br/>
+积分：5000积分每天20000次每分钟可以取200次，10000积分每天200000次，15000积分每天不限总量</p>
+<h4 id="_2">算法说明：</h4>
+<p>参考用“三角分布法”计算，即当天成交的筹码，在最高价、最低价和平均价之间不是平均分配的，而是越接近平均成交价（或均价），成交的筹码越多，形成一个以均价为峰值的三角形分布。</p>
+<div class="codehilite"><pre>    面积 = 1
+        *
+       /|\          ← 高 h = 2/d
+      / | \
+     /  |  \
+    /   |   \
+   /    |    \
+  /     |     \
+ *------*------*
+low    avg    high
+ ← d = high - low →
+</pre></div>
+<ol>
+<li>
+<p>新筹码分配（当日成交量）：假设当日成交的总筹码量为 V，当日最高价为 H，最低价为 L，平均价为 A。三角分布法会按照一个三角形模型，将 V 分配到从 L 到 H 的各个价格上。在均价 A 这个价格点上，分配的筹码数量最多，形成三角形的顶点；随着价格远离 A，分配的筹码数量线性减少，直到在 L 和 H 处降至零。</p>
+</li>
+<li>
+<p>老筹码更新（历史持仓的搬移）：筹码分布图不是只计算当天的，它是一个动态的、每日更新的过程。每天新产生的交易筹码（来自当天成交的换手），需要从原有的历史持仓中“搬移”出来。这个过程引入了历史换手衰减系数的概念。</p>
+</li>
+</ol>
+<p><strong>输入参数</strong></p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>股票代码</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>N</td>
+<td>交易日期（YYYYMMDD）</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>N</td>
+<td>开始日期</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>N</td>
+<td>结束日期</td>
+</tr>
+</tbody>
+</table>
+<p><br/><br/>
+<br/></p>
+<p><strong>输出参数</strong></p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>股票代码</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>Y</td>
+<td>交易日期</td>
+</tr>
+<tr>
+<td>price</td>
+<td>float</td>
+<td>Y</td>
+<td>成本价格</td>
+</tr>
+<tr>
+<td>percent</td>
+<td>float</td>
+<td>Y</td>
+<td>价格占比（%）</td>
+</tr>
+</tbody>
+</table>
+<p><br/><br/>
+<br/></p>
+<p><strong>接口用法</strong></p>
+<div class="codehilite"><pre>pro = ts.pro_api()
+
+df = pro.cyq_chips(ts_code='600000.SH', start_date='20220101', end_date='20220429')
+</pre></div>
+<p><br/><br/>
+<br/></p>
+<p><strong>数据样例</strong></p>
+<div class="codehilite"><pre>         ts_code trade_date price percent
+0    600000.SH   20220429  8.96    0.56
+1    600000.SH   20220429  8.94    0.40
+2    600000.SH   20220429  8.92    0.34
+3    600000.SH   20220429  8.90    0.32
+4    600000.SH   20220429  8.88    0.27
+..         ...        ...   ...     ...
+995  600000.SH   20220418  7.26    0.01
+996  600000.SH   20220418  7.24    0.01
+997  600000.SH   20220418  7.22    0.01
+998  600000.SH   20220418  7.20    0.01
+999  600000.SH   20220418  7.18    0.01
+</pre></div>
+</div></body></html>

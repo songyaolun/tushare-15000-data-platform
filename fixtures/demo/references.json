@@ -1,0 +1,80 @@
+{
+  "daily": {
+    "expected_dates": {
+      "000001.SZ": [
+        "2024-01-02"
+      ]
+    },
+    "suspensions": [],
+    "adj_factors": [
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20240102",
+        "adj_factor": 1.0
+      }
+    ]
+  },
+  "moneyflow": {
+    "expected_dates": {
+      "000001.SZ": [
+        "2024-01-02"
+      ]
+    },
+    "suspensions": []
+  },
+  "fund_daily": {
+    "expected_dates": {
+      "510300.SH": [
+        "2024-01-02"
+      ]
+    },
+    "suspensions": [],
+    "adj_factors": [
+      {
+        "ts_code": "510300.SH",
+        "trade_date": "20240102",
+        "adj_factor": 1.0
+      }
+    ]
+  },
+  "fut_daily": {
+    "expected_dates": {
+      "IF2401.CFX": [
+        "2024-01-02"
+      ]
+    },
+    "suspensions": []
+  },
+  "cb_daily": {
+    "expected_dates": {
+      "110001.SH": [
+        "2024-01-02"
+      ]
+    },
+    "suspensions": []
+  },
+  "sw_daily": {
+    "expected_dates": {
+      "801010.SI": [
+        "2024-01-02"
+      ]
+    },
+    "suspensions": []
+  },
+  "ths_hot": {
+    "expected_dates": {
+      "000001.SZ": [
+        "2024-01-02"
+      ]
+    },
+    "suspensions": []
+  },
+  "fund_adj": {
+    "expected_dates": {
+      "510300.SH": [
+        "2024-01-02"
+      ]
+    },
+    "suspensions": []
+  }
+}

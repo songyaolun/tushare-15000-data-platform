@@ -1,0 +1,192 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=495 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">期货交易所库存周报</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：fut_inv_weekly<br/>
+描述：获取上海期货交易所库存周报（其他交易所未披露）<br/>
+限量：单次最大3000条，可根据代码或日期循环提取<br/>
+积分：需要5000积分可以调取，具体请参阅<a href="https://tushare.pro/document/1?doc_id=13">积分获取办法</a></p>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>N</td>
+<td>交易日期（YYYYMMDD）</td>
+</tr>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>N</td>
+<td>期货代码</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>N</td>
+<td>开始日期（YYYYMMDD）</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>N</td>
+<td>结束日期（YYYYMMDD）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>期货代码</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>Y</td>
+<td>交易日期（YYYYMMDD）</td>
+</tr>
+<tr>
+<td>fut_name</td>
+<td>str</td>
+<td>Y</td>
+<td>品种名称</td>
+</tr>
+<tr>
+<td>exchange</td>
+<td>str</td>
+<td>Y</td>
+<td>交易所</td>
+</tr>
+<tr>
+<td>area</td>
+<td>str</td>
+<td>Y</td>
+<td>地区</td>
+</tr>
+<tr>
+<td>warehouse</td>
+<td>str</td>
+<td>Y</td>
+<td>仓库名称</td>
+</tr>
+<tr>
+<td>grade</td>
+<td>str</td>
+<td>Y</td>
+<td>品级/油种</td>
+</tr>
+<tr>
+<td>pre_total</td>
+<td>float</td>
+<td>Y</td>
+<td>上周库存小计</td>
+</tr>
+<tr>
+<td>pre_futures</td>
+<td>float</td>
+<td>Y</td>
+<td>上周库存期货</td>
+</tr>
+<tr>
+<td>cur_total</td>
+<td>float</td>
+<td>Y</td>
+<td>本周库存小计</td>
+</tr>
+<tr>
+<td>cur_futures</td>
+<td>float</td>
+<td>Y</td>
+<td>本周库存期货</td>
+</tr>
+<tr>
+<td>chg_total</td>
+<td>float</td>
+<td>Y</td>
+<td>库存增减小计</td>
+</tr>
+<tr>
+<td>chg_futures</td>
+<td>float</td>
+<td>Y</td>
+<td>库存增减期货</td>
+</tr>
+<tr>
+<td>pre_capacity</td>
+<td>float</td>
+<td>Y</td>
+<td>可用库容量上周</td>
+</tr>
+<tr>
+<td>cur_capacity</td>
+<td>float</td>
+<td>Y</td>
+<td>可用库容量本周</td>
+</tr>
+<tr>
+<td>chg_capacity</td>
+<td>float</td>
+<td>Y</td>
+<td>可用库容量增减</td>
+</tr>
+<tr>
+<td>unit</td>
+<td>str</td>
+<td>Y</td>
+<td>单位</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre># 导入sdk包
+import tushare as ts
+
+# 配置凭据，如果已全局配置了，可以忽略。
+ts.set_token('&lt;REDACTED&gt;')
+
+# 获取接口实例
+pro = ts.pro_api()
+
+# 拉取接口(fut_inv_weekly)数据
+#获取ZN的数据
+df = pro.fut_inv_weekly(ts_code='ZN')
+# 示例：获取20260911的数据
+df = pro.fut_inv_weekly(trade_date="20260911",fields='fut_code, trade_date, fut_name, exchange, warehouse')
+print(df)
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<div class="codehilite"><pre> ts_code trade_date fut_name exchange warehouse
+0         AD   20260911    铸造铝合金     SHFE        总计
+1         AD   20260911    铸造铝合金     SHFE    世天威外高桥
+2         AD   20260911    铸造铝合金     SHFE      中储大场
+3         AD   20260911    铸造铝合金     SHFE      中储浦东
+4         AD   20260911    铸造铝合金     SHFE        合计
+..       ...        ...      ...      ...       ...
+597       ZN   20260911        锌     SHFE     百金汇物流
+598       ZN   20260911        锌     SHFE        合计
+599       ZN   20260911        锌     SHFE    国储837处
+600       ZN   20260911        锌     SHFE     宁波九龙仓
+601       ZN   20260911        锌     SHFE      浙江田川
+</pre></div>
+</div></body></html>
