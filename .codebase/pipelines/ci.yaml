@@ -4,13 +4,9 @@ trigger:
 jobs:
   offline_quality:
     name: Python 静态检查与离线验收
-    image: python:3.11-slim
+    image: ghcr.io/astral-sh/uv:0.12.21-python3.11-bookworm-slim
     steps:
-      - id: install_uv
-        name: 安装固定版本 uv
-        commands:
-          - python -m pip install uv==0.12.21
       - id: verify
         name: 执行仓库验收
         commands:
-          - bash scripts/ci.sh
+          - uv run --no-project bash scripts/ci.sh

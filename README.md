@@ -5,7 +5,7 @@
 ```bash
 uv sync --all-extras --dev
 uv run tushare-hub --help
-bash scripts/demo.sh
+uv run --no-project bash scripts/demo.sh
 ```
 
 默认演示和测试完全离线，使用确定性合成数据。没有使用真实 Tushare Token，没有调用真实数据接口；演示产物不代表真实市场结论或账户权限。
