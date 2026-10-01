@@ -10,4 +10,13 @@ jobs:
       - id: verify
         name: 执行仓库验收
         commands:
-          - uv run --no-project bash scripts/ci.sh
+          - |
+            UV_DEFAULT_INDEX=https://bytedpypi.byted.org/simple/ UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1 uv run --no-project bash -euo pipefail <<'CI'
+            # 场景：公共锁文件切换内网镜像；预期：只重解析下载来源，依赖版本和条件不变。
+            TUSHARE_CI_REQUIREMENTS=$(mktemp)
+            trap 'rm -f "$TUSHARE_CI_REQUIREMENTS"' EXIT
+            uv export --frozen --all-extras --no-hashes --no-header --no-annotate --no-emit-project > "$TUSHARE_CI_REQUIREMENTS"
+            uv lock
+            uv export --frozen --all-extras --no-hashes --no-header --no-annotate --no-emit-project | cmp "$TUSHARE_CI_REQUIREMENTS" -
+            uv run --no-project bash scripts/ci.sh
+            CI
