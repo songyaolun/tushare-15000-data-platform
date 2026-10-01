@@ -46,12 +46,27 @@ for command_name, application in (
 
 
 def timestamp(value: str | None) -> str:
-    """返回显式时间或当前 UTC 时间；timestamp('2024-01-02T00:00:00Z') 原样返回。
+    """校验观察时间并返回 UTC，拒绝非法、缺少时区或晚于当前时刻的显式值。
 
-    参数可为显式 ISO 时间或 None；返回原值或当前 UTC 时间，不读取账户配置。
-    示例：timestamp('2024-01-03T00:00:00Z') → '2024-01-03T00:00:00Z'。
+    参数为带 T 分隔符和时区的 ISO 8601 时间或 None；None 返回当前 UTC 时间。
+    返回值统一以 Z 结尾；无效输入抛出固定 ValueError，交由命令现有错误边界处理。
+    示例：timestamp('2024-01-03T08:00:00+08:00') → '2024-01-03T00:00:00Z'。
     """
-    return value or datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    current_time = datetime.now(UTC)
+    if value is None:
+        return current_time.isoformat().replace("+00:00", "Z")
+    try:
+        if "T" not in value:
+            raise ValueError("invalid_observed_at")
+        observed_time = datetime.fromisoformat(value)
+        if observed_time.tzinfo is None or observed_time.utcoffset() is None:
+            raise ValueError("invalid_observed_at")
+        observed_time = observed_time.astimezone(UTC)
+    except (ValueError, TypeError, OverflowError):
+        raise ValueError("invalid_observed_at") from None
+    if observed_time > current_time:
+        raise ValueError("future_observed_at")
+    return observed_time.isoformat().replace("+00:00", "Z")
 
 
 @app.callback()
@@ -330,6 +345,7 @@ def quality_audit(
     """审计保留的标准数据；quality audit daily 返回问题与未检查项，有错误退出非零。
 
     参数选择接口、证据来源和质量参考；按观察批次审计历史数据并输出问题列表。
+    字段基线优先使用前一观察批次，仅首批采用参考文件显式提供的 previous_fields。
     示例：空标准表输出 empty_response 并退出1；不同观察版本不混作同批重复主键。
     """
     with open_store(ctx) as store:
@@ -337,6 +353,8 @@ def quality_audit(
         if entry.policy is None:
             raise ValueError("missing_policy")
         reference = read_json(references) if references else {}
+        reference_arguments = dict(reference.get(api_name, {}))
+        reference_fields = reference_arguments.pop("previous_fields", None)
         batches: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in store.rows(api_name, source):
             batches[str(row["observed_at"])].append(row)
@@ -348,8 +366,8 @@ def quality_audit(
                 audit_rows(
                     rows,
                     entry.policy,
-                    previous_fields=previous,
-                    **reference.get(api_name, {}),
+                    previous_fields=previous if previous is not None else reference_fields,
+                    **reference_arguments,
                 )
             )
             previous = list(rows[0]["source_fields"])

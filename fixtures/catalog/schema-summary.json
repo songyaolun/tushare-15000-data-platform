@@ -20393,6 +20393,67 @@
     ]
   },
   {
+    "api_name": "pro_bar",
+    "doc_url": "https://tushare.pro/document/2?doc_id=109",
+    "input_fields": [
+      {
+        "name": "ts_code",
+        "type": "str",
+        "required": "Y",
+        "description": "证券代码，不支持多值输入，多值输入获取结果会有重复记录"
+      },
+      {
+        "name": "start_date",
+        "type": "str",
+        "required": "N",
+        "description": "开始日期 (日线格式：YYYYMMDD，提取分钟数据请用2019-09-01 09:00:00这种格式)"
+      },
+      {
+        "name": "end_date",
+        "type": "str",
+        "required": "N",
+        "description": "结束日期 (日线格式：YYYYMMDD)"
+      },
+      {
+        "name": "asset",
+        "type": "str",
+        "required": "N",
+        "description": "资产类别：E股票 I沪深指数 FT期货 FD基金 O期权 CB可转债（v1.2.39），如果不填默认为E"
+      },
+      {
+        "name": "adj",
+        "type": "str",
+        "required": "N",
+        "description": "复权类型(只针对股票)：None未复权 qfq前复权 hfq后复权 , 默认None， 目前只支持日线复权 ，同时复权机制是根据设定的end_date参数动态复权，采用分红再投模式，具体请参考 常见问题列表 里的说明。"
+      },
+      {
+        "name": "freq",
+        "type": "str",
+        "required": "N",
+        "description": "数据频度 ：支持分钟(min)/日(D)/周(W)/月(M)K线，其中1min表示1分钟（类推1/5/15/30/60分钟） ，如果不填默认为D。对于分钟数据有600积分用户可以试用（请求2次），正式权限可以参考 权限列表说明 ，使用方法请参考 股票分钟使用方法 。"
+      },
+      {
+        "name": "ma",
+        "type": "list",
+        "required": "N",
+        "description": "均线，支持任意合理int数值。注：均线是动态计算，要设置一定时间范围才能获得相应的均线，比如5日均线，开始和结束日期参数跨度必须要超过5日。目前只支持单一个股票提取均线，即需要输入ts_code参数。e.g: ma_5表示5日均价，ma_v_5表示5日均量"
+      },
+      {
+        "name": "factors",
+        "type": "list",
+        "required": "N",
+        "description": "股票因子（asset='E'有效）支持 tor换手率 vr量比"
+      },
+      {
+        "name": "adjfactor",
+        "type": "str",
+        "required": "N",
+        "description": "复权因子，在复权数据时，如果此参数为True，返回的数据中则带复权因子，默认为False。 该功能从1.2.33版本开始生效"
+      }
+    ],
+    "output_fields": []
+  },
+  {
     "api_name": "repo_daily",
     "doc_url": "https://tushare.pro/document/2?doc_id=256",
     "input_fields": [

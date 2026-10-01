@@ -71,7 +71,16 @@ def test_cli_full_offline_workflow(tmp_path, entry):
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["tasks"] == 1
     reference = tmp_path / "reference.json"
-    reference.write_text(json.dumps({entry.api_name: {"expected_dates": ["2024-01-02"]}}))
+    reference.write_text(
+        json.dumps(
+            {
+                entry.api_name: {
+                    "expected_dates": ["2024-01-02"],
+                    "previous_fields": ["ts_code", "trade_date", "close"],
+                }
+            }
+        )
+    )
     arguments = [
         "ingest",
         "run",
@@ -91,9 +100,7 @@ def test_cli_full_offline_workflow(tmp_path, entry):
     assert json.loads(invoke(tmp_path, arguments).output)[0]["state"] == "already_committed"
     result = invoke(tmp_path, ["quality", "audit", entry.api_name, "--references", str(reference)])
     assert result.exit_code == 0
-    assert {finding["code"] for finding in json.loads(result.output)} == {
-        "schema_drift_not_checked"
-    }
+    assert json.loads(result.output) == []
     result = invoke(
         tmp_path,
         [
@@ -245,7 +252,9 @@ def test_quality_audit_keeps_historical_revisions_separate(tmp_path, entry, poli
     database = Store(tmp_path / "hub.duckdb")
     database.save_catalog([entry])
     for observed, close in [(OBS, 2), ("2024-01-04T00:00:00Z", 3)]:
-        task = plan_tasks(entry, "2024-01-02", "2024-01-02", "lookback", observed)[0]
+        task = plan_tasks(
+            entry, "2024-01-02", "2024-01-02", "lookback" if close == 2 else "event", observed
+        )[0]
         database.begin_task(task, observed, "fixture")
         rows = normalize_rows(
             [{"ts_code": "A.SH", "trade_date": "20240102", "close": close}],
@@ -260,3 +269,114 @@ def test_quality_audit_keeps_historical_revisions_separate(tmp_path, entry, poli
     result = invoke(tmp_path, ["quality", "audit", entry.api_name])
     assert result.exit_code == 0, result.output
     assert "duplicate_primary_key" not in {item["code"] for item in json.loads(result.output)}
+
+
+@pytest.mark.parametrize(
+    "value,error",
+    [
+        ("", "invalid_observed_at"),
+        ("not-a-date", "invalid_observed_at"),
+        ("2024-01-03", "invalid_observed_at"),
+        ("2024-01-03T00:00:00", "invalid_observed_at"),
+        ("2024-13-03T00:00:00Z", "invalid_observed_at"),
+        ("0001-01-01T00:00:00+14:00", "invalid_observed_at"),
+        ("9999-12-31T23:59:59-14:00", "invalid_observed_at"),
+        ("9999-12-30T00:00:00Z", "future_observed_at"),
+    ],
+)
+def test_timestamp_rejects_invalid_or_future_observations(value, error):
+    """场景：非法、无时区和未来观察时间；预期：固定错误阻止进入版本数据。
+
+    示例：2024-01-03 或空字符串 → invalid_observed_at。
+    """
+    with pytest.raises(ValueError, match=error):
+        cli.timestamp(value)
+
+
+def test_timestamp_normalizes_offsets_and_accepts_current_instant(monkeypatch):
+    """场景：偏移时区、当前边界与自动时间；预期：统一 UTC 且相等不误拒。
+
+    示例：08:00+08:00 → 00:00Z；未传时间 → 固定当前时刻。
+    """
+    from datetime import UTC, datetime
+
+    class FixedDatetime(datetime):
+        """固定测试时钟，同时沿用标准 ISO 解析。"""
+
+        @classmethod
+        def now(cls, tz=None):
+            """返回已知时刻；例如 now(UTC) → 2024-01-03T00:00:00+00:00。"""
+            return datetime(2024, 1, 3, tzinfo=UTC).astimezone(tz)
+
+    monkeypatch.setattr(cli, "datetime", FixedDatetime)
+    for value in [None, OBS, "2024-01-03T08:00:00+08:00", "2024-01-02T19:00:00-05:00"]:
+        assert cli.timestamp(value) == OBS
+    with pytest.raises(ValueError, match="future_observed_at"):
+        cli.timestamp("2024-01-03T00:00:00.000001Z")
+
+
+@pytest.mark.parametrize("value", ["not-a-date", "", "9999-12-30T00:00:00Z"])
+def test_catalog_sync_invalid_observation_leaves_catalog_empty(tmp_path, value):
+    """场景：CLI 明确传入非法观察时间；预期：非零退出且目录不被污染。
+
+    示例：--observed-at not-a-date → operation_failed，catalog 仍为空。
+    """
+    document = tmp_path / "daily.md"
+    document.write_text("# 日线\n\n接口：daily\n\n积分：2000\n")
+    result = invoke(
+        tmp_path, ["catalog", "sync", "--fixture", str(document), "--observed-at", value]
+    )
+    assert result.exit_code == 1
+    assert "operation_failed" in result.output
+    database = Store(tmp_path / "hub.duckdb")
+    try:
+        assert database.catalog() == []
+    finally:
+        database.close()
+
+
+def test_quality_audit_later_batch_uses_actual_previous_schema(tmp_path, entry, policy):
+    """场景：显式基线不含后来被删除的字段；预期：第二批仍按真实历史 schema 报删除。
+
+    示例：首批有 vendor_status、第二批无 → schema_field_removed，退出 1。
+    """
+    from tushare_entitlement_hub.ingest import plan_tasks
+    from tushare_entitlement_hub.standard import normalize_rows
+
+    database = Store(tmp_path / "hub.duckdb")
+    database.save_catalog([entry])
+    for mode, observed, extra in [
+        ("initialize", OBS, {"vendor_status": "ok"}),
+        ("lookback", "2024-01-04T00:00:00Z", {}),
+    ]:
+        task = plan_tasks(entry, "2024-01-02", "2024-01-02", mode, observed)[0]
+        database.begin_task(task, observed, "fixture")
+        rows = normalize_rows(
+            [{"ts_code": "A.SH", "trade_date": "20240102", "close": 2, **extra}],
+            policy,
+            observed,
+            "response",
+        )
+        database.commit_task(
+            task, rows, policy.primary_key, observed, "fixture", list(rows[0]["source_fields"])
+        )
+    database.close()
+    reference = tmp_path / "references.json"
+    reference.write_text(
+        json.dumps(
+            {
+                entry.api_name: {
+                    "previous_fields": ["ts_code", "trade_date", "close"],
+                    "expected_dates": ["20240102"],
+                }
+            }
+        )
+    )
+    result = invoke(tmp_path, ["quality", "audit", entry.api_name, "--references", str(reference)])
+    assert result.exit_code == 1, result.output
+    findings = json.loads(result.output)
+    assert any(
+        item["code"] == "schema_field_removed" and item["field"] == "vendor_status"
+        for item in findings
+    )
+    assert "schema_drift_not_checked" not in {item["code"] for item in findings}

@@ -458,3 +458,35 @@ def test_catalog_summary_separates_unresolved_documents() -> None:
     assert summary["needs_review"] == ["unresolved_doc_1"]
     assert summary["lifecycle_counts"] == {"unclassified": 2}
     assert "不代表官方全部接口" in summary["coverage_claim"]
+
+
+def test_schema_summary_exactly_matches_discovered_interfaces() -> None:
+    """场景：全量 schema 摘要与发现总账对照；预期：250 个名称完全一致且 pro_bar 可审计。
+
+    示例：pro_bar 来自 doc_id=109，9 个输入字段保留，未披露输出为 []。
+    """
+    root = Path(__file__).parents[1] / "fixtures" / "catalog"
+    schemas = json.loads((root / "schema-summary.json").read_text())
+    names = [item["api_name"] for item in schemas]
+    discovered = {
+        item.api_name
+        for item in catalog.sync_catalog([root / "official"], "2026-10-01")
+        if not item.api_name.startswith("unresolved_")
+    }
+    assert len(names) == len(set(names)) == 250
+    assert set(names) == discovered == set(catalog.load_policies())
+    item = next(item for item in schemas if item["api_name"] == "pro_bar")
+    assert item["doc_url"] == "https://tushare.pro/document/2?doc_id=109"
+    assert [field["name"] for field in item["input_fields"]] == [
+        "ts_code",
+        "start_date",
+        "end_date",
+        "asset",
+        "adj",
+        "freq",
+        "ma",
+        "factors",
+        "adjfactor",
+    ]
+    assert [field["required"] for field in item["input_fields"]] == ["Y"] + ["N"] * 8
+    assert item["output_fields"] == []

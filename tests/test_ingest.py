@@ -132,7 +132,15 @@ def test_run_success_idempotency_and_incremental(entry, policy, store, tmp_path)
     task = plan_tasks(entry, "2024-01-02", "2024-01-02", "initialize", OBS)[0]
     transport = FakeTransport([response([["A.SH", "20240102", 2]])])
     client = Client(transport, RawStore(tmp_path / "raw"))
-    result = run_task(task, entry, client, store, OBS, expected_dates=["20240102"])
+    result = run_task(
+        task,
+        entry,
+        client,
+        store,
+        OBS,
+        expected_dates=["20240102"],
+        previous_fields=["ts_code", "trade_date", "close"],
+    )
     assert result["state"] == "committed" and result["rows"] == 1
     assert run_task(task, entry, client, store, OBS)["state"] == "already_committed"
     assert len(transport.calls) == 1
@@ -180,7 +188,18 @@ def test_run_page_failure_recovery_and_plan_validation(entry, policy, store, tmp
         run_task(task, entry, client, store, OBS)
     assert store.watermark(entry.api_name, "trade_date") is None
     retry = Client(FakeTransport([first, response([])]), RawStore(tmp_path / "raw"))
-    assert run_task(task, entry, retry, store, OBS)["rows"] == 1
+    assert (
+        run_task(
+            task,
+            entry,
+            retry,
+            store,
+            OBS,
+            expected_dates=["20240102"],
+            previous_fields=["ts_code", "trade_date", "close"],
+        )["rows"]
+        == 1
+    )
     for changes, error in [
         ({"api_name": "wrong"}, "plan_policy_changed"),
         ({"source": "unknown"}, "invalid_source"),
@@ -210,8 +229,128 @@ def test_monthly_response_respects_planned_period(entry, policy, store, tmp_path
     payload = {"code": 0, "data": {"fields": ["month", "value"], "items": [[month, 1.2]]}}
     client = Client(FakeTransport([payload]), RawStore(tmp_path / "raw"))
     if success:
-        assert run_task(task, current, client, store, OBS)["state"] == "committed"
+        assert (
+            run_task(task, current, client, store, OBS, previous_fields=["month", "value"])["state"]
+            == "committed"
+        )
     else:
         with pytest.raises(IngestionError, match="quality_or_storage_failed"):
             run_task(task, current, client, store, OBS)
         assert store.watermark("cn_cpi", "month") is None
+
+
+def test_replanning_at_later_time_reuses_completed_task(entry, store, tmp_path):
+    """场景：同一执行语义在不同时间重新规划；预期：ID 相同且不重复请求和写入。
+
+    示例：1 月 3 日与 4 日规划同一范围 → 第二次 already_committed。
+    """
+    first = plan_tasks(entry, "2024-01-02", "2024-01-02", "initialize", OBS)[0]
+    later = plan_tasks(entry, "2024-01-02", "2024-01-02", "initialize", "2024-01-04T00:00:00Z")[0]
+    assert first["task_id"] == later["task_id"]
+    assert first["planned_at"] != later["planned_at"]
+    transport = FakeTransport([response([["A.SH", "20240102", 2]])])
+    client = Client(transport, RawStore(tmp_path / "raw"))
+    store.save_plan([first], OBS)
+    assert (
+        run_task(
+            first,
+            entry,
+            client,
+            store,
+            OBS,
+            expected_dates=["20240102"],
+            previous_fields=["ts_code", "trade_date", "close"],
+        )["state"]
+        == "committed"
+    )
+    store.save_plan([later], later["planned_at"])
+    assert (
+        run_task(later, entry, client, store, later["planned_at"])["state"] == "already_committed"
+    )
+    assert len(transport.calls) == len(store.rows(entry.api_name)) == 1
+
+
+@pytest.mark.parametrize(
+    "references,expected_code",
+    [
+        ({"expected_dates": ["20240102"]}, "schema_drift_not_checked"),
+        ({"previous_fields": ["ts_code", "trade_date", "close"]}, "calendar_coverage_not_checked"),
+    ],
+)
+def test_required_quality_evidence_blocks_commit(entry, store, tmp_path, references, expected_code):
+    """场景：必需日历或历史 schema 证据缺失；预期：原始响应保留，标准层和水位为空。
+
+    示例：仅传日历 → schema_drift_not_checked 且任务 failed。
+    """
+    import json
+
+    task = plan_tasks(entry, "2024-01-02", "2024-01-02", "initialize", OBS)[0]
+    client = Client(
+        FakeTransport([response([["A.SH", "20240102", 2]])]), RawStore(tmp_path / "raw")
+    )
+    with pytest.raises(IngestionError, match="quality_or_storage_failed"):
+        run_task(task, entry, client, store, OBS, **references)
+    assert store.records("tasks")[0]["state"] == "failed"
+    assert expected_code in {
+        item["code"] for item in json.loads(store.records("quality")[0]["findings"])
+    }
+    assert store.rows(entry.api_name) == []
+    assert store.records("checkpoints") == []
+    assert len(list((tmp_path / "raw").rglob("*.json"))) == 1
+
+
+@pytest.mark.parametrize("baseline", [[], ["close", "close"], [""], "close", [1]])
+def test_invalid_schema_reference_cannot_commit(entry, store, tmp_path, baseline):
+    """场景：首批字段基线不完整或格式不合法；预期：拒绝提交并保留失败状态。
+
+    示例：重复字段列表 → quality_or_storage_failed。
+    """
+    task = plan_tasks(entry, "2024-01-02", "2024-01-02", "initialize", OBS)[0]
+    transport = FakeTransport([response([["A.SH", "20240102", 2]])])
+    client = Client(transport, RawStore(tmp_path / "raw"))
+    with pytest.raises(IngestionError, match="quality_or_storage_failed"):
+        run_task(task, entry, client, store, OBS, previous_fields=baseline)
+    assert transport.calls == []
+    assert store.rows(entry.api_name) == []
+    assert store.records("checkpoints") == []
+
+
+def test_previous_committed_schema_overrides_later_explicit_baseline(entry, store, tmp_path):
+    """场景：历史批次含额外字段，下一批删除且显式基线也省略；预期：仍检测 schema 删除。
+
+    示例：已提交含 vendor_status，下一批无 vendor_status → 拒绝且水位保持第一天。
+    """
+    first = plan_tasks(entry, "2024-01-01", "2024-01-01", "initialize", OBS)[0]
+    second = plan_tasks(entry, "2024-01-02", "2024-01-02", "initialize", OBS)[0]
+    payload = {
+        "code": 0,
+        "data": {
+            "fields": ["ts_code", "trade_date", "close", "vendor_status"],
+            "items": [["A.SH", "20240101", 2, 1]],
+        },
+    }
+    client = Client(
+        FakeTransport([payload, response([["A.SH", "20240102", 2]])]), RawStore(tmp_path / "raw")
+    )
+    run_task(
+        first,
+        entry,
+        client,
+        store,
+        OBS,
+        expected_dates=["20240101"],
+        previous_fields=payload["data"]["fields"],
+    )
+    with pytest.raises(IngestionError, match="quality_or_storage_failed"):
+        run_task(
+            second,
+            entry,
+            client,
+            store,
+            OBS,
+            expected_dates=["20240102"],
+            previous_fields=["ts_code", "trade_date", "close"],
+        )
+    assert store.watermark(entry.api_name, "trade_date") == "2024-01-01"
+    assert len(store.rows(entry.api_name)) == 1
+    assert store.rows(entry.api_name)[0]["quality_reference"]["origin"] == "explicit_reference"

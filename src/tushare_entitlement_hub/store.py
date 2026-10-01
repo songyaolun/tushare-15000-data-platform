@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from calendar import monthrange
 from dataclasses import asdict
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,56 @@ def digest(value: Any) -> str:
     示例：digest({'a': 1}) == digest({'a': 1}) → True。
     """
     return hashlib.sha256(encode(value).encode()).hexdigest()
+
+
+def coverage_interval(task: dict[str, Any]) -> tuple[date, date]:
+    """把任务范围映射成可连续比较的自然日区间，明确月、季、年和报告期语义。
+
+    输入具有 start、end、date_field 和 params 的任务；返回闭区间起止日期。
+    示例：month 的 2024-01-15 至 2024-01-20 查询覆盖整个一月，返回 01-01 至 01-31；
+    period='20240331' 返回一季度范围；普通 end_date 任务仍保留原自然日范围。
+    period 必须为有效季末，不能把不明报告频率扩大成已覆盖的年度。
+    """
+    first = date.fromisoformat(task["start"])
+    last = date.fromisoformat(task["end"])
+    if first > last:
+        raise ValueError("task_range_invalid")
+    field = task["date_field"]
+    period = task.get("params", {}).get("period")
+    if period is not None:
+        text = str(period)
+        parsed = date.fromisoformat(text)
+        if parsed.month not in {3, 6, 9, 12} or parsed.day != monthrange(
+            parsed.year, parsed.month
+        )[1] or not first <= parsed <= last:
+            raise ValueError("task_period_invalid")
+        first = last = parsed
+        if field != "year":
+            field = "quarter"
+    if field == "month":
+        first = first.replace(day=1)
+        last = last.replace(day=monthrange(last.year, last.month)[1])
+    elif field == "quarter":
+        first = first.replace(month=((first.month - 1) // 3) * 3 + 1, day=1)
+        end_month = ((last.month - 1) // 3 + 1) * 3
+        last = last.replace(month=end_month, day=monthrange(last.year, end_month)[1])
+    elif field == "year":
+        first = first.replace(month=1, day=1)
+        last = last.replace(month=12, day=31)
+    return first, last
+
+
+def task_identity(task: dict[str, Any]) -> str:
+    """仅对稳定执行语义生成任务 ID，规划时间只作为可变化的审计元数据。
+
+    输入完整计划载荷；返回接口、日期域、范围、模式、参数、来源和政策摘要的哈希。
+    示例：两个计划仅 planned_at 不同会返回同一 ID；params 改变则返回不同 ID。
+    缺少执行字段时抛 ValueError，避免把不完整任务登记为有效计划。
+    """
+    fields = ("api_name", "date_field", "start", "end", "mode", "params", "source", "policy_hash")
+    if any(field not in task for field in fields):
+        raise ValueError("task_payload_incomplete")
+    return digest({field: task[field] for field in fields})
 
 
 class Store:
@@ -152,6 +204,8 @@ class Store:
         示例：两个不同日期任务输入后 records('tasks') 的两条 state 均为 'planned'。
         """
         for task in tasks:
+            if self._registered_state(task, task["source"]) is not None:
+                continue
             for record in self.records("tasks"):
                 older = json.loads(record["payload"])
                 if (
@@ -171,21 +225,52 @@ class Store:
             )
 
     def begin_task(self, task: dict[str, Any], observed_at: str, source: str) -> bool:
-        """登记或重启任务；已提交任务返回 False，失败和中断任务返回 True。
+        """校验任务身份后启动新计划或重试失败任务，保留已登记的原始载荷。
 
-        参数为完整任务、观察时间和证据来源；返回是否应执行采集。
+        参数为完整任务、观察时间和证据来源；planned/failed 可进入 running，
+        running/superseded 等状态拒绝重复启动，载荷被篡改时在写入前抛 ValueError。
         示例：新任务第一次 begin_task(...) → True；该任务已提交后再次调用 → False。
         """
-        existing = self.connection.execute(
-            "SELECT state FROM tasks WHERE task_id=?", [task["task_id"]]
-        ).fetchone()
-        if existing and existing[0] == "committed":
+        state = self._registered_state(task, source)
+        if state == "committed":
             return False
-        self.connection.execute(
-            "INSERT OR REPLACE INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [task["task_id"], task["api_name"], encode(task), "running", observed_at, source, ""],
-        )
+        if state is None:
+            self.connection.execute(
+                "INSERT INTO tasks VALUES (?, ?, ?, 'running', ?, ?, '')",
+                [task["task_id"], task["api_name"], encode(task), observed_at, source],
+            )
+        elif state in {"planned", "failed"}:
+            self.connection.execute(
+                "UPDATE tasks SET state='running', observed_at=?, error_code='' WHERE task_id=?",
+                [observed_at, task["task_id"]],
+            )
+        else:
+            raise ValueError("task_state_not_runnable")
         return True
+
+    def _registered_state(self, task: dict[str, Any], source: str) -> str | None:
+        """校验执行身份、来源及持久化载荷，仅允许 planned_at 元数据发生变化。
+
+        输入完整任务和来源；返回数据库状态，无记录时返回 None，冲突则抛 ValueError。
+        示例：保留 task_id 却改变 params 会抛 task_identity_mismatch；同执行语义
+        仅重新规划时间改变时通过校验，原持久载荷仍保留第一次登记的 planned_at。
+        """
+        if task.get("task_id") != task_identity(task):
+            raise ValueError("task_identity_mismatch")
+        if source not in {"fixture", "live"} or task["source"] != source:
+            raise ValueError("task_source_mismatch")
+        existing = self.connection.execute(
+            "SELECT state, payload, api_name, source FROM tasks WHERE task_id=?", [task["task_id"]]
+        ).fetchone()
+        if existing is None:
+            return None
+        payload = json.loads(existing[1])
+        supplied = {key: value for key, value in task.items() if key != "planned_at"}
+        persisted = {key: value for key, value in payload.items() if key != "planned_at"}
+        if (encode(supplied) != encode(persisted) or existing[2] != task["api_name"]
+                or existing[3] != source):
+            raise ValueError("task_payload_mismatch")
+        return str(existing[0])
 
     def fail_task(self, task_id: str, code: str, findings: list[dict[str, str]]) -> None:
         """将任务标记失败并保存质量问题；输入 quality_failed，不推进水位。
@@ -216,6 +301,8 @@ class Store:
 
         示例：daily 任务包含两条合格行，提交后 state=committed 且水位等于 task.end。
         """
+        if self._registered_state(task, source) != "running":
+            raise ValueError("task_not_running")
         self.connection.execute("BEGIN TRANSACTION")
         try:
             for row in rows:
@@ -243,18 +330,8 @@ class Store:
                 and record["source"] == source
                 and json.loads(record["payload"])["date_field"] == task["date_field"]
             ]
-            pending = [
-                json.loads(record["payload"])["start"]
-                for record in siblings
-                if record["state"] not in {"committed", "superseded"}
-            ]
-            completed = [
-                json.loads(record["payload"])["end"]
-                for record in siblings
-                if record["state"] == "committed"
-            ]
-            eligible = [end for end in completed if not pending or end < min(pending)]
-            if eligible:
+            checkpoint = self._continuous_watermark(task, source, siblings)
+            if checkpoint is not None:
                 self.connection.execute(
                     """INSERT INTO checkpoints VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT (api_name, date_field, source) DO UPDATE SET
@@ -265,7 +342,7 @@ class Store:
                         task["api_name"],
                         task["date_field"],
                         source,
-                        max(eligible),
+                        checkpoint,
                         observed_at,
                         task["task_id"],
                     ],
@@ -274,6 +351,48 @@ class Store:
         except Exception:
             self.connection.execute("ROLLBACK")
             raise
+
+    def _continuous_watermark(
+        self, task: dict[str, Any], source: str, siblings: list[dict[str, Any]]
+    ) -> str | None:
+        """仅从既有水位或最早有效计划起点推进连续覆盖，未规划日期同样形成缺口。
+
+        输入当前任务、来源和同水位域任务；返回新 ISO 日期，没有推进则返回 None。
+        示例：仅完成 2024-01-01 与 2024-01-03 时返回 2024-01-01；补齐 01-02 后
+        可推进到 01-03。尚未完成的证券分片会阻断其覆盖期间，不混入其他日期字段。
+        """
+        intervals = [
+            (*coverage_interval(json.loads(record["payload"])), record["state"])
+            for record in siblings if record["state"] != "superseded"
+        ]
+        previous = self.watermark(task["api_name"], task["date_field"], source)
+        candidate = date.fromisoformat(previous) if previous is not None else None
+        if not intervals or candidate == date.max:
+            return None
+        next_day = candidate + timedelta(days=1) if candidate else min(
+            start for start, _, _ in intervals
+        )
+        pending = [(start, end) for start, end, state in intervals if state != "committed"]
+        completed = sorted((start, end) for start, end, state in intervals if state == "committed")
+        for start, end in completed:
+            if end < next_day:
+                continue
+            if start > next_day:
+                break
+            blockers = [
+                max(start_pending, next_day)
+                for start_pending, end_pending in pending
+                if end_pending >= next_day and start_pending <= end
+            ]
+            if blockers and min(blockers) == next_day:
+                break
+            candidate = min(blockers) - timedelta(days=1) if blockers else end
+            if blockers or candidate == date.max:
+                break
+            next_day = candidate + timedelta(days=1)
+        if candidate is None or candidate.isoformat() == previous:
+            return None
+        return candidate.isoformat()
 
     def watermark(self, api_name: str, date_field: str, source: str = "fixture") -> str | None:
         """返回接口与日期维度的独立水位；没有 daily/trade_date 时返回 None。

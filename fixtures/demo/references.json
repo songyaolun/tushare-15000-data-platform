@@ -12,6 +12,18 @@
         "trade_date": "20240102",
         "adj_factor": 1.0
       }
+    ],
+    "previous_fields": [
+      "ts_code",
+      "trade_date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "pre_close",
+      "pct_chg",
+      "vol",
+      "amount"
     ]
   },
   "moneyflow": {
@@ -20,7 +32,15 @@
         "2024-01-02"
       ]
     },
-    "suspensions": []
+    "suspensions": [],
+    "previous_fields": [
+      "ts_code",
+      "trade_date",
+      "buy_sm_vol",
+      "net_mf_amount",
+      "buy_sm_amount",
+      "sell_sm_amount"
+    ]
   },
   "fund_daily": {
     "expected_dates": {
@@ -35,6 +55,18 @@
         "trade_date": "20240102",
         "adj_factor": 1.0
       }
+    ],
+    "previous_fields": [
+      "ts_code",
+      "trade_date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "pre_close",
+      "pct_chg",
+      "vol",
+      "amount"
     ]
   },
   "fut_daily": {
@@ -43,7 +75,20 @@
         "2024-01-02"
       ]
     },
-    "suspensions": []
+    "suspensions": [],
+    "previous_fields": [
+      "ts_code",
+      "trade_date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "pre_close",
+      "pct_chg",
+      "vol",
+      "amount",
+      "oi"
+    ]
   },
   "cb_daily": {
     "expected_dates": {
@@ -51,7 +96,19 @@
         "2024-01-02"
       ]
     },
-    "suspensions": []
+    "suspensions": [],
+    "previous_fields": [
+      "ts_code",
+      "trade_date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "pre_close",
+      "pct_chg",
+      "vol",
+      "amount"
+    ]
   },
   "sw_daily": {
     "expected_dates": {
@@ -59,7 +116,20 @@
         "2024-01-02"
       ]
     },
-    "suspensions": []
+    "suspensions": [],
+    "previous_fields": [
+      "ts_code",
+      "trade_date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "pre_close",
+      "pct_chg",
+      "vol",
+      "amount",
+      "name"
+    ]
   },
   "ths_hot": {
     "expected_dates": {
@@ -67,7 +137,15 @@
         "2024-01-02"
       ]
     },
-    "suspensions": []
+    "suspensions": [],
+    "previous_fields": [
+      "ts_code",
+      "trade_date",
+      "data_type",
+      "rank_time",
+      "rank",
+      "pct_chg"
+    ]
   },
   "fund_adj": {
     "expected_dates": {
@@ -75,6 +153,37 @@
         "2024-01-02"
       ]
     },
-    "suspensions": []
+    "suspensions": [],
+    "previous_fields": [
+      "ts_code",
+      "trade_date",
+      "adj_factor"
+    ]
+  },
+  "stock_basic": {
+    "previous_fields": [
+      "ts_code",
+      "name",
+      "industry",
+      "list_date",
+      "list_status"
+    ]
+  },
+  "cn_cpi": {
+    "previous_fields": [
+      "month",
+      "nt_val",
+      "nt_yoy"
+    ]
+  },
+  "dividend": {
+    "previous_fields": [
+      "ts_code",
+      "end_date",
+      "ann_date",
+      "div_proc",
+      "stk_div",
+      "ex_date"
+    ]
   }
 }

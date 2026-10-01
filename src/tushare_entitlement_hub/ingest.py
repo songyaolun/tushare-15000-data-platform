@@ -14,7 +14,7 @@ from .models import ENABLED, CatalogEntry, Policy
 from .quality import audit_rows
 from .raw import assert_public
 from .standard import normalize_rows, normalize_timestamp
-from .store import Store, digest
+from .store import Store, digest, task_identity
 
 
 class IngestionError(ValueError):
@@ -51,7 +51,8 @@ def plan_tasks(
 ) -> list[dict[str, Any]]:
     """为指定日期区间生成稳定任务，增量从水位减回看窗口开始。
 
-    示例：daily、2024-01-02 至 2024-01-03 → 两个交易日期分片；同一计划重跑 ID 不变。
+    示例：daily、2024-01-02 至 2024-01-03 → 两个交易日期分片；同一执行语义
+    即使在不同 planned_at 重新规划也保持 ID 不变，规划时间仅用于审计。
     """
     policy = require_policy(entry)
     observed_at = normalize_timestamp(observed_at)
@@ -156,7 +157,7 @@ def plan_tasks(
             "planned_at": observed_at,
             "policy_hash": digest(asdict(policy)),
         }
-        task["task_id"] = digest(task)
+        task["task_id"] = task_identity(task)
         tasks.append(task)
         cursor = upper + timedelta(days=1)
     return tasks
@@ -204,10 +205,13 @@ def run_task(
     expected_dates: Any = None,
     suspensions: Any = None,
     adj_factors: Any = None,
+    previous_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """执行全分页、标准化和质量门禁后提交检查点，中断可用同一 task_id 恢复。
 
     示例：第二页失败 → raw 第一页仍存在，任务 failed 且水位不变；重跑后幂等提交。
+    首批须显式提供完整 previous_fields 基线，后续优先使用历史成功字段；任何必需
+    not_checked 都阻断提交。成功行的 quality_reference 保留所用字段基线及来源。
     """
     policy = require_policy(entry)
     observed_at = normalize_timestamp(observed_at)
@@ -221,6 +225,14 @@ def run_task(
         return {"task_id": task["task_id"], "state": "already_committed"}
     findings: list[dict[str, str]] = []
     try:
+        historical_fields = store.previous_fields(entry.api_name, source)
+        schema_reference = historical_fields if historical_fields is not None else previous_fields
+        if schema_reference is not None and (
+            not isinstance(schema_reference, list) or not schema_reference
+            or not all(isinstance(field, str) and field for field in schema_reference)
+            or len(set(schema_reference)) != len(schema_reference)
+        ):
+            raise IngestionError("invalid_schema_reference")
         pages = client.pages(
             entry.api_name,
             task["params"],
@@ -249,10 +261,16 @@ def run_task(
             expected_dates=expected_dates,
             suspensions=suspensions,
             adj_factors=adj_factors,
-            previous_fields=store.previous_fields(entry.api_name, source),
+            previous_fields=schema_reference,
         )
-        if any(finding.get("severity") != "not_checked" for finding in findings):
+        if findings:
             raise IngestionError("quality_failed")
+        for row in rows:
+            row["quality_reference"] = {
+                "schema_fields": schema_reference,
+                "origin": "previous_committed" if historical_fields is not None else
+                "explicit_reference",
+            }
         fields = pages[0].fields
         store.commit_task(task, rows, policy.primary_key, observed_at, source, fields, findings)
         return {
