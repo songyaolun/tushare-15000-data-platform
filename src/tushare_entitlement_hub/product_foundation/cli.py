@@ -1,7 +1,7 @@
 """独立离线命令组，初始化和校验均不进入凭据或网络客户端。"""
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import duckdb
 import typer
@@ -11,6 +11,15 @@ from .bindings import FoundationBindings
 from .config import FoundationPolicy, load_policy
 from .reference import initialize_library
 from .storage import validate_library
+
+
+def _print_progress(event: dict[str, Any]) -> None:
+    """将阶段计数写到 stderr，每行一个 JSON，stdout 保留最终摘要。
+
+    输入 stage=start 事件，输出一行即时进度；不包含来源行内容或凭据。
+    """
+    typer.echo(encode(event), err=True)
+
 
 foundation_app = typer.Typer(help="离线产品基础层：初始化共享库及校验，不执行具体研究引擎。")
 
@@ -23,7 +32,7 @@ def initialize(
     config: Annotated[Path | None, typer.Option(help="版本化阈值 JSON")] = None,
     bindings: Annotated[Path | None, typer.Option(help="显式实体、时间和单位认证 JSON")] = None,
 ) -> None:
-    """初始化基础库并输出单一 JSON；降级 exit=2，输入失败 exit=1。
+    """初始化基础库，stderr 报阶段进度，stdout 输出单一 JSON；降级2、失败1。
 
     例如仅 daily 的参考库调用后输出 registered_apis=206、status=incomplete。
     """
@@ -32,7 +41,9 @@ def initialize(
             load_policy(config) if config else FoundationPolicy(version="foundation-default/v1")
         )
         inputs = FoundationBindings.from_json(bindings.read_text()) if bindings else None
-        summary = initialize_library(reference, output, as_of, policy, inputs)
+        summary = initialize_library(
+            reference, output, as_of, policy, inputs, progress=_print_progress
+        )
     except (ValueError, OSError, duckdb.Error, TypeError):
         typer.echo(
             encode({"status": "failed", "reason_codes": ["foundation_initialization_failed"]})

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Hashable
 from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
+from functools import cache
 from math import isfinite
 from types import UnionType
-from typing import Annotated, Any, Literal, Self, Union, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, Literal, Self, Union, cast, get_args, get_origin, get_type_hints
 
 from ..standard import normalize_period, normalize_timestamp
 from ..store import encode
@@ -22,6 +24,15 @@ Score = Annotated[float, "score"]
 Fraction = Annotated[float, "fraction"]
 Positive = Annotated[float, "positive"]
 Count = Annotated[int, "count"]
+
+
+@cache
+def _model_hints(model: type[Model]) -> dict[str, Any]:
+    """缓存固定模型类的类型解析，不缓存输入值或跳过实例校验。
+
+    输入 EvidenceRef 类型，输出带 Annotated 的字段定义；重复输入只解析一次。
+    """
+    return get_type_hints(model, include_extras=True)
 
 
 def _constraint(value: Any, name: str) -> Any:
@@ -80,7 +91,7 @@ def _typed(value: Any, annotation: Any) -> Any:
             _typed(key, arguments[0]): _typed(child, arguments[1]) for key, child in value.items()
         }
     if isinstance(annotation, type) and issubclass(annotation, Model):
-        return annotation.from_dict(value.to_dict() if isinstance(value, annotation) else value)
+        return annotation.from_dict(asdict(value) if isinstance(value, annotation) else value)
     if isinstance(annotation, type) and issubclass(annotation, StrEnum):
         try:
             return annotation(value)
@@ -104,7 +115,7 @@ class Model:
 
         例如 EvidenceRef(observed_at='2026-01-01T08:00:00+08:00', ...) 保存 00:00Z。
         """
-        hints = get_type_hints(type(self), include_extras=True)
+        hints = _model_hints(cast(Hashable, type(self)))
         for field in fields(self):
             object.__setattr__(
                 self, field.name, _typed(getattr(self, field.name), hints[field.name])

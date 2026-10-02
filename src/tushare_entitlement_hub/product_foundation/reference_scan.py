@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date, datetime
 from typing import Any, cast
 
@@ -13,9 +13,12 @@ from ..pit import time_boundary
 from ..reference_contract import ReferenceContract
 from ..standard import normalize_date, normalize_period, normalize_timestamp
 from ..store import digest
+from .batch_io import batches
 from .bindings import FoundationBindings, TimeMapping
+from .config import DEFAULT_FACT_BATCH_SIZE
 from .contracts import QualityGateResult, Truth
 from .entities import resolve_alias
+from .model import Model
 from .numeric import adapt_numeric
 from .registry import ConsumerSpec
 from .storage import ProductStore
@@ -23,15 +26,17 @@ from .storage_records import GateRecord
 from .temporal import AvailabilityFact, availability_gate, public_time_boundary
 
 
-def reference_rows(connection: duckdb.DuckDBPyConnection, api: str) -> Iterator[dict[str, Any]]:
+def reference_rows(
+    connection: duckdb.DuckDBPyConnection, api: str, *, batch_size: int = DEFAULT_FACT_BATCH_SIZE
+) -> Iterator[dict[str, Any]]:
     """分批读取已验证接口名的 accepted 表，只解码已知 JSON 元数据。
 
     输入 daily，逐条产出来源记录；永不读取 quarantine 行内容。
     """
-    cursor = connection.execute(
-        f'SELECT to_json(source_row) FROM accepted."{api}" source_row ORDER BY source_record_id'
-    )
-    while batch := cursor.fetchmany(256):
+    if type(batch_size) is not int or batch_size < 1:
+        raise ValueError("invalid_batch_size")
+    cursor = connection.execute(f'SELECT to_json(source_row) FROM accepted."{api}" source_row')
+    while batch := cursor.fetchmany(batch_size):
         for values in batch:
             row = json.loads(values[0])
             for key in (
@@ -127,12 +132,16 @@ def consume_rows(
     bindings: FoundationBindings,
     analysis_as_of: str,
     run_id: str,
+    *,
+    batch_size: int = DEFAULT_FACT_BATCH_SIZE,
+    progress: Callable[[int], None] | None = None,
 ) -> tuple[set[str], str | None]:
     """将 accepted 行适配为时间事实及可认证数值，保留逐行失败门禁。
 
     输入 daily 合格行和 amount 证书，输出 typed_fact 与血缘；无实体映射只登记原因。
     返回接口原因集合和最近业务期间，隔离行从不进入此函数。业务时间未知时不解析
     实体；例如2020年旧行在2026年观察后按2020年生命周期归属，不按当前代码复用归属。
+    每批集合式写入时间、数值和门禁，并通过 progress 报告本批行数；无实体映射不扫描。
     """
     time_mapping = next(
         (item for item in bindings.time_mappings if item.source_api == entry.api), None
@@ -148,64 +157,76 @@ def consume_rows(
         for item in contract.documentation["output_fields"]
         if item["type"].lower() in {"float", "double", "int"}
     }
+    if entity_mapping is None:
+        return {"entity_mapping_missing"}, None
     reasons: set[str] = set()
     dates = set()
-    for row in reference_rows(connection, entry.api):
-        row_codes: set[str] = set()
-        row_id = digest([run_id, entry.api, str(row.get("source_record_id"))])
-        try:
-            if (
-                row.get("contract_hash") != contract.fingerprint
-                or row.get("source_api") != entry.api
-            ):
-                raise ValueError("source_contract_mismatch")
-            availability = map_availability(row, contract, time_mapping)
-            store.put("availability_fact", availability)
-            if availability.data_as_of is not None:
-                dates.add(availability.data_as_of)
-            gate = availability_gate(availability, analysis_as_of)
-            row_codes.update(gate.reason_codes)
-            if not gate.passed:
-                row_codes.add("row_unavailable")
-            else:
-                business_time = availability.data_as_of or availability.effective_from
-                entity_id = (
-                    resolve_alias(
-                        bindings.aliases,
-                        entity_mapping.namespace,
-                        str(row.get(entity_mapping.key_field, "")),
-                        analysis_as_of,
-                        effective_at=business_time,
-                        market_timezone=availability.market_timezone,
-                    )
-                    if entity_mapping and business_time is not None
-                    else None
-                )
-                if entity_id is None:
-                    row_codes.add("entity_unresolved")
-                for field in sorted(set(entry.selected_fields) & numeric_fields):
-                    if field not in certificates:
-                        row_codes.add("unit_unverified")
-                    if entity_id is not None:
-                        fact = adapt_numeric(
-                            row, field, entity_id, availability, certificates.get(field)
+    for source_batch in batches(
+        reference_rows(connection, entry.api, batch_size=batch_size), batch_size
+    ):
+        availability_facts: list[Model] = []
+        typed_facts: list[Model] = []
+        gates: list[Model] = []
+        for row in source_batch:
+            row_codes: set[str] = set()
+            row_id = digest([run_id, entry.api, str(row.get("source_record_id"))])
+            try:
+                if (
+                    row.get("contract_hash") != contract.fingerprint
+                    or row.get("source_api") != entry.api
+                ):
+                    raise ValueError("source_contract_mismatch")
+                availability = map_availability(row, contract, time_mapping)
+                availability_facts.append(availability)
+                if availability.data_as_of is not None:
+                    dates.add(availability.data_as_of)
+                gate = availability_gate(availability, analysis_as_of)
+                row_codes.update(gate.reason_codes)
+                if not gate.passed:
+                    row_codes.add("row_unavailable")
+                else:
+                    business_time = availability.data_as_of or availability.effective_from
+                    entity_id = (
+                        resolve_alias(
+                            bindings.aliases,
+                            entity_mapping.namespace,
+                            str(row.get(entity_mapping.key_field, "")),
+                            analysis_as_of,
+                            effective_at=business_time,
+                            market_timezone=availability.market_timezone,
                         )
-                        store.put("typed_fact", fact)
-                        row_codes.update(fact.reason_codes)
-        except (ValueError, TypeError, OverflowError, KeyError):
-            row_codes.add("row_adaptation_failed")
-        if row_codes:
-            store.put(
-                "quality_gate_result",
-                GateRecord(
-                    result_id=row_id,
-                    rule_version="v1",
-                    gate=QualityGateResult(
-                        gate_id="row_eligibility",
-                        result=Truth.UNKNOWN,
-                        reason_codes=tuple(sorted(row_codes)),
+                        if entity_mapping and business_time is not None
+                        else None
+                    )
+                    if entity_id is None:
+                        row_codes.add("entity_unresolved")
+                    for field in sorted(set(entry.selected_fields) & numeric_fields):
+                        if field not in certificates:
+                            row_codes.add("unit_unverified")
+                        if entity_id is not None:
+                            fact = adapt_numeric(
+                                row, field, entity_id, availability, certificates.get(field)
+                            )
+                            typed_facts.append(fact)
+                            row_codes.update(fact.reason_codes)
+            except (ValueError, TypeError, OverflowError, KeyError):
+                row_codes.add("row_adaptation_failed")
+            if row_codes:
+                gates.append(
+                    GateRecord(
+                        result_id=row_id,
+                        rule_version="v1",
+                        gate=QualityGateResult(
+                            gate_id="row_eligibility",
+                            result=Truth.UNKNOWN,
+                            reason_codes=tuple(sorted(row_codes)),
+                        ),
                     ),
-                ),
-            )
-        reasons.update(row_codes)
+                )
+            reasons.update(row_codes)
+        store.put_many("availability_fact", availability_facts, batch_size=batch_size)
+        store.put_many("typed_fact", typed_facts, batch_size=batch_size)
+        store.put_many("quality_gate_result", gates, batch_size=batch_size)
+        if progress is not None:
+            progress(len(source_batch))
     return reasons, max(dates) if dates else None

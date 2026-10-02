@@ -6,6 +6,7 @@ from pathlib import Path
 from .model import Count, Fraction, Identifier, Model, Positive
 
 MAXIMUM_CONTRIBUTION_ERROR = 1e-8
+DEFAULT_FACT_BATCH_SIZE = 512
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -20,6 +21,7 @@ class FoundationPolicy(Model):
     minimum_top_k_jaccard: Fraction = 0.7
     top_k: Count = 10
     maximum_observation_age_days: Positive = 7
+    fact_batch_size: Count = DEFAULT_FACT_BATCH_SIZE
 
     def __post_init__(self) -> None:
         """拒绝没有统计意义的样本门槛和空 Top-K；例如 minimum_peer_count=1 → 错误。
@@ -27,7 +29,12 @@ class FoundationPolicy(Model):
         输入版本及阈值，输出校验后的不可变配置；默认 minimum_peer_count → 30。
         """
         super().__post_init__()
-        if self.minimum_peer_count < 2 or self.top_k < 1 or self.weight_perturbation >= 1:
+        if (
+            self.minimum_peer_count < 2
+            or self.top_k < 1
+            or self.weight_perturbation >= 1
+            or self.fact_batch_size < 1
+        ):
             raise ValueError("invalid_foundation_policy")
 
 

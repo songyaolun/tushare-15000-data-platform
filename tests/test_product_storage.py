@@ -230,7 +230,7 @@ def test_new_time_mapping_replaces_current_snapshot_and_preserves_run_summary(tm
     source = reference_fixture(tmp_path)
     output = tmp_path / "products.duckdb"
     policy = FoundationPolicy(version="v1")
-    previous_summary = initialize_library(source, output, NOW, policy)
+    previous_summary = initialize_library(source, output, NOW, policy, bindings())
     with ProductStore(output, read_only=True) as store:
         previous_version = store.records("availability_fact")[0].certification_version
     configured = replace(

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
+from dataclasses import asdict
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -12,6 +14,16 @@ import duckdb
 from ..pit import time_boundary
 from ..reference_storage import file_checksum
 from ..store import digest, encode
+from .batch_io import (
+    batches,
+    check_conflicts,
+    check_entities,
+    check_table_entities,
+    check_table_lineage,
+    insert_records,
+    stage_records,
+)
+from .config import DEFAULT_FACT_BATCH_SIZE
 from .entities import Entity, EntityAlias, EntityRelation
 from .features import FeatureValue
 from .model import Model
@@ -145,12 +157,12 @@ TABLES: dict[str, tuple[type[Model], tuple[str, ...], dict[str, str]]] = {
 }
 
 
-def _projection(record: Model) -> dict[str, Any]:
+def _projection(record: Model, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     """提取便于 SQL 使用的稳定字段；输入 TypedFact，输出额外 source_api 投影。
 
     嵌套完整内容仍保存在 payload，不丢失有效区间、证据或单位认证。
     """
-    value = record.to_dict()
+    value = record.to_dict() if payload is None else dict(payload)
     if isinstance(record, Entity):
         value.update(
             entity_id=record.identity.entity_id,
@@ -183,9 +195,69 @@ def _evidence_objects(value: Any, excluded: bool = False) -> list[tuple[dict[str
             for key, child in value.items()
             for item in _evidence_objects(child, excluded or key == "excluded_evidence")
         ]
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [item for child in value for item in _evidence_objects(child, excluded)]
     return []
+
+
+def _prepare_records(
+    table: str, records: Iterable[Model]
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """重验输入并按身份去重，不允许批内同键异值，返回 SQL 行和原始顺序身份。
+
+    输入两个相同实体，输出一条待写行及两个相同身份；非法表模型立即拒绝。
+    """
+    rows: dict[str, dict[str, Any]] = {}
+    identities = []
+    model, keys, columns = TABLES[table]
+    for record in records:
+        if type(record) is not model:
+            raise ValueError("product_table_model_mismatch")
+        record = model.from_dict(record.to_dict())
+        payload = asdict(record)
+        value = _projection(record, payload)
+        identity = digest([value[key] for key in keys])
+        if identity in rows and rows[identity]["payload"] != payload:
+            raise ValueError("immutable_record_conflict")
+        rows[identity] = {
+            "record_id": identity,
+            "payload": payload,
+            **{name: value.get(name) for name in columns},
+        }
+        identities.append(identity)
+    return rows, identities
+
+
+def _entity_references(table: str, rows: Iterable[dict[str, Any]]) -> set[str]:
+    """提取批次中的显式实体引用，实体表自身不需要外键检查。
+
+    输入 typed_fact 行，输出 entity_id 集合；输入 entity 行输出空集合。
+    """
+    return {
+        row[key]
+        for row in rows
+        for key in ("entity_id", "from_entity_id", "to_entity_id")
+        if table != "entity" and key in row
+    }
+
+
+def _lineage_records(rows: Iterable[dict[str, Any]]) -> list[LineageEdge]:
+    """从已校验的批次 payload 生成 used/excluded 血缘，身份仍遵循共享表契约。
+
+    输入包含一条排除证据的分量行，输出一条 relationship=excluded 的 LineageEdge。
+    """
+    return [
+        LineageEdge(
+            output_id=row["record_id"],
+            source_api=evidence["source_api"],
+            source_record_id=evidence["source_record_id"],
+            fields=tuple(evidence["fields"]),
+            contract_hash=evidence["contract_hash"],
+            relationship="excluded" if excluded else "used",
+        )
+        for row in rows
+        for evidence, excluded in _evidence_objects(row["payload"])
+    ]
 
 
 class ProductStore:
@@ -296,105 +368,93 @@ class ProductStore:
         )
 
     def put(self, table: str, record: Model) -> str:
-        """严格按表模型插入不可变事实，相同内容幂等，不同内容同键拒绝。
+        """用批量写入的同一校验路径写单条，保留原有返回值与不可变冲突语义。
 
-        输入 entity 表和实体，输出 record_id；再次写入同实体行数保持 1。
-        所有嵌套证据自动登记到 lineage_edge，不使用跨接口业务组哈希连接。
+        输入 entity 模型，输出稳定 record_id；同键同内容幂等，同键异值抛错。
         """
-        if table not in TABLES or type(record) is not TABLES[table][0]:
+        return self.put_many(table, (record,))[0]
+
+    def put_many(
+        self, table: str, records: Iterable[Model], *, batch_size: int = DEFAULT_FACT_BATCH_SIZE
+    ) -> list[str]:
+        """分批校验、集合式插入事实与血缘，绝不为每行先 SELECT 再 INSERT。
+
+        输入一千条事实及 batch_size=512，输出按输入顺序排列的一千个身份；
+        同批重复也幂等，任何不可变冲突抛错。用 with ProductStore 包裹整个调用，
+        即可在后续批次失败时回滚所有批次；单条 put 同样使用此路径。
+        """
+        if table not in TABLES:
             raise ValueError("product_table_model_mismatch")
-        record = type(record).from_dict(record.to_dict())
-        value = _projection(record)
-        _, keys, columns = TABLES[table]
-        identity = digest([value[key] for key in keys])
-        encoded = record.to_json()
-        previous = self.connection.execute(
-            f'SELECT payload FROM product."{table}" WHERE record_id=?', [identity]
-        ).fetchone()
-        if previous:
-            if encode(json.loads(previous[0])) != encoded:
-                raise ValueError("immutable_record_conflict")
-            return identity
-        entity_ids = [
-            value[key] for key in ("entity_id", "from_entity_id", "to_entity_id") if key in value
-        ]
-        if table != "entity":
-            for entity_id in entity_ids:
-                if not self.connection.execute(
-                    "SELECT 1 FROM product.entity WHERE entity_id=?", [entity_id]
-                ).fetchone():
-                    raise ValueError("referenced_entity_missing")
-        names = ",".join(f'"{name}"' for name in columns)
-        parameters = [identity, encoded, *(value.get(name) for name in columns)]
-        placeholders = ",".join("?" for _ in parameters)
-        self.connection.execute(
-            f'INSERT INTO product."{table}" (record_id,payload,{names}) VALUES ({placeholders})',
-            parameters,
-        )
-        if table != "lineage_edge":
-            for evidence, excluded in _evidence_objects(record.to_dict()):
-                self.put(
+        identities = []
+        for batch in batches(records, batch_size):
+            rows, batch_ids = _prepare_records(table, batch)
+            stage = stage_records(self.connection, table, TABLES[table][2], list(rows.values()))
+            check_conflicts(
+                self.connection,
+                table,
+                stage,
+                {key: encode(value["payload"]) for key, value in rows.items()},
+            )
+            check_entities(self.connection, _entity_references(table, rows.values()))
+            edges = _lineage_records(rows.values()) if table != "lineage_edge" else []
+            edge_stage = None
+            if edges:
+                edge_rows, _ = _prepare_records("lineage_edge", edges)
+                edge_stage = stage_records(
+                    self.connection,
                     "lineage_edge",
-                    LineageEdge(
-                        output_id=identity,
-                        source_api=evidence["source_api"],
-                        source_record_id=evidence["source_record_id"],
-                        fields=tuple(evidence["fields"]),
-                        contract_hash=evidence["contract_hash"],
-                        relationship="excluded" if excluded else "used",
-                    ),
+                    TABLES["lineage_edge"][2],
+                    list(edge_rows.values()),
                 )
-        return identity
+                check_conflicts(
+                    self.connection,
+                    "lineage_edge",
+                    edge_stage,
+                    {key: encode(value["payload"]) for key, value in edge_rows.items()},
+                )
+            insert_records(self.connection, table, stage)
+            if edge_stage is not None:
+                insert_records(self.connection, "lineage_edge", edge_stage)
+            identities.extend(batch_ids)
+        return identities
 
-    def verify_contents(self) -> None:
-        """只读重验模型、业务身份、SQL 投影和自动血缘，不信任单独的 payload。
+    def verify_contents(self, *, batch_size: int = DEFAULT_FACT_BATCH_SIZE) -> None:
+        """流式重验模型、身份和 SQL 投影，按批次集合式检查实体引用及证据边。
 
-        输入值投影被改或来源边被删的产品库，抛 ValueError；完整库返回 None。
+        输入完整库返回 None；改动投影、身份、实体或血缘均抛固定原因码。
+        先集合式检查引用与血缘，再遍历当前事务；遍历期间不在同连接执行其他 SQL，
+        最后核对实际遍历行数，避免结果被引擎中断时将部分扫描误认成完整验证。
         """
+        if type(batch_size) is not int or batch_size < 1:
+            raise ValueError("invalid_batch_size")
         if set(self.tables()) != set(TABLES):
             raise ValueError("product_tables_missing")
-        for table, (_, keys, columns) in TABLES.items():
-            for record in self.records(table):
-                value = _projection(record)
-                identity = digest([value[key] for key in keys])
-                fetched = self.connection.execute(
-                    f'SELECT to_json(stored) FROM product."{table}" stored WHERE record_id=?',
-                    [identity],
-                ).fetchone()
-                if fetched is None:
-                    raise ValueError("product_record_identity_mismatch")
-                stored = json.loads(fetched[0])
-                for name, kind in columns.items():
-                    actual, expected = stored[name], value.get(name)
-                    if kind == "TIMESTAMPTZ" and actual is not None and expected is not None:
-                        actual, expected = time_boundary(actual), time_boundary(expected)
-                    if actual != expected:
-                        raise ValueError("product_projection_mismatch")
-                if table != "entity":
-                    for key in ("entity_id", "from_entity_id", "to_entity_id"):
-                        if (
-                            key in value
-                            and not self.connection.execute(
-                                "SELECT 1 FROM product.entity WHERE entity_id=?",
-                                [value[key]],
-                            ).fetchone()
-                        ):
-                            raise ValueError("referenced_entity_missing")
-                if table != "lineage_edge":
-                    for evidence, excluded in _evidence_objects(record.to_dict()):
-                        edge = LineageEdge(
-                            output_id=identity,
-                            source_api=evidence["source_api"],
-                            source_record_id=evidence["source_record_id"],
-                            fields=tuple(evidence["fields"]),
-                            contract_hash=evidence["contract_hash"],
-                            relationship="excluded" if excluded else "used",
-                        )
-                        if not self.connection.execute(
-                            "SELECT 1 FROM product.lineage_edge WHERE payload=?::JSON",
-                            [edge.to_json()],
-                        ).fetchone():
-                            raise ValueError("product_lineage_missing")
+        for table, (model, keys, columns) in TABLES.items():
+            check_table_entities(self.connection, table, columns)
+            if table != "lineage_edge":
+                check_table_lineage(self.connection, table)
+            expected_rows = self.connection.execute(
+                f'SELECT count(*) FROM product."{table}"'
+            ).fetchall()[0][0]
+            checked_rows = 0
+            result = self.connection.sql(f'SELECT to_json(stored) FROM product."{table}" stored')
+            while batch := result.fetchmany(batch_size):
+                checked_rows += len(batch)
+                for raw in batch:
+                    stored = json.loads(raw[0])
+                    record = model.from_dict(stored["payload"])
+                    value = _projection(record, asdict(record))
+                    identity = digest([value[key] for key in keys])
+                    if stored["record_id"] != identity:
+                        raise ValueError("product_record_identity_mismatch")
+                    for name, kind in columns.items():
+                        actual, expected = stored[name], value.get(name)
+                        if kind == "TIMESTAMPTZ" and actual is not None and expected is not None:
+                            actual, expected = time_boundary(actual), time_boundary(expected)
+                        if actual != expected:
+                            raise ValueError("product_projection_mismatch")
+            if checked_rows != expected_rows:
+                raise ValueError("product_scan_incomplete")
 
     def records(self, table: str) -> list[Model]:
         """按稳定身份读取并重验模型；输入 entity → Entity 列表，任意表名拒绝。"""
