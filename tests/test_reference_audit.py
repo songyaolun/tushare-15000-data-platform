@@ -4,6 +4,7 @@ import duckdb
 import pytest
 
 from tushare_entitlement_hub.reference_audit import audit_reference
+from tushare_entitlement_hub.reference_derived import publish_derived_datasets
 
 
 @pytest.mark.parametrize('scenario', ['missing', 'matched', 'mismatch'])
@@ -26,13 +27,14 @@ def test_cross_dataset_audit_states(tmp_path, scenario):
                 connection.execute('DELETE FROM accepted.adj_factor')
                 connection.execute('DELETE FROM accepted.stock_basic')
                 connection.execute("UPDATE accepted.trade_cal SET exchange='SZSE'")
+            assert publish_derived_datasets(connection)
     report = audit_reference(tmp_path)
     assert report['status'] == {'missing': 'not_checked', 'matched': 'passed',
                                 'mismatch': 'failed'}[scenario]
     assert not report['historical_universe_certified']
     assert (tmp_path / 'quality-audit.json').is_file()
     if scenario == 'mismatch':
-        assert sum(item['finding_count'] for item in report['checks']) == 3
+        assert sum(item['finding_count'] for item in report['checks']) == 4
 
 
 def test_listing_gaps_distinguish_full_day_suspension_and_resumption(tmp_path):

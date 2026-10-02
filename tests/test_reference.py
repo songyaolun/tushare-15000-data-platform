@@ -15,7 +15,7 @@ from tushare_entitlement_hub.cli import app
 from tushare_entitlement_hub.client import Client, FakeTransport, HttpTransport, ProviderError
 from tushare_entitlement_hub.models import CatalogEntry, Policy
 from tushare_entitlement_hub.raw import RawStore
-from tushare_entitlement_hub.reference import build_reference
+from tushare_entitlement_hub.reference import build_reference, reference_collection_policy
 from tushare_entitlement_hub.reference_collect import collect_reference_pages
 from tushare_entitlement_hub.reference_contract import (
     ReferenceContract,
@@ -480,3 +480,129 @@ def test_incomplete_collection_is_retried_without_refresh(store, tmp_path):
     )
     assert second['counts'] == {'accepted': 1}
     assert second['datasets'][0]['quality']['source_rows'] == 2
+
+
+def test_zero_volume_reference_close_is_usable_with_explicit_annotations():
+    """场景：零成交时提供方用零开高低及非零收盘；预期：价格缺观测且保留参考收盘。"""
+    contract = contract_for(zero_volume_reference_close=True)
+    source = {
+        'ts_code': 'A', 'trade_date': '20260930', 'open': 0, 'high': 0,
+        'low': 0, 'close': 12.3, 'vol': 0, 'amount': 0,
+    }
+    accepted, rejected, quality = evaluate_records(
+        [(source, 'response', 0, 'request')], contract, OBS,
+    )
+    assert not rejected and quality['usable_with_annotation_rows'] == 1
+    assert accepted[0]['market_activity_status'] == 'no_trade'
+    assert accepted[0]['price_observation_status'] == 'reference_close_without_trade'
+    assert [accepted[0][field] for field in ('open', 'high', 'low')] == [None, None, None]
+    assert accepted[0]['close'] == 12.3 and accepted[0]['source_fields']['open'] == 0
+
+
+def test_positive_volume_zero_prices_remain_quarantined():
+    """场景：有成交量却返回零开高低和非零收盘；预期：继续隔离，不能套用无成交口径。"""
+    contract = contract_for(zero_volume_reference_close=True)
+    source = {
+        'ts_code': 'A', 'trade_date': '20260930', 'open': 0, 'high': 0,
+        'low': 0, 'close': 12.3, 'vol': 1, 'amount': 12.3,
+    }
+    accepted, rejected, quality = evaluate_records(
+        [(source, 'response', 0, 'request')], contract, OBS,
+    )
+    assert not accepted and rejected[0]['issues'] == ['invalid_ohlc_range']
+    assert quality['quarantined_rows'] == 1
+
+
+def test_zero_volume_all_zero_prices_become_missing_observation():
+    """场景：零成交且所有价格为0；预期：标准价格全部为空，不能把0当作真实市场价格。"""
+    contract = contract_for(zero_volume_reference_close=True)
+    source = {
+        'ts_code': 'A', 'trade_date': '20260930', 'open': 0, 'high': 0,
+        'low': 0, 'close': 0, 'vol': 0, 'amount': 0,
+    }
+    accepted, rejected, _ = evaluate_records(
+        [(source, 'response', 0, 'request')], contract, OBS,
+    )
+    assert not rejected
+    assert [accepted[0][field] for field in ('open', 'high', 'low', 'close')] == [
+        None, None, None, None
+    ]
+    assert accepted[0]['price_observation_status'] == 'no_price_observed'
+
+
+def test_provider_date_sentinel_becomes_annotated_null():
+    """场景：提供方用字符串0表示上市日未确定；预期：标准日期为空并记录空值原因。"""
+    contract = contract_for(null_sentinels={'list_date': ['0']})
+    row = normalize_reference_row(
+        {'ts_code': 'A', 'trade_date': '20260930', 'list_date': '0'},
+        contract, OBS, 'response', 0, 'request',
+    )
+    assert row['list_date'] is None
+    assert row['field_quality'] == {'list_date': 'provider_sentinel'}
+
+
+def test_business_group_variants_remain_usable_without_overwriting():
+    """场景：同一业务事件有两条不同版本及一条重复；预期：保留两个变体并合并完全重复来源。"""
+    contract = contract_for(
+        identity_policy='preserve_source_variants', variant_fields=['close']
+    )
+    records = [
+        ({'ts_code': 'A', 'trade_date': '20260930', 'close': 2}, 'r1', 0, 'q1'),
+        ({'ts_code': 'A', 'trade_date': '20260930', 'close': 3}, 'r2', 0, 'q2'),
+        ({'ts_code': 'A', 'trade_date': '20260930', 'close': 3}, 'r3', 0, 'q3'),
+    ]
+    accepted, rejected, quality = evaluate_records(records, contract, OBS)
+    assert not rejected and len(accepted) == 2
+    assert len({row['business_group_key'] for row in accepted}) == 1
+    assert len({row['business_key'] for row in accepted}) == 2
+    assert {row['business_variant_dimensions']['close'] for row in accepted} == {2.0, 3.0}
+    assert {row['identity_resolution'] for row in accepted} == {
+        'business_group_source_variant'
+    }
+    assert quality['business_variant_rows'] == 2
+    assert quality['usable_with_annotation_rows'] == 2
+    assert quality['exact_duplicate_rows'] == 1 and quality['status'] == 'partial'
+
+
+def test_nullable_descriptive_business_dimension_is_preserved():
+    """场景：仓单品种名称缺失但代码、交易所和仓库齐全；预期：保留空描述字段及业务身份。"""
+    contract = contract_for('fut_wsr')
+    source = {
+        'trade_date': '20240102', 'symbol': 'PTA', 'warehouse': '华润化学',
+        'year': None, 'grade': None, 'brand': None, 'place': None, 'is_ct': None,
+        'exchange': 'CZCE', 'fut_name': None, 'area': None,
+    }
+    row = normalize_reference_row(source, contract, OBS, 'response', 0, 'request')
+    assert row['fut_name'] is None
+    assert row['business_dimensions']['symbol'] == 'PTA'
+
+
+def test_rate_limited_collection_policy_records_retry_window_and_partition():
+    """场景：小时限频接口发生临时失败；预期：记录下一可重试时间及节省请求的分区策略。"""
+    policy = reference_collection_policy(
+        contract_for('hk_daily'), OBS, 'transient_failure'
+    )
+    assert policy == {
+        'rate_per_minute': 1 / 60,
+        'partition_strategy': 'trade_date_full_market',
+        'retry_eligible_at': '2026-10-02T01:00:00Z',
+    }
+    assert reference_collection_policy(contract_for(), OBS) == {
+        'rate_per_minute': 60,
+        'partition_strategy': 'declared_request',
+    }
+
+
+def test_offline_rebuild_adds_retry_policy_to_rate_limited_failure(tmp_path):
+    """场景：旧清单只有限频失败状态；预期：离线重建补上重试时间，不发起网络请求。"""
+    from tushare_entitlement_hub.reference import rebuild_reference
+
+    root = tmp_path / 'reference'
+    atomic_json(root / 'account.json', {'account': 'local', 'source': 'live'})
+    atomic_json(root / 'datasets/hk_daily/manifest.json', {
+        'api_name': 'hk_daily', 'status': 'transient_failure', 'observed_at': OBS,
+    })
+    result = rebuild_reference(root, progress=lambda _: None)
+    manifest = result['datasets'][0]
+    assert manifest['collection_policy']['partition_strategy'] == 'trade_date_full_market'
+    assert manifest['collection_policy']['retry_eligible_at'] == '2026-10-02T01:00:00Z'

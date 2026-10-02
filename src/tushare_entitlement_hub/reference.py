@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ from .catalog import load_policies
 from .client import Client, ProviderError
 from .reference_audit import audit_reference
 from .reference_collect import collect_reference_partitions
-from .reference_contract import ReferenceRecord, load_reference_contracts
+from .reference_contract import ReferenceContract, ReferenceRecord, load_reference_contracts
 from .reference_quality import evaluate_records
 from .reference_storage import (
     atomic_json,
@@ -26,7 +27,32 @@ from .reference_storage import (
 )
 from .store import Store, digest, encode
 
-REFERENCE_VERSION = "reference-v2"
+REFERENCE_VERSION = "reference-v3"
+
+
+def reference_collection_policy(
+    contract: ReferenceContract, observed_at: str, failure_kind: str | None = None,
+    default_rate_per_minute: float = 60,
+) -> dict[str, Any]:
+    """返回接口限速、分区和下次可重试时间，不启动后台调度或隐藏重放请求。
+
+    输入参考契约、UTC观察时间和可选失败类型，输出可持久化政策。例如每小时一次的
+    hk_daily发生transient_failure时给出一小时后的retry_eligible_at；普通daily只记录速率。
+    """
+    rules = contract.rules
+    policy: dict[str, Any] = {
+        "rate_per_minute": rules.get(
+            "rate_per_minute", default_rate_per_minute
+        ),
+        "partition_strategy": rules.get("partition_strategy", "declared_request"),
+    }
+    cooldown = rules.get("cooldown_seconds")
+    if failure_kind == "transient_failure" and isinstance(cooldown, int) and cooldown > 0:
+        instant = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+        policy["retry_eligible_at"] = (instant + timedelta(seconds=cooldown)).isoformat().replace(
+            "+00:00", "Z"
+        )
+    return policy
 
 
 def build_reference(
@@ -95,6 +121,11 @@ def build_reference(
                 contract_hash=contract.fingerprint,
                 reference_version=REFERENCE_VERSION,
                 scope="complete_declared_request_not_all_history_or_market_universe",
+                collection_policy=reference_collection_policy(
+                    contract, observed_at, default_rate_per_minute=(
+                        entry.frequency_per_minute or 60
+                    )
+                ),
             )
             try:
                 client.rate_per_minute = (
@@ -118,6 +149,10 @@ def build_reference(
             except (ProviderError, ValueError, OSError, duckdb.Error) as error:
                 manifest.update(status=error.kind if isinstance(error, ProviderError)
                                 else "processing_failed")
+                if isinstance(error, ProviderError):
+                    manifest["collection_policy"] = reference_collection_policy(
+                        contract, observed_at, error.kind, entry.frequency_per_minute or 60
+                    )
         atomic_json(path, manifest)
         manifests.append(manifest)
         progress(encode({"api_name": entry.api_name, "status": manifest["status"],
@@ -146,13 +181,21 @@ def rebuild_reference(
     for path in sorted((destination / "datasets").glob("*/manifest.json")):
         manifest = json.loads(path.read_text())
         name = manifest["api_name"]
+        contract = contracts.get(name)
+        if contract is not None:
+            failure_kind = (
+                "transient_failure" if manifest.get("status") == "transient_failure" else None
+            )
+            manifest["collection_policy"] = reference_collection_policy(
+                contract, manifest["observed_at"], failure_kind
+            )
         if api_names is not None and name not in api_names:
             if manifest.get("files") and not verified_files(manifest):
                 manifest.update(status="artifact_verification_failed", files={})
+            atomic_json(path, manifest)
             manifests.append(manifest)
             continue
-        if manifest.get("pages") and name in contracts:
-            contract = contracts[name]
+        if manifest.get("pages") and contract is not None:
             try:
                 records: list[ReferenceRecord] = []
                 for page in manifest["pages"]:
@@ -192,7 +235,7 @@ def rebuild_reference(
                 )
             except (OSError, ValueError, KeyError, duckdb.Error):
                 manifest.update(status="rebuild_failed", files={})
-            atomic_json(path, manifest)
+        atomic_json(path, manifest)
         manifests.append(manifest)
         progress(encode({"api_name": name, "status": manifest["status"]}))
     database = publish_library(destination, manifests)

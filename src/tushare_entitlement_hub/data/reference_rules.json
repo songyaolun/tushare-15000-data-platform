@@ -1,4 +1,39 @@
 {
+  "bak_basic": {
+    "null_sentinels": {
+      "list_date": [
+        "0"
+      ]
+    },
+    "note": "提供方以0表示上市日期尚未确定，标准层转为空值并保留原始字段"
+  },
+  "bak_daily": {
+    "zero_volume_reference_close": true
+  },
+  "cb_daily": {
+    "zero_volume_reference_close": true
+  },
+  "cb_factor_pro": {
+    "zero_volume_reference_close": true
+  },
+  "ci_daily": {
+    "zero_volume_reference_close": true
+  },
+  "fut_daily": {
+    "zero_volume_reference_close": true
+  },
+  "fut_daily_adj": {
+    "zero_volume_reference_close": true
+  },
+  "fut_weekly_monthly": {
+    "zero_volume_reference_close": true
+  },
+  "idx_factor_pro": {
+    "zero_volume_reference_close": true
+  },
+  "opt_daily": {
+    "zero_volume_reference_close": true
+  },
   "bc_otcqt": {
     "aliases": {
       "bid_bank": "bank"
@@ -53,6 +88,8 @@
     ],
     "timezone": "Asia/Shanghai",
     "rate_per_minute": 0.016666666666666666,
+    "cooldown_seconds": 3600,
+    "partition_strategy": "security_trade_day",
     "note": "真实服务端先返回每分钟1次，随后明确返回每小时1次；正式请求采用已观察到的更严格频率"
   },
   "rt_min": {
@@ -98,7 +135,8 @@
       "place",
       "is_ct",
       "warehouse",
-      "area"
+      "area",
+      "fut_name"
     ],
     "primary_key": [
       "trade_date",
@@ -113,23 +151,81 @@
       "fut_name",
       "area"
     ],
-    "note": "仓库合计按交易所、品种及地区区分，仓库和厂库分别保存"
+    "null_reasons": {
+      "fut_name": "provider_optional_description"
+    },
+    "note": "仓库合计按交易所、品种及地区区分，仓库和厂库分别保存；郑商所部分行不提供品种名称"
   },
   "pledge_detail": {
     "nullable_keys": [
-      "start_date"
+      "start_date",
+      "pledgor"
+    ],
+    "null_reasons": {
+      "pledgor": "provider_not_disclosed"
+    },
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "is_release",
+      "release_date",
+      "end_date",
+      "pledge_amount",
+      "pledged_amount"
     ]
   },
   "repurchase": {
     "nullable_keys": [
       "end_date"
+    ],
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "vol",
+      "amount",
+      "low_limit",
+      "high_limit"
+    ]
+  },
+  "share_float": {
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "float_share",
+      "float_ratio"
     ]
   },
   "stk_holdertrade": {
     "nullable_keys": [
       "begin_date",
       "close_date"
+    ],
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "change_vol",
+      "after_share",
+      "after_ratio",
+      "total_share"
     ]
+  },
+  "top_inst": {
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "buy",
+      "sell",
+      "net_buy",
+      "buy_rate",
+      "sell_rate"
+    ],
+    "note": "同名机构专用席位可能代表多个匿名席位，按业务组保留来源变体"
+  },
+  "us_basic": {
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "list_date",
+      "delist_date",
+      "classify",
+      "name",
+      "enname"
+    ],
+    "note": "美股代码会跨证券生命周期复用，代码作为业务组，上市日期和名称等作为生命周期变体"
   },
   "stk_managers": {
     "nullable_keys": [
@@ -289,6 +385,8 @@
   },
   "hk_daily": {
     "rate_per_minute": 0.016666666666666666,
+    "cooldown_seconds": 3600,
+    "partition_strategy": "trade_date_full_market",
     "note": "真实服务端先返回每分钟1次，随后明确返回每小时1次；正式请求采用已观察到的更严格频率"
   }
 }

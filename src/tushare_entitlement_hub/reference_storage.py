@@ -12,6 +12,7 @@ from typing import Any
 import duckdb
 
 from .reference_contract import ReferenceContract
+from .reference_derived import publish_derived_datasets
 from .store import encode
 
 
@@ -46,8 +47,10 @@ def reference_columns(
     columns = {}
     for field in sorted(keys):
         kind = documented.get(field, "")
-        if field in {"source_fields", "source_units", "standard_units", "source_occurrences",
-                     "issues"}:
+        if field in {
+            "source_fields", "source_units", "standard_units", "source_occurrences", "issues",
+            "field_quality", "business_dimensions", "business_variant_dimensions",
+        }:
             target = "JSON"
         elif field == "source_index":
             target = "BIGINT"
@@ -111,7 +114,15 @@ def write_dataset_files(
         "source_units": contract.policy.units,
         "normalization_rules": contract.rules,
         "nullability": "除非空业务键和明确数值规则外，不假定官方业务字段永不为空",
-        "identity": "source_record_id定位原始页内行；business_key才是声明业务维度",
+        "identity": (
+            "business_group_key定位业务事件组；business_variant_key区分同组来源变体；"
+            "source_record_id定位原始页内行"
+        ),
+        "quality_tiers": {
+            "verified": "声明业务键唯一且直接质量规则通过",
+            "usable_with_annotation": "数据可用但需遵守无成交、空值或业务变体说明",
+            "quarantine": "无法解释的字段或数值问题，默认消费不得使用",
+        },
         "time_semantics": "观察时间不可回填；报告期不代表公告时间；历史PIT资格单独标记",
         "contract": asdict(contract),
         "files": files,
@@ -171,20 +182,24 @@ def publish_library(destination: Path, manifests: list[dict[str, Any]]) -> Path:
                         f'CREATE TABLE {schema}."{name}" AS SELECT * FROM read_parquet(?)',
                         [item["parquet"]],
                     )
+        publish_derived_datasets(connection)
         connection.execute("CHECKPOINT")
     with (destination / "inventory.csv").open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["api_name", "title", "status", "collection_status", "parameters",
-                         "source_rows", "accepted_rows", "quarantined_rows", "observed_at",
-                         "dictionary"])
+        writer.writerow([
+            "api_name", "title", "status", "collection_status", "parameters",
+            "source_rows", "accepted_rows", "usable_with_annotation_rows",
+            "business_variant_rows", "quarantined_rows", "observed_at", "dictionary",
+        ])
         for manifest in manifests:
             quality = manifest.get("quality", {})
             writer.writerow([
                 manifest["api_name"], manifest.get("title", ""), manifest["status"],
                 manifest.get("collection_status", ""), encode(manifest.get("parameters", {})),
                 quality.get("source_rows", 0), quality.get("accepted_rows", 0),
-                quality.get("quarantined_rows", 0), manifest.get("observed_at", ""),
-                manifest.get("dictionary", ""),
+                quality.get("usable_with_annotation_rows", 0),
+                quality.get("business_variant_rows", 0), quality.get("quarantined_rows", 0),
+                manifest.get("observed_at", ""), manifest.get("dictionary", ""),
             ])
     path = destination / "reference.duckdb"
     temporary.replace(path)

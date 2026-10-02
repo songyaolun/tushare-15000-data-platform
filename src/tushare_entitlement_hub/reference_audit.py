@@ -73,6 +73,34 @@ def audit_reference(destination: Path) -> dict[str, Any]:
             checks.append({'name': name, 'status': 'failed' if findings else 'passed',
                            'finding_count': len(findings),
                            'findings': [[str(value) for value in row] for row in findings]})
+        derived_columns = {
+            row[0]
+            for row in connection.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema='derived' AND table_name='cn_equity_trade_calendar'"
+            ).fetchall()
+        }
+        required_derived = {'exchange', 'cal_date', 'is_open', 'evidence_basis'}
+        if not required_derived <= derived_columns:
+            checks.append({
+                'name': 'decision_trade_calendar', 'status': 'not_checked',
+                'missing_columns': sorted(required_derived - derived_columns),
+            })
+        else:
+            findings = connection.execute(
+                "SELECT DISTINCT d.ts_code, d.trade_date FROM accepted.daily d "
+                "WHERE NOT EXISTS (SELECT 1 FROM derived.cn_equity_trade_calendar c "
+                "WHERE c.cal_date=d.trade_date AND c.is_open=true "
+                "AND c.exchange=CASE split_part(d.ts_code, '.', 2) "
+                "WHEN 'SH' THEN 'SSE' WHEN 'SZ' THEN 'SZSE' WHEN 'BJ' THEN 'BSE' END) "
+                "ORDER BY d.trade_date, d.ts_code"
+            ).fetchall()
+            checks.append({
+                'name': 'decision_trade_calendar',
+                'status': 'failed' if findings else 'passed',
+                'finding_count': len(findings),
+                'findings': [[str(value) for value in row] for row in findings],
+            })
     result = {
         'scope': 'observed_a_share_daily_cross_dataset_checks', 'checks': checks,
         'status': 'failed' if any(item['status'] == 'failed' for item in checks)
@@ -81,7 +109,7 @@ def audit_reference(destination: Path) -> dict[str, Any]:
         'limitations': [
             '证券范围按当前名录的上市与退市日期推导，只核对daily已出现的日期',
             '停牌仅解释当日S类型、未注明日内时段且当日无复牌的缺行情；未证明历史事件齐全',
-            '交易日历缺对应交易所时报告缺口，不借用另一交易所日历',
+            '原始交易日历缺对应交易所时单独报告，派生日历保留推导依据和置信度',
             '其余市场及接口尚未执行跨表完整性验收',
         ],
     }

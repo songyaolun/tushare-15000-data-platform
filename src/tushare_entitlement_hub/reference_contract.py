@@ -93,6 +93,9 @@ def reference_value(value: Any, field: str, kind: str, contract: ReferenceContra
     value = normalize_null(value)
     if value is None or value == "-":
         return None
+    sentinels = contract.rules.get("null_sentinels", {}).get(field, [])
+    if str(value) in {str(sentinel) for sentinel in sentinels}:
+        return None
     if field in contract.rules.get("date_list_fields", []):
         return [normalize_date(item.strip()) for item in str(value).split(",")]
     if field in contract.rules.get("text_fields", []):
@@ -119,6 +122,55 @@ def reference_value(value: Any, field: str, kind: str, contract: ReferenceContra
     if field == "ts_code" or field.endswith("_code"):
         return str(value).strip().upper()
     return value
+
+
+def annotate_reference_row(
+    row: dict[str, Any], source: dict[str, Any], contract: ReferenceContract,
+) -> None:
+    """在不修改原始字段的前提下标注提供方占位值和无成交价格口径。
+
+    输入正在构建的标准行、原始行和接口契约，原地补充质量层级及语义字段并返回None。
+    例如 vol=0、amount=0、开高低为0而close非零时，将标准开高低置空并标记参考收盘；
+    source_fields 仍在调用方保存原始0值，避免把无成交参考值解释成真实OHLC。
+    """
+    field_quality = {
+        field: "provider_sentinel"
+        for field, sentinels in contract.rules.get("null_sentinels", {}).items()
+        if field in source and str(source[field]) in {str(value) for value in sentinels}
+    }
+    for field, reason in contract.rules.get("null_reasons", {}).items():
+        if field in row and row[field] is None:
+            field_quality[field] = reason
+    if field_quality:
+        row["field_quality"] = field_quality
+        row["quality_tier"] = "usable_with_annotation"
+    if not contract.rules.get("zero_volume_reference_close"):
+        return
+    no_activity = (row.get("vol") == 0 and row.get("amount") in {None, 0})
+    zero_open_high_low = all(row.get(field) == 0 for field in ("open", "high", "low"))
+    reference_close = row.get("close")
+    if (no_activity and zero_open_high_low and isinstance(reference_close, (float, int))
+            and reference_close > 0):
+        for field in ("open", "high", "low"):
+            row[field] = None
+        row.update(
+            market_activity_status="no_trade",
+            price_observation_status="reference_close_without_trade",
+            quality_tier="usable_with_annotation",
+        )
+    elif no_activity and zero_open_high_low and reference_close in {None, 0}:
+        for field in ("open", "high", "low", "close"):
+            row[field] = None
+        row.update(
+            market_activity_status="no_trade",
+            price_observation_status="no_price_observed",
+            quality_tier="usable_with_annotation",
+        )
+    elif ((row.get("vol") or 0) > 0 or (row.get("amount") or 0) > 0):
+        row.update(
+            market_activity_status="traded",
+            price_observation_status="provider_reported",
+        )
 
 
 def normalize_reference_row(
@@ -153,9 +205,15 @@ def normalize_reference_row(
             raise ValueError("business_key_null:" + field)
         if isinstance(row[field], (dict, list)):
             raise ValueError("business_key_not_scalar")
+    annotate_reference_row(row, source, contract)
     observation = normalize_timestamp(observed_at)
     disclosure = next((row.get(name) for name in ("f_ann_date", "ann_date", "notice_date")
                        if row.get(name)), None)
+    business_dimensions = {field: row.get(field) for field in contract.primary_key}
+    business_group_key = digest(list(business_dimensions.values()))
+    variant_dimensions = {
+        field: row.get(field) for field in contract.rules.get("variant_fields", [])
+    }
     row.update(
         source_fields=source,
         source_units=contract.policy.units,
@@ -166,7 +224,13 @@ def normalize_reference_row(
         source_record_id=digest(
             [contract.policy.api_name, observation, response_hash, request_id, source_index]
         ),
-        business_key=digest([row.get(name) for name in contract.primary_key]),
+        business_dimensions=business_dimensions,
+        business_group_key=business_group_key,
+        business_variant_dimensions=variant_dimensions,
+        business_variant_key=None,
+        business_key=business_group_key,
+        identity_resolution="declared_business_key",
+        quality_tier=row.get("quality_tier", "verified"),
         contract_hash=contract.fingerprint,
         availability_basis="observed_only" if not disclosure or contract.rules.get("snapshot")
         else "disclosed_and_observed",

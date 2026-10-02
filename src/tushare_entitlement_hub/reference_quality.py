@@ -70,21 +70,45 @@ def evaluate_records(
                 if value is None:
                     null_counts[field] += 1
     duplicates = 0
+    business_variant_rows = 0
     for group in candidates.values():
-        contents = {digest(row["source_fields"]) for row in group}
-        if len(contents) > 1:
-            quarantined.extend({**row, "issues": ["conflicting_business_key"]} for row in group)
+        by_content: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in group:
+            by_content[digest(row["source_fields"])].append(row)
+        if (len(by_content) > 1
+                and contract.rules.get("identity_policy") == "preserve_source_variants"):
+            for variant_key, occurrences in by_content.items():
+                row = occurrences[0]
+                row.update(
+                    business_variant_key=variant_key,
+                    business_key=digest([row["business_group_key"], variant_key]),
+                    identity_resolution="business_group_source_variant",
+                    quality_tier="usable_with_annotation",
+                    source_occurrences=[item["source_record_id"] for item in occurrences],
+                )
+                accepted.append(row)
+                business_variant_rows += 1
+                duplicates += len(occurrences) - 1
+        elif len(by_content) > 1:
+            quarantined.extend(
+                {**row, "issues": ["conflicting_business_key"]} for row in group
+            )
         else:
             row = group[0]
             row["source_occurrences"] = [item["source_record_id"] for item in group]
             accepted.append(row)
             duplicates += len(group) - 1
+    usable_with_annotation_rows = sum(
+        row.get("quality_tier") == "usable_with_annotation" for row in accepted
+    )
     quality = {
         "source_rows": len(records), "accepted_rows": len(accepted),
         "quarantined_rows": len(quarantined), "exact_duplicate_rows": duplicates,
+        "business_variant_rows": business_variant_rows,
+        "usable_with_annotation_rows": usable_with_annotation_rows,
         "null_counts": dict(null_counts),
         "status": "empty" if not records else "failed" if not accepted else
-        "partial" if quarantined else "passed",
+        "partial" if quarantined or usable_with_annotation_rows else "passed",
         "scope": "schema_identity_values_only",
         "calendar_universe_checked": False,
         "historical_pit_certified": False,
