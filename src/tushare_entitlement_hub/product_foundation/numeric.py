@@ -90,19 +90,26 @@ class NumericResult(Model):
     input_fact_ids: tuple[Identifier, ...]
 
 
-def price_gate(row: dict[str, Any], purpose: str) -> QualityGateResult:
-    """验证成交参考是否允许进入价格用途；量额缺失或矛盾均不证明已成交。
+def price_gate(row: dict[str, Any], purpose: str, field: str = "close") -> QualityGateResult:
+    """验证目标成交价格能否用于给定用途；目标值和量额必须为有限正数。
 
-    输入 close=10、vol=0，return 用途 → FALSE；有效正价格和正量额 → TRUE。
-    repo_daily.close 是利率，settle 是结算价，均不冒充成交价格。
+    输入 close=10、vol=0，return 用途输出 FALSE；open=11 及正量额配 field='open'
+    输出 TRUE。省略 field 时保持检查 close；未知用途抛 unknown_price_purpose。
+    仅接受 open/high/low/close，settle、参考及未知字段输出 not_traded_price_type；
+    其他价格字段须另行认证成交语义后扩展。repo_daily.close 利率和非成交类型同样拒绝。
     """
     if purpose not in {"return", "volatility", "price_rank", "feasibility", "premium"}:
         raise ValueError("unknown_price_purpose")
-    values = [row.get(name) for name in ("close", "vol", "amount")]
+    values = [row.get(name) for name in (field, "vol", "amount")]
     codes = []
     if row.get("quality_tier") == "quarantine" or row.get("is_quarantined") is True:
         codes.append("quarantined_record")
-    if row.get("source_api") == "repo_daily" or row.get("price_type") == "settlement":
+    if (
+        row.get("source_api") == "repo_daily"
+        or field not in {"open", "high", "low", "close"}
+        or row.get("price_type")
+        in {"settlement", "reference", "reference_close", "reference_price"}
+    ):
         codes.append("not_traded_price_type")
     if row.get("market_activity_status") == "no_trade" or row.get("price_observation_status") in {
         "reference_close_without_trade",
@@ -196,7 +203,7 @@ def adapt_numeric(
             multiplier = certification.multiplier
         else:
             reasons.append("unit_mismatch")
-        if certification.dimension == "price" and not price_gate(row, "return").passed:
+        if certification.dimension == "price" and not price_gate(row, "return", field).passed:
             reasons.append("no_traded_price")
         if not reasons:
             value = cast(float, value) * multiplier

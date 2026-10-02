@@ -154,6 +154,8 @@ class FeatureContribution(Model):
     peer_level: str | None = None
     missing_reason: ReasonCode | None = None
     evidence_refs: tuple[EvidenceRef, ...] = ()
+    reason_codes: tuple[ReasonCode, ...] = ()
+    excluded_evidence: tuple[EvidenceRef, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -223,8 +225,12 @@ class DecisionEnvelope(Model):
         """核验时点、贡献和、行动资格；不完整结果不能开启研究行动。
 
         输入 INCOMPLETE 且 decision_allowed=True → 拒绝；未认证历史交易同样拒绝。
+        输入 50 分实际贡献与带原因的可选缺失项，输出保留缺失项的合法 50 分信封。
+        输入 historical_pit_certified=True → 拒绝，本阶段尚未实现历史认证。
         """
         super().__post_init__()
+        if self.historical_pit_certified:
+            raise ValueError("historical_certification_not_implemented")
         cutoff = time_boundary(self.analysis_as_of)
         if time_boundary(self.generated_at) < cutoff:
             raise ValueError("generated_before_analysis")
@@ -247,11 +253,16 @@ class DecisionEnvelope(Model):
         if not 0 < self.contribution_tolerance <= MAXIMUM_CONTRIBUTION_ERROR:
             raise ValueError("invalid_contribution_tolerance")
         if self.score is not None:
+            available_contributions = [
+                item.contribution for item in self.contributions if item.contribution is not None
+            ]
             if (
-                not self.contributions
-                or any(item.contribution is None for item in self.contributions)
-                or abs(sum(item.contribution or 0 for item in self.contributions) - self.score)
-                > self.contribution_tolerance
+                not available_contributions
+                or any(
+                    item.contribution is None and item.missing_reason is None
+                    for item in self.contributions
+                )
+                or abs(sum(available_contributions) - self.score) > self.contribution_tolerance
             ):
                 raise ValueError("contribution_sum_mismatch")
         if self.historical_tradable:

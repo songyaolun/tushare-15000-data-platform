@@ -99,6 +99,7 @@ def initialize_library(
 
     输入仅含 daily 的合成参考库，输出 status=incomplete、registered_apis=206。
     相同参考指纹、截止、配置产生同批次同摘要；不生成任何 P01—P13 业务评分。
+    新批次在同一事务内替换当前产品事实，保留历史运行摘要；失败时恢复旧快照。
     """
     if not reference_path.is_file():
         raise ValueError("reference_library_missing")
@@ -134,7 +135,9 @@ def initialize_library(
             if previous is not None:
                 store.verify_contents()
             if previous == run_id:
-                return dict(store.metadata("summary"))
+                return store.verify_snapshot({entry.api for entry in entries})
+            for table in store.tables():
+                store.connection.execute(f'DELETE FROM product."{table}"')
             for entity in inputs.entities:
                 store.put("entity", entity)
             for alias in inputs.aliases:

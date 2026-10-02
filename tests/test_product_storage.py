@@ -222,15 +222,17 @@ def test_offline_cli_initializes_and_validates_without_credentials(tmp_path, mon
     assert failed.exit_code == 1 and json.loads(failed.stdout)["status"] == "failed"
 
 
-def test_new_time_mapping_preserves_previous_availability_version(tmp_path):
-    """场景：补充公开时间映射后重跑；预期：保留旧时间事实，发布新版本及认证数值。
+def test_new_time_mapping_replaces_current_snapshot_and_preserves_run_summary(tmp_path):
+    """场景：补充公开时间映射后重跑；预期：替换当前事实，保留旧批次摘要。
 
-    输入：同一参考行从观察后模式补充来源市场日期；输出：两版 availability_fact。
+    输入：同一参考行补充公开时间；输出：当前仅一版事实且认证版本改变。
     """
     source = reference_fixture(tmp_path)
     output = tmp_path / "products.duckdb"
     policy = FoundationPolicy(version="v1")
-    initialize_library(source, output, NOW, policy)
+    previous_summary = initialize_library(source, output, NOW, policy)
+    with ProductStore(output, read_only=True) as store:
+        previous_version = store.records("availability_fact")[0].certification_version
     configured = replace(
         bindings(),
         time_mappings=(
@@ -242,7 +244,10 @@ def test_new_time_mapping_preserves_previous_availability_version(tmp_path):
             ),
         ),
     )
-    initialize_library(source, output, NOW, policy, configured)
+    current_summary = initialize_library(source, output, NOW, policy, configured)
     with ProductStore(output, read_only=True) as store:
-        assert store.counts()["availability_fact"] == 2
+        assert store.counts()["availability_fact"] == 1
+        assert store.records("availability_fact")[0].certification_version != previous_version
+        assert current_summary["run_id"] != previous_summary["run_id"]
+        assert store.metadata(f"run:{previous_summary['run_id']}")["summary"] == previous_summary
         assert any(fact.value == 2000 for fact in store.records("typed_fact"))

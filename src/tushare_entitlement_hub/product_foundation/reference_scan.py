@@ -131,7 +131,8 @@ def consume_rows(
     """将 accepted 行适配为时间事实及可认证数值，保留逐行失败门禁。
 
     输入 daily 合格行和 amount 证书，输出 typed_fact 与血缘；无实体映射只登记原因。
-    返回接口原因集合和最近业务期间，隔离行从不进入此函数。
+    返回接口原因集合和最近业务期间，隔离行从不进入此函数。业务时间未知时不解析
+    实体；例如2020年旧行在2026年观察后按2020年生命周期归属，不按当前代码复用归属。
     """
     time_mapping = next(
         (item for item in bindings.time_mappings if item.source_api == entry.api), None
@@ -167,14 +168,17 @@ def consume_rows(
             if not gate.passed:
                 row_codes.add("row_unavailable")
             else:
+                business_time = availability.data_as_of or availability.effective_from
                 entity_id = (
                     resolve_alias(
                         bindings.aliases,
                         entity_mapping.namespace,
                         str(row.get(entity_mapping.key_field, "")),
                         analysis_as_of,
+                        effective_at=business_time,
+                        market_timezone=availability.market_timezone,
                     )
-                    if entity_mapping
+                    if entity_mapping and business_time is not None
                     else None
                 )
                 if entity_id is None:

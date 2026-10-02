@@ -1,9 +1,12 @@
 """有命名空间及生命周期的实体、时点别名和有证据的关系。"""
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 from ..pit import time_boundary
+from ..standard import normalize_period
 from .contracts import EvidenceRef
 from .model import EntityId, Identifier, Model, Score, Timestamp
 
@@ -78,18 +81,27 @@ class TemporalAssertion(Model):
         ):
             raise ValueError("assertion_before_evidence")
 
+    def visible_at(self, cutoff: str) -> bool:
+        """仅检查断言及其证据是否在截止前可见，不据此判断业务有效期。
+
+        输入2026年截止和2020年失效但已观察的别名，输出True；未来公开证据输出False。
+        """
+        instant = time_boundary(cutoff)
+        return time_boundary(self.observed_at) <= instant and all(
+            item.public_available_at is None or time_boundary(item.public_available_at) <= instant
+            for item in self.evidence_refs
+        )
+
     def usable_at(self, cutoff: str) -> bool:
-        """只在已观察、已公开且有效的时段内返回真；未来观察的旧别名 → False。"""
+        """只在已观察、已公开且当时有效的时段内返回真，保留原来的单时点语义。
+
+        输入2026年截止和2025年失效的别名输出False；同日仍有效且可见的别名输出True。
+        """
         instant = time_boundary(cutoff)
         return (
-            time_boundary(self.observed_at) <= instant
+            self.visible_at(cutoff)
             and time_boundary(self.effective_from) <= instant
             and (self.effective_to is None or instant < time_boundary(self.effective_to))
-            and all(
-                item.public_available_at is None
-                or time_boundary(item.public_available_at) <= instant
-                for item in self.evidence_refs
-            )
         )
 
 
@@ -118,21 +130,77 @@ class EntityRelation(TemporalAssertion):
     confirmed: bool = False
 
 
+def _business_time_bounds(value: str, market_timezone: str | None) -> tuple[datetime, datetime]:
+    """把业务时间展开为需由同一生命周期完整覆盖的闭区间，不补造公开时间。
+
+    带时区时间戳返回同一时点；日、月、季、年覆盖完整市场期间。市场时区未知时，
+    在UTC期间两端各扩一天以包住所有合法UTC偏移，不假设市场。输入2020-06配UTC，
+    输出2020-06-01T00:00:00Z至2020-06-30T23:59:59.999999Z。
+    """
+    try:
+        period = normalize_period(value)
+    except ValueError:
+        instant = time_boundary(value)
+        return instant, instant
+    year = int(period[:4])
+    if len(period) == 10:
+        start = datetime.fromisoformat(period)
+        stop = start + timedelta(days=1)
+    else:
+        if len(period) == 4:
+            month, width = 1, 12
+        elif "Q" in period:
+            month, width = (int(period[-1]) - 1) * 3 + 1, 3
+        else:
+            month, width = int(period[5:]), 1
+        start = datetime(year, month, 1)
+        next_month = month - 1 + width
+        stop = datetime(year + next_month // 12, next_month % 12 + 1, 1)
+    if market_timezone is None:
+        lower = start.replace(tzinfo=UTC) - timedelta(days=1)
+        upper = stop.replace(tzinfo=UTC) + timedelta(days=1)
+    else:
+        timezone = ZoneInfo(market_timezone)
+        lower = start.replace(tzinfo=timezone).astimezone(UTC)
+        upper = stop.replace(tzinfo=timezone).astimezone(UTC)
+    return lower, upper - timedelta(microseconds=1)
+
+
 def resolve_alias(
     aliases: tuple[EntityAlias, ...],
     namespace: str,
     alias: str,
     cutoff: str,
+    *,
+    effective_at: str | None = None,
+    market_timezone: str | None = None,
 ) -> str | None:
-    """仅解析同命名空间、研究截止前可见的精确别名，多实体冲突直接拒绝。
+    """独立校验证据可见截止与业务有效时间，只返回完整覆盖业务期间的唯一实体。
 
-    输入一个有效 A.SZ 别名，输出 cn:security:A.SZ:listing1；未匹配返回 None。
+    输入cutoff=2026年、effective_at=2020年及两次上市别名，输出旧实体；期间任何部分
+    有多实体冲突均拒绝。effective_at省略或为None保留旧四参调用的截止时点语义，
+    因此业务时间未知的扫描调用方必须先拒绝解析。未匹配返回None。
     """
+    lower, upper = (
+        (time_boundary(cutoff), time_boundary(cutoff))
+        if effective_at is None
+        else _business_time_bounds(effective_at, market_timezone)
+    )
+    candidates = tuple(
+        item
+        for item in aliases
+        if item.namespace == namespace
+        and item.alias == alias
+        and item.visible_at(cutoff)
+        and time_boundary(item.effective_from) <= upper
+        and (item.effective_to is None or lower < time_boundary(item.effective_to))
+    )
+    if len({item.entity_id for item in candidates}) > 1:
+        raise ValueError("ambiguous_entity_alias")
     matches = {
         item.entity_id
-        for item in aliases
-        if item.namespace == namespace and item.alias == alias and item.usable_at(cutoff)
+        for item in candidates
+        if time_boundary(item.effective_from) <= lower
+        and (item.effective_to is None or upper < time_boundary(item.effective_to))
     }
-    if len(matches) > 1:
-        raise ValueError("ambiguous_entity_alias")
     return next(iter(matches), None)

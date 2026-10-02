@@ -271,6 +271,8 @@ def score_features(features: tuple[FeatureValue, ...], policy: ScorePolicy) -> S
     例如权重 0.8/0.2、特征 0.5/1，输出 60 分；只有首项时输出 50 分及独立档位。
     缺失不是零，未知特征或混合实体、时点、范围、档位会直接拒绝。
     各特征自己的版本和窗口写入档位摘要，不要求不同特征使用相同窗口。
+    不可用特征保留原值、单位、变换和全部原因，其来源只登记为排除证据；
+    例如第二项因 unit_unverified 不可用时，原值仍可审计且贡献为空。
     """
     if not features:
         raise ValueError("score_context_required")
@@ -301,8 +303,10 @@ def score_features(features: tuple[FeatureValue, ...], policy: ScorePolicy) -> S
         reasons.append("insufficient_weight_coverage")
     components = []
     for weight in sorted(policy.weights, key=lambda item: item.feature_id):
-        item = available.get(weight.feature_id)
-        effective_weight = weight.weight / mass if item is not None else 0.0
+        item = indexed.get(weight.feature_id)
+        available_item = available.get(weight.feature_id)
+        effective_weight = weight.weight / mass if available_item is not None else 0.0
+        component_reasons = item.reason_codes if item else ("feature_unavailable",)
         components.append(
             FeatureContribution(
                 feature_id=weight.feature_id,
@@ -312,12 +316,19 @@ def score_features(features: tuple[FeatureValue, ...], policy: ScorePolicy) -> S
                 if item
                 else None,
                 unit=item.unit if item else "unknown",
-                transformed_value=item.value if item else None,
+                transformed_value=available_item.value if available_item else None,
                 weight=effective_weight,
-                contribution=100 * effective_weight * cast(float, item.value) if item else None,
+                contribution=100 * effective_weight * cast(float, available_item.value)
+                if available_item
+                else None,
                 transform=item.transform if item else "unavailable",
-                missing_reason=None if item else "feature_unavailable",
-                evidence_refs=item.evidence_refs if item else (),
+                missing_reason=None if available_item else component_reasons[0],
+                evidence_refs=available_item.evidence_refs if available_item else (),
+                reason_codes=component_reasons,
+                excluded_evidence=item.excluded_evidence
+                + (item.evidence_refs if available_item is None else ())
+                if item
+                else (),
             )
         )
     score = (

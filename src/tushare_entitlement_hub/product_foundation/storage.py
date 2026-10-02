@@ -408,15 +408,58 @@ class ProductStore:
             ).fetchall()
         ]
 
+    def verify_snapshot(self, registered_apis: set[str]) -> dict[str, Any]:
+        """对账初始化快照的摘要、当前批次覆盖集合和逐项来源就绪门禁。
+
+        调用前须以 verify_contents 校验模型及 SQL 投影；普通手工事实库无需调用。
+        输入当前注册表的206个API，完整快照输出已对账摘要；缺一项覆盖则抛ValueError。
+        """
+        summary = self.metadata("summary")
+        if not isinstance(summary, dict):
+            raise ValueError("product_summary_missing")
+        run_id = self.metadata("run_id")
+        counts = summary.get("counts")
+        if (
+            not isinstance(run_id, str)
+            or not run_id
+            or summary.get("run_id") != run_id
+            or summary.get("schema_version") != self.metadata("schema_version")
+            or type(summary.get("registered_apis")) is not int
+            or summary.get("registered_apis") != len(registered_apis)
+            or not isinstance(counts, dict)
+            or any(type(value) is not int for value in counts.values())
+            or counts != self.counts()
+        ):
+            raise ValueError("product_summary_mismatch")
+        coverage = self.connection.execute(
+            "SELECT record_id, source_api, run_id FROM product.coverage_slice"
+        ).fetchall()
+        if (
+            len(coverage) != len(registered_apis)
+            or {row[1] for row in coverage} != registered_apis
+            or any(row[2] != run_id for row in coverage)
+        ):
+            raise ValueError("product_coverage_mismatch")
+        readiness_ids = {
+            row[0]
+            for row in self.connection.execute(
+                "SELECT result_id FROM product.quality_gate_result WHERE gate_id='source_readiness'"
+            ).fetchall()
+        }
+        if readiness_ids != {row[0] for row in coverage}:
+            raise ValueError("product_source_readiness_mismatch")
+        return summary
+
 
 def validate_library(reference_path: Path, product_path: Path) -> dict[str, Any]:
-    """只读验证注册表、输入指纹、产品 schema 及全部持久化模型。
+    """只读验证注册表、输入指纹、持久化模型，以及当前覆盖和摘要对账。
 
     输入未变参考库及产品库，输出 valid=true；修改参考库后输出 valid=false。
     valid 仅表示库的完整性，不能替代 coverage 或历史 PIT 资格。
     """
     try:
-        validate_registry(load_registry())
+        entries = load_registry()
+        validate_registry(entries)
         if reference_path.resolve() == product_path.resolve() or reference_path.samefile(
             product_path
         ):
@@ -425,9 +468,7 @@ def validate_library(reference_path: Path, product_path: Path) -> dict[str, Any]
             if store.metadata("reference_sha256") != file_checksum(reference_path):
                 raise ValueError("reference_changed")
             store.verify_contents()
-            summary = store.metadata("summary")
-            if not isinstance(summary, dict):
-                raise ValueError("product_summary_missing")
+            summary = store.verify_snapshot({entry.api for entry in entries})
             return {
                 "valid": True,
                 "status": summary["status"],
