@@ -433,3 +433,16 @@ def test_source_identity_distinguishes_identical_responses_for_different_request
     )
     assert not rejected and quality['exact_duplicate_rows'] == 1
     assert len(set(accepted[0]['source_occurrences'])) == 2
+
+
+def test_selective_rebuild_verifies_unselected_artifacts(store, tmp_path):
+    """场景：局部重建时未选中表的旧文件损坏；预期：仍识别损坏，禁止混入重新发布的库。"""
+    from tushare_entitlement_hub.reference import rebuild_reference
+
+    store.save_catalog([CatalogEntry('daily', policy=contract_for().policy)])
+    root = tmp_path / 'reference'
+    result = build_reference(store, fake_client(tmp_path, [response()]), root, lambda: OBS,
+                             source='fixture', progress=lambda _: None)
+    Path(result['datasets'][0]['files']['accepted']['jsonl']).write_text('broken')
+    result = rebuild_reference(root, api_names=[], progress=lambda _: None)
+    assert result['counts'] == {'artifact_verification_failed': 1}

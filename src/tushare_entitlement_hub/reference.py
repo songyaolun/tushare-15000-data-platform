@@ -131,7 +131,10 @@ def build_reference(
     return result
 
 
-def rebuild_reference(destination: Path, progress: Callable[[str], None] = print) -> dict[str, Any]:
+def rebuild_reference(
+    destination: Path, progress: Callable[[str], None] = print,
+    api_names: list[str] | None = None,
+) -> dict[str, Any]:
     """从校验通过的正式原始页离线重建标准层，不重新请求、不改变历史观察时间。
 
     输入发布根目录和进度回调，返回重建目录与计数。原始页损坏时保留错误状态，
@@ -143,6 +146,11 @@ def rebuild_reference(destination: Path, progress: Callable[[str], None] = print
     for path in sorted((destination / "datasets").glob("*/manifest.json")):
         manifest = json.loads(path.read_text())
         name = manifest["api_name"]
+        if api_names is not None and name not in api_names:
+            if manifest.get("files") and not verified_files(manifest):
+                manifest.update(status="artifact_verification_failed", files={})
+            manifests.append(manifest)
+            continue
         if manifest.get("pages") and name in contracts:
             contract = contracts[name]
             try:

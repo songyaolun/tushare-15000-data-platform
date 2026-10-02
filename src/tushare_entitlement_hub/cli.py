@@ -327,12 +327,14 @@ def reference_build(
 
 
 @reference_app.command("rebuild")
-def reference_rebuild(output: Path = Path("data/reference")) -> None:
+def reference_rebuild(
+    output: Path = Path("data/reference"), apis: str | None = None,
+) -> None:
     """校验已有原始页并离线重建通用数据；例如reference rebuild --output data/reference。
 
     输入发布目录，返回None并输出计数。不会读取凭据、发起网络请求或更新观察时间。
     """
-    result = rebuild_reference(output)
+    result = rebuild_reference(output, api_names=apis.split(",") if apis else None)
     typer.echo(encode({"counts": result["counts"], "database": result["database"]}))
 
 
