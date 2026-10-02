@@ -84,9 +84,9 @@ def build_reference(
             params = (parameters or {}).get(entry.api_name, dict(contract.policy.minimal_params))
             signature = digest([identity, params, contract.fingerprint, REFERENCE_VERSION])
             previous = json.loads(path.read_text()) if path.exists() else {}
-            if not refresh and previous.get("request_signature") == signature and verified_files(
-                previous
-            ):
+            if (not refresh and previous.get("request_signature") == signature
+                    and previous.get("collection_status", "").startswith("complete")
+                    and verified_files(previous)):
                 manifests.append(previous)
                 progress(encode({"api_name": entry.api_name, "status": "reused"}))
                 continue

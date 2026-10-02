@@ -463,3 +463,20 @@ def test_quarantine_parquet_keeps_invalid_source_values(tmp_path):
         ).fetchone()
     assert row == ('broken', 'invalid_field:trade_date')
     assert verified_files(manifest)
+
+
+def test_incomplete_collection_is_retried_without_refresh(store, tmp_path):
+    """场景：中途失败留下部分合格记录后重新运行；预期：继续尝试采集，不复用不完整结果。"""
+    store.save_catalog([CatalogEntry('daily', policy=contract_for().policy)])
+    root = tmp_path / 'reference'
+    first = build_reference(
+        store, fake_client(tmp_path, [response(more=True), ProviderError('unauthorized', 'x')]),
+        root, lambda: OBS, source='fixture', progress=lambda _: None,
+    )
+    assert first['counts'] == {'partial': 1}
+    second = build_reference(
+        store, fake_client(tmp_path, [response([['A', '20260930', 2], ['B', '20260930', 3]])]),
+        root, lambda: OBS, source='fixture', progress=lambda _: None,
+    )
+    assert second['counts'] == {'accepted': 1}
+    assert second['datasets'][0]['quality']['source_rows'] == 2
