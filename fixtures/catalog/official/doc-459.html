@@ -1,0 +1,123 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=459 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">可转债十大持有人</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：top10_cb_holders<br/>
+描述：获取可转债前十大持有人<br/>
+限量：单次最大3000条，可根据代码或日期循环提取<br/>
+积分：需要5000积分可以调取，具体请参阅<a href="https://tushare.pro/document/1?doc_id=13">积分获取办法</a></p>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>TS代码，支持多值输入，如110059.SH,110060.SH</td>
+</tr>
+<tr>
+<td>period</td>
+<td>str</td>
+<td>N</td>
+<td>报告期（YYYYMMDD格式，年中和年报日期，如20240630,20251231）</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>N</td>
+<td>报告期开始日期</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>N</td>
+<td>报告期结束日期</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>转债代码</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>Y</td>
+<td>报告期</td>
+</tr>
+<tr>
+<td>holder_rank</td>
+<td>int</td>
+<td>Y</td>
+<td>持有排名</td>
+</tr>
+<tr>
+<td>holder_name</td>
+<td>str</td>
+<td>Y</td>
+<td>持有人名称</td>
+</tr>
+<tr>
+<td>hold_amount</td>
+<td>float</td>
+<td>Y</td>
+<td>持有数量(万张)</td>
+</tr>
+<tr>
+<td>hold_ratio</td>
+<td>float</td>
+<td>Y</td>
+<td>持有比例(%)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre># 导入sdk包
+import tushare as ts
+
+# 配置凭据，如果已全局配置了，可以忽略。
+ts.set_token('&lt;REDACTED&gt;')
+
+# 获取接口实例
+pro = ts.pro_api()
+
+# 拉取接口(top10_cb_holders)数据
+# &lt;请写入示例参数的具体含义&gt;。示例：获取转债110059.SH，2025年中期报告数据
+df = pro.top10_cb_holders(ts_code="110059.SH", period="20250630")
+print(df)
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<div class="codehilite"><pre>     ts_code  end_date  holder_rank                                 holder_name      hold_amount     hold_ratio
+0  110059.SH  20250630            1                              中国移动通信集团广东有限公司     9085.323       23.78
+1  110059.SH  20250630            2                                中信建投证券股份有限公司     2449.408        6.41
+2  110059.SH  20250630            3      招商银行股份有限公司-博时中证可转债及可交换债券交易型开放式指数证券投资基金     2203.914        5.77
+3  110059.SH  20250630            4                    登记结算系统债券回购质押专用账户(中国工商银行)     2014.168        5.27
+4  110059.SH  20250630            5              登记结算系统债券回购质押专用账户(中信建投证券股份有限公司)     1488.903        3.90
+5  110059.SH  20250630            6                登记结算系统债券回购质押专用账户(招商银行股份有限公司)     1132.656        2.96
+6  110059.SH  20250630            7  中信证券股份有限公司-海富通上证投资级可转债及可交换债券交易型开放式指数证券投资基金      631.579        1.65
+7  110059.SH  20250630            8                    登记结算系统债券回购质押专用账户(中国农业银行)      586.084        1.53
+8  110059.SH  20250630            9                    登记结算系统债券回购质押专用账户(中国建设银行)      560.471        1.47
+9  110059.SH  20250630           10                  中国银行股份有限公司-华泰保兴尊合债券型证券投资基金      455.901        1.19
+</pre></div>
+</div></body></html>

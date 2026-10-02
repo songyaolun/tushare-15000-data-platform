@@ -1,0 +1,250 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=417 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">申万实时行情</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：rt_sw_k<br/>
+描述：获取申万行业指数的最新截面数据<br/>
+积分：本接口是单独开权限的数据，单独申请权限请参考<a href="https://tushare.pro/document/1?doc_id=290">权限列表</a></p>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>N</td>
+<td>指数代码，如: 801005.SI；可以是逗号隔开的多个，如: 801005.SI,801001.SI</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>指数代码</td>
+</tr>
+<tr>
+<td>name</td>
+<td>str</td>
+<td>Y</td>
+<td>指数名称</td>
+</tr>
+<tr>
+<td>trade_time</td>
+<td>str</td>
+<td>Y</td>
+<td>交易时间</td>
+</tr>
+<tr>
+<td>close</td>
+<td>float</td>
+<td>Y</td>
+<td>现价</td>
+</tr>
+<tr>
+<td>pre_close</td>
+<td>float</td>
+<td>Y</td>
+<td>昨收</td>
+</tr>
+<tr>
+<td>high</td>
+<td>float</td>
+<td>Y</td>
+<td>最高价</td>
+</tr>
+<tr>
+<td>open</td>
+<td>float</td>
+<td>Y</td>
+<td>开盘价</td>
+</tr>
+<tr>
+<td>low</td>
+<td>float</td>
+<td>Y</td>
+<td>最低价</td>
+</tr>
+<tr>
+<td>vol</td>
+<td>float</td>
+<td>Y</td>
+<td>成交量（股）</td>
+</tr>
+<tr>
+<td>amount</td>
+<td>float</td>
+<td>Y</td>
+<td>成交金额（元）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre>pro = ts.pro_api()
+
+# 一次性提取全部申万指数实时数据
+df = pro.rt_sw_k()
+
+# 按ts_code提取行情数据，例如提取801053.SI(贵金属) 实时行情                    
+df = pro.rt_sw_k(ts_code='801053.SI')
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<table>
+<thead>
+<tr>
+<th>ts_code</th>
+<th>name</th>
+<th>trade_time</th>
+<th>close</th>
+<th>pre_close</th>
+<th>high</th>
+<th>open</th>
+<th>low</th>
+<th>vol</th>
+<th>amount</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>801001.SI</td>
+<td>申万50</td>
+<td>2026-01-29 11:20:15</td>
+<td>3787.9120</td>
+<td>3798.2100</td>
+<td>3813.4650</td>
+<td>3813.4650</td>
+<td>3774.6250</td>
+<td>3705199982</td>
+<td>222824326266</td>
+</tr>
+<tr>
+<td>801002.SI</td>
+<td>申万中小</td>
+<td>2026-01-29 11:20:15</td>
+<td>8806.2050</td>
+<td>8809.4800</td>
+<td>8838.5460</td>
+<td>8775.2190</td>
+<td>8730.5520</td>
+<td>25634196750</td>
+<td>360691370056</td>
+</tr>
+<tr>
+<td>801003.SI</td>
+<td>申万Ａ指</td>
+<td>2026-01-29 11:20:15</td>
+<td>4974.9430</td>
+<td>4970.4900</td>
+<td>4986.6610</td>
+<td>4968.8140</td>
+<td>4950.5050</td>
+<td>115336604744</td>
+<td>1936675504044</td>
+</tr>
+<tr>
+<td>801005.SI</td>
+<td>申万创业</td>
+<td>2026-01-29 11:20:15</td>
+<td>4094.8600</td>
+<td>4081.5400</td>
+<td>4123.7230</td>
+<td>4070.4380</td>
+<td>4041.4720</td>
+<td>19045101938</td>
+<td>494472518112</td>
+</tr>
+<tr>
+<td>801010.SI</td>
+<td>农林牧渔</td>
+<td>2026-01-29 11:20:15</td>
+<td>2931.1360</td>
+<td>2915.1700</td>
+<td>2950.3920</td>
+<td>2910.8210</td>
+<td>2904.0440</td>
+<td>2594579310</td>
+<td>22663408519</td>
+</tr>
+<tr>
+<td>801012.SI</td>
+<td>农产品加工</td>
+<td>2026-01-29 11:20:15</td>
+<td>2544.5850</td>
+<td>2526.3300</td>
+<td>2560.6810</td>
+<td>2522.3710</td>
+<td>2517.1980</td>
+<td>227870337</td>
+<td>2384134145</td>
+</tr>
+<tr>
+<td>801014.SI</td>
+<td>饲料</td>
+<td>2026-01-29 11:20:15</td>
+<td>4421.3600</td>
+<td>4371.4000</td>
+<td>4446.7450</td>
+<td>4377.4080</td>
+<td>4372.6460</td>
+<td>437877589</td>
+<td>2850725238</td>
+</tr>
+<tr>
+<td>801015.SI</td>
+<td>渔业</td>
+<td>2026-01-29 11:20:15</td>
+<td>881.9780</td>
+<td>873.6900</td>
+<td>884.1620</td>
+<td>871.7710</td>
+<td>864.7650</td>
+<td>100200890</td>
+<td>447089570</td>
+</tr>
+<tr>
+<td>801016.SI</td>
+<td>种植业</td>
+<td>2026-01-29 11:20:15</td>
+<td>2953.6730</td>
+<td>2887.6000</td>
+<td>2995.5200</td>
+<td>2892.5670</td>
+<td>2892.5670</td>
+<td>1044165536</td>
+<td>8740207605</td>
+</tr>
+<tr>
+<td>801017.SI</td>
+<td>养殖业</td>
+<td>2026-01-29 11:20:15</td>
+<td>2988.3250</td>
+<td>2978.0600</td>
+<td>3012.0680</td>
+<td>2971.0800</td>
+<td>2963.3590</td>
+<td>397154376</td>
+<td>4079931700</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_7">升级记录</h3>
+<p>20260908 去掉pct_change返回字段，清用户本地自行计算</p>
+</div></body></html>

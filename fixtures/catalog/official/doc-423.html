@@ -1,0 +1,173 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=423 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="st">ST风险警示板股票</h1>
+<h3 id="_1">接口介绍</h3>
+<p>接口：st<br/>
+描述：ST风险警示板股票列表<br/>
+限量：单次最大1000，可根据股票代码循环获取历史数据<br/>
+积分：6000积分可提取数据，具体请参阅<a href="https://tushare.pro/document/1?doc_id=13">积分获取办法</a></p>
+<h3 id="_2">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>N</td>
+<td>股票代码</td>
+</tr>
+<tr>
+<td>pub_date</td>
+<td>str</td>
+<td>N</td>
+<td>发布日期</td>
+</tr>
+<tr>
+<td>imp_date</td>
+<td>str</td>
+<td>N</td>
+<td>实施日期</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_3">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>股票代码</td>
+</tr>
+<tr>
+<td>name</td>
+<td>str</td>
+<td>Y</td>
+<td>股票名称</td>
+</tr>
+<tr>
+<td>pub_date</td>
+<td>str</td>
+<td>Y</td>
+<td>发布日期</td>
+</tr>
+<tr>
+<td>imp_date</td>
+<td>str</td>
+<td>Y</td>
+<td>实施日期</td>
+</tr>
+<tr>
+<td>st_type</td>
+<td>str</td>
+<td>Y</td>
+<td>类型</td>
+</tr>
+<tr>
+<td>st_reason</td>
+<td>str</td>
+<td>Y</td>
+<td>st变更原因</td>
+</tr>
+<tr>
+<td>st_explain</td>
+<td>str</td>
+<td>Y</td>
+<td>st变更详细原因</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">代码示例</h3>
+<div class="codehilite"><pre>    # 拉取接口st数据
+    df = pro.st(**{
+    "ts_code": "300125.SZ",
+    "pub_date": "",
+    "imp_date": ""
+}, fields=[
+    "ts_code",
+    "name",
+    "pub_date",
+    "imp_date",
+    "st_type",
+    "st_reason",
+    "st_explain"
+])
+    print(df)
+</pre></div>
+<h3 id="_5">数据结果</h3>
+<table>
+<thead>
+<tr>
+<th>ts_code</th>
+<th>name</th>
+<th>pub_date</th>
+<th>imp_date</th>
+<th>st_type</th>
+<th>st_reason</th>
+<th>st_explain</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>300125.SZ</td>
+<td>*ST聆达</td>
+<td>20260127</td>
+<td>20260128</td>
+<td>撤销叠加*ST</td>
+<td>重整完成或和解协议执行完成或案件结束</td>
+<td>公司重整计划已经执行完毕,根据《上市规则》第10.4.14条第一款的规定,公司符合申请撤销因重整而实施的退市风险警示的条件,公司已于2026年1月8日向深圳证券交易所(以下简称:深交所)申请撤销因重整而实施的退市风险警示。2026年1月27日,深交所审核同意撤销公司因重整而实施的退市风险警示,公司触及财务类退市风险警示及其他风险警示的情形保持不变。</td>
+</tr>
+<tr>
+<td>300125.SZ</td>
+<td>*ST聆达</td>
+<td>20251119</td>
+<td>20251119</td>
+<td>叠加*ST</td>
+<td>法院依法受理公司重整、和解或者破产清算申请</td>
+<td>公司2024年扣除非经常性损益后的净利润为负且扣除后营业收入低于1亿元;最近一个会计年度经审计的期末净资产为负值,公司股票交易于2025年4月25日起被实施退市风险警示;因六安中院依法裁定受理申请人对公司的重整申请,根据《深交所创业板股票上市规则》的规定,公司股票将于2025年11月19开市被叠加实施退市风险警示。</td>
+</tr>
+<tr>
+<td>300125.SZ</td>
+<td>*ST聆达</td>
+<td>20250424</td>
+<td>20250425</td>
+<td>从ST变为*ST</td>
+<td>最近一个会计年度经审计的利润总额、净利润或者扣除非经常性损益后的净利润孰低者为负值且营业收入低于1亿元，或者追溯重述后最近一个会计年度利润总额、净利润或者扣除非经常性损益后的净利润孰低者为负值且营业收入低于1亿元</td>
+<td>公司2024年度经审计的扣除非经常性损益后的净利润为-85,579万元且扣除后营业收入为5,785万元,期末净资产为-53,841万元。根据《上市规则》第10.3.1条第一款第(一)(二)项规定:上市公司出现“最近一个会计年度经审计的利润总额、净利润、扣除非经常性损益后的净利润三者孰低为负值,且扣除后的营业收入低于1亿元的情形。”;“最近一个会计年度经审计的期末净资产为负值”,公司股票交易将被实施退市风险警示。</td>
+</tr>
+<tr>
+<td>300125.SZ</td>
+<td>ST聆达</td>
+<td>20240819</td>
+<td>20240819</td>
+<td>叠加ST</td>
+<td>公司向控股股东或其关联方提供资金或违反规定程序对外提供担保且情形严重</td>
+<td>公司及子公司金寨嘉悦新能源科技有限公司、格尔木神光新能源有限公司在未履行董事会审议程序及信息披露义务的情况下,违规为中财招商投资集团商业保理有限公司与金寨嘉悦正丰新能源有限公司的借款合同提供担保,涉及担保金额1600万元。</td>
+</tr>
+<tr>
+<td>300125.SZ</td>
+<td>ST聆达</td>
+<td>20240427</td>
+<td>20240430</td>
+<td>ST</td>
+<td>公司最近一年被出具无法表示意见或者否定意见的内部控制审计报告或者鉴证报告</td>
+<td>根据《深圳证券交易所创业板股票上市规则》第9.7条等相关规定,公司股票将于2024年4月29日停牌一天,2024年4月30日实施其他风险警示,实施其他风险警示后公司股价的日涨跌幅限制为20%。</td>
+</tr>
+</tbody>
+</table>
+</div></body></html>

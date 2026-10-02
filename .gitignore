@@ -1,0 +1,15 @@
+flux/.local
+flux/changes
+.venv/
+__pycache__/
+*.py[cod]
+.coverage*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+data/
+!src/tushare_entitlement_hub/data/
+!src/tushare_entitlement_hub/data/**
+*.duckdb*
+log/

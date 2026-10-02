@@ -1,0 +1,173 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=293 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h2 id="_1">每日筹码及胜率</h2>
+<hr/>
+<p>接口：cyq_perf<br/>
+描述：获取A股每日筹码平均成本和胜率情况，每天18~19点左右更新，数据从2018年开始<br/>
+来源：Tushare社区<br/>
+限量：单次最大6000条，可以分页或者循环提取<br/>
+积分：5000积分每天20000次，10000积分每天200000次，15000积分每天不限总量</p>
+<h4 id="_2">算法说明：</h4>
+<p>参考用“三角分布法”计算，即当天成交的筹码，在最高价、最低价和平均价之间不是平均分配的，而是越接近平均成交价（或均价），成交的筹码越多，形成一个以均价为峰值的三角形分布。</p>
+<div class="codehilite"><pre>    面积 = 1
+        *
+       /|\          ← 高 h = 2/d
+      / | \
+     /  |  \
+    /   |   \
+   /    |    \
+  /     |     \
+ *------*------*
+low    avg    high
+ ← d = high - low →
+</pre></div>
+<ol>
+<li>
+<p>新筹码分配（当日成交量）：假设当日成交的总筹码量为 V，当日最高价为 H，最低价为 L，平均价为 A。三角分布法会按照一个三角形模型，将 V 分配到从 L 到 H 的各个价格上。在均价 A 这个价格点上，分配的筹码数量最多，形成三角形的顶点；随着价格远离 A，分配的筹码数量线性减少，直到在 L 和 H 处降至零。</p>
+</li>
+<li>
+<p>老筹码更新（历史持仓的搬移）：筹码分布图不是只计算当天的，它是一个动态的、每日更新的过程。每天新产生的交易筹码（来自当天成交的换手），需要从原有的历史持仓中“搬移”出来。这个过程引入了历史换手衰减系数的概念。</p>
+</li>
+</ol>
+<p><strong>输入参数</strong></p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>股票代码</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>N</td>
+<td>交易日期（YYYYMMDD）</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>N</td>
+<td>开始日期</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>N</td>
+<td>结束日期</td>
+</tr>
+</tbody>
+</table>
+<p><br/><br/>
+<br/></p>
+<p><strong>输出参数</strong></p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>股票代码</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>Y</td>
+<td>交易日期</td>
+</tr>
+<tr>
+<td>his_low</td>
+<td>float</td>
+<td>Y</td>
+<td>历史最低价</td>
+</tr>
+<tr>
+<td>his_high</td>
+<td>float</td>
+<td>Y</td>
+<td>历史最高价</td>
+</tr>
+<tr>
+<td>cost_5pct</td>
+<td>float</td>
+<td>Y</td>
+<td>5分位成本</td>
+</tr>
+<tr>
+<td>cost_15pct</td>
+<td>float</td>
+<td>Y</td>
+<td>15分位成本</td>
+</tr>
+<tr>
+<td>cost_50pct</td>
+<td>float</td>
+<td>Y</td>
+<td>50分位成本</td>
+</tr>
+<tr>
+<td>cost_85pct</td>
+<td>float</td>
+<td>Y</td>
+<td>85分位成本</td>
+</tr>
+<tr>
+<td>cost_95pct</td>
+<td>float</td>
+<td>Y</td>
+<td>95分位成本</td>
+</tr>
+<tr>
+<td>weight_avg</td>
+<td>float</td>
+<td>Y</td>
+<td>加权平均成本</td>
+</tr>
+<tr>
+<td>winner_rate</td>
+<td>float</td>
+<td>Y</td>
+<td>胜率</td>
+</tr>
+</tbody>
+</table>
+<p><br/><br/>
+<br/></p>
+<p><strong>接口用法</strong></p>
+<div class="codehilite"><pre>pro = ts.pro_api()
+
+df = pro.cyq_perf(ts_code='600000.SH', start_date='20220101', end_date='20220429')
+</pre></div>
+<p><br/><br/>
+<br/></p>
+<p><strong>数据样例</strong></p>
+<div class="codehilite"><pre>      ts_code trade_date his_low his_high cost_5pct cost_95pct weight_avg winner_rate
+0   600000.SH   20220429    0.72    12.16      8.18      11.34       9.76        3.52
+1   600000.SH   20220428    0.72    12.16      8.24      11.34       9.76        3.08
+2   600000.SH   20220427    0.72    12.16      8.30      11.34       9.76        1.71
+3   600000.SH   20220426    0.72    12.16      8.34      11.34       9.76        2.02
+4   600000.SH   20220425    0.72    12.16      8.36      11.34       9.77        1.44
+..        ...        ...     ...      ...       ...        ...        ...         ...
+72  600000.SH   20220110    0.72    12.16      8.60      11.36       9.89        7.62
+73  600000.SH   20220107    0.72    12.16      8.60      11.36       9.89        7.59
+74  600000.SH   20220106    0.72    12.16      8.60      11.36       9.89        3.92
+75  600000.SH   20220105    0.72    12.16      8.60      11.36       9.89        5.65
+76  600000.SH   20220104    0.72    12.16      8.60      11.36       9.89        3.93
+</pre></div>
+</div></body></html>

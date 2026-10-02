@@ -1,0 +1,53 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=447 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">自选股组合删除</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：p_delete<br/>
+描述：删除自选股组合</p>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>name</td>
+<td>int</td>
+<td>Y</td>
+<td>组合名称</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>status</td>
+<td>bool</td>
+<td>Y</td>
+<td>是否执行成功</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre># 删除组合(我的股票池)
+df=pro.p_delete(name="我的股票池")
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<div class="codehilite"><pre>       status
+    0   True
+</pre></div>
+</div></body></html>

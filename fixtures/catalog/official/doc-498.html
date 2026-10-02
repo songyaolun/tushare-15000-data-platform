@@ -1,0 +1,117 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=498 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">美股恐慌指数行情</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：vix_index<br/>
+描述：VIX恐慌指数由美国CBOE芝加哥期权交易所编制，底层标的为标普500（S&amp;P 500）期权，主要用于反映美股大盘对未来波动的预期，因此常被视为美股市场恐慌情绪的重要指标。它并不是股票，也不是股票指数，而是一个波动率指数。其数值通过标普500的看涨期权和看跌期权价格计算得出，用来衡量市场对未来30天美股大盘波动程度的预期。当美股大幅下跌时，投资者往往会大量买入看跌期权进行保护，推动VIX快速上涨，所以它也被称为“恐慌指数”。简单参考区间：低于20：市场比较平静，恐慌情绪较低。20—30：市场担忧上升，波动预期增强。高于30：市场出现明显恐慌。高于40：通常意味着重大危机级别，市场处于极度恐慌状态。</p>
+<p>限量：单次最大300条，可根据代码或日期循环提取<br/>
+积分：需要5000积分可以调取，具体请参阅<a href="https://tushare.pro/document/1?doc_id=13">积分获取办法</a></p>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>N</td>
+<td>交易日期(格式：YYYYMMDD，下同)</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>N</td>
+<td>开始日期</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>N</td>
+<td>结束日期</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>Y</td>
+<td>交易日期</td>
+</tr>
+<tr>
+<td>high</td>
+<td>str</td>
+<td>Y</td>
+<td>最高价</td>
+</tr>
+<tr>
+<td>low</td>
+<td>str</td>
+<td>Y</td>
+<td>最低价</td>
+</tr>
+<tr>
+<td>open</td>
+<td>str</td>
+<td>Y</td>
+<td>开盘价</td>
+</tr>
+<tr>
+<td>close</td>
+<td>str</td>
+<td>Y</td>
+<td>收盘价</td>
+</tr>
+<tr>
+<td>pct_change</td>
+<td>str</td>
+<td>Y</td>
+<td>涨跌幅</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre># 导入sdk包
+import tushare as ts
+
+# 配置凭据，如果已全局配置了，可以忽略。
+ts.set_token('&lt;REDACTED&gt;')
+
+# 获取接口实例
+pro = ts.pro_api()
+
+# 拉取接口(vix_index)数据
+# 获取2026年9月1日以来的数据
+df = pro.vix_index(start_date="20260901")
+print(df)
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<div class="codehilite"><pre>  trade_date   high    low   open  pre_close pct_change
+0   20260916  18.94   16.4  16.81   17.2       2.97
+1   20260915  17.84  16.89  16.99   17.1       0.58
+2   20260914  17.72  16.58  17.72  15.84       7.95
+3   20260911   16.2  15.59  16.12  17.84     -11.21
+4   20260910  18.17  17.11  17.69  16.46       8.38
+5   20260909  16.68  15.96  16.15  15.72       4.71
+6   20260908  15.78  15.22   15.3   15.3       2.75
+7   20260907  15.32  14.99  15.02  14.53        5.3
+8   20260904  14.58  13.93  14.08  14.32       1.47
+9   20260903   15.1  14.23  14.96   15.2      -5.79
+</pre></div>
+</div></body></html>

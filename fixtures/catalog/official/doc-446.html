@@ -1,0 +1,101 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=446 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="_1">自选股组合查询</h1>
+<h3 id="_2">接口介绍</h3>
+<p>接口：p_list<br/>
+描述：便于用户在基于AI应用或Vibe Coding过程中产生的选股结果形成长期记忆，Tushare提供了自选股组合功能。本接口可以查询你的自选组合信息，不加参数查询出所以自定义组合</p>
+<h3 id="_3">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>name</td>
+<td>str</td>
+<td>N</td>
+<td>组合名称</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>id</td>
+<td>int</td>
+<td>Y</td>
+<td>主键</td>
+</tr>
+<tr>
+<td>name</td>
+<td>str</td>
+<td>Y</td>
+<td>名称</td>
+</tr>
+<tr>
+<td>desc</td>
+<td>str</td>
+<td>Y</td>
+<td>描述</td>
+</tr>
+<tr>
+<td>create_time</td>
+<td>datetime</td>
+<td>Y</td>
+<td>创建时间</td>
+</tr>
+<tr>
+<td>update_time</td>
+<td>datetime</td>
+<td>Y</td>
+<td>修改时间</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">代码示例</h3>
+<div class="codehilite"><pre># 初始化pro接口实例
+pro = ts.pro_api()
+
+
+# 查看我的组合列表
+df = pro.p_list()
+print(df)
+
+# 查看某个组合的成份列表
+df = pro.p_get(name="我的股票池", fields="ts_code,create_time,update_time")
+print(df)
+</pre></div>
+<h3 id="_6">数据结果</h3>
+<p>我的组合列表</p>
+<div class="codehilite"><pre>   id   name         desc          create_time          update_time
+0  51  我的股票池  默认选取股票10只股票  2026-03-19 10:40:45  2026-03-19 10:45:57
+1  41    组合1        测试组合1  2026-03-13 14:31:58  2026-03-13 14:31:58
+</pre></div>
+<p>某个组合的成份列表</p>
+<div class="codehilite"><pre>     ts_code          create_time          update_time
+0  000001.SZ  2026-03-19 13:21:03  2026-03-19 13:21:03
+1  000002.SZ  2026-03-19 13:21:03  2026-03-19 13:21:03
+2  000004.SZ  2026-03-19 13:21:03  2026-03-19 13:21:03
+3  000006.SZ  2026-03-19 13:21:03  2026-03-19 13:21:03
+4  000007.SZ  2026-03-19 13:21:03  2026-03-19 13:21:03
+5  000008.SZ  2026-03-19 13:21:03  2026-03-19 13:21:03
+6  000009.SZ  2026-03-19 13:21:03  2026-03-19 13:21:03
+7  000010.SZ  2026-03-19 13:21:03  2026-03-19 13:21:03
+8  000011.SZ  2026-03-19 13:21:03  2026-03-19 13:21:03
+9  000012.SZ  2026-03-19 13:21:03  2026-03-19 13:21:03
+</pre></div>
+</div></body></html>

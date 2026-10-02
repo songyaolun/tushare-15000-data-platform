@@ -1,0 +1,152 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=472 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="etf">ETF每日持仓组合(深市）</h1>
+<h3 id="_1">接口介绍</h3>
+<p>接口：etf_sz_cons<br/>
+描述：获取深交所场内所有ETF每日盘前披露的一篮子组合信息,包括成分股票数量、申赎现金折溢价比例等数据<br/>
+限量：单次最大3000条，可根据代码或日期循环提取<br/>
+积分：需要8000积分可以调取，具体请参阅<a href="https://tushare.pro/document/1?doc_id=13">积分获取办法</a></p>
+<h3 id="_2">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>N</td>
+<td>板块代码</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>N</td>
+<td>交易日期(YYYYMMDD)</td>
+</tr>
+<tr>
+<td>con_code</td>
+<td>str</td>
+<td>N</td>
+<td>成分股票代码</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>N</td>
+<td>开始日期(YYYYMMDD)</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>N</td>
+<td>结束日期(YYYYMMDD)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_3">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>Y</td>
+<td>交易日期</td>
+</tr>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>ETF代码</td>
+</tr>
+<tr>
+<td>con_code</td>
+<td>str</td>
+<td>Y</td>
+<td>成分代码</td>
+</tr>
+<tr>
+<td>con_name</td>
+<td>str</td>
+<td>Y</td>
+<td>成分名称</td>
+</tr>
+<tr>
+<td>qty</td>
+<td>int</td>
+<td>Y</td>
+<td>股票数量(股)</td>
+</tr>
+<tr>
+<td>sub_flag</td>
+<td>str</td>
+<td>Y</td>
+<td>现金替代标志</td>
+</tr>
+<tr>
+<td>cpr</td>
+<td>float</td>
+<td>Y</td>
+<td>申购现金替代保证金率（%）</td>
+</tr>
+<tr>
+<td>rdr</td>
+<td>float</td>
+<td>Y</td>
+<td>赎回现金替代保证金率（%）</td>
+</tr>
+<tr>
+<td>sub_cc</td>
+<td>float</td>
+<td>Y</td>
+<td>申购替代金额(单位：人民币元)</td>
+</tr>
+<tr>
+<td>red_cc</td>
+<td>float</td>
+<td>Y</td>
+<td>赎回替代金额(单位：人民币元)</td>
+</tr>
+<tr>
+<td>exchange</td>
+<td>str</td>
+<td>Y</td>
+<td>交易所代码HK港交所 SH上交所 SZ深交所 OTH其他</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">代码示例</h3>
+<div class="codehilite"><pre># 获取接口实例
+pro = ts.pro_api()
+
+# 拉取159051.SZ易方达中证全指医疗器械ETF在2026年6月25日的持仓组合数据
+df = pro.etf_sz_cons(ts_code='159051.SZ', trade_date='20260625')
+print(df)
+</pre></div>
+<h3 id="_5">数据结果</h3>
+<div class="codehilite"><pre>  trade_date    ts_code   con_code con_name   qty sub_flag    cpr   rdr       sub_cc       red_cc exchange
+0   20260625  159051.SZ  159900.SZ     申赎现金     0       必须   0.00  0.00  512407.5000  141173.9000       SZ
+1   20260625  159051.SZ  000710.SZ     贝瑞基因   400       允许  34.00  0.00       0.0000       0.0000       SZ
+2   20260625  159051.SZ  002022.SZ     科华生物   800       允许  34.00  0.00       0.0000       0.0000       SZ
+3   20260625  159051.SZ  002030.SZ     达安基因  1500       允许  34.00  0.00       0.0000       0.0000       SZ
+4   20260625  159051.SZ  002223.SZ     鱼跃医疗   900       允许  34.00  0.00       0.0000       0.0000       SZ
+5   20260625  159051.SZ  002382.SZ     蓝帆医疗  1200       允许  34.00  0.00       0.0000       0.0000       SZ
+6   20260625  159051.SZ  002432.SZ     九安医疗   500       允许  34.00  0.00       0.0000       0.0000       SZ
+7   20260625  159051.SZ  002551.SZ     尚荣医疗   900       允许  34.00  0.00       0.0000       0.0000       SZ
+8   20260625  159051.SZ  002901.SZ     大博医疗   100       允许  34.00  0.00       0.0000       0.0000       SZ
+9   20260625  159051.SZ  002950.SZ     奥美医疗   400       允许  34.00  0.00       0.0000       0.0000       SZ
+</pre></div>
+</div></body></html>

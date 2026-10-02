@@ -1,0 +1,145 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=493 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="etf">ETF当日集合竞价</h1>
+<h3 id="_1">接口介绍</h3>
+<p>接口：etf_auction<br/>
+描述：获取当日ETF的集合竞价成交情况，每天9点25~29分之间可以获取当日的集合竞价成交数据本接口历史数据开始于2025年1月。<br/>
+限量：单次最大3000条，可根据代码或日期循环提取<br/>
+积分：本接口是单独开权限的数据，单独申请权限请参考<a href="https://tushare.pro/document/1?doc_id=290">权限列表</a>。</p>
+<h3 id="_2">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>N</td>
+<td>股票代码</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>N</td>
+<td>交易日期（YYYYMMDD格式，下同)</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>str</td>
+<td>N</td>
+<td>开始日期</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>str</td>
+<td>N</td>
+<td>结束日期</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_3">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>股票代码</td>
+</tr>
+<tr>
+<td>trade_date</td>
+<td>str</td>
+<td>Y</td>
+<td>交易日期</td>
+</tr>
+<tr>
+<td>vol</td>
+<td>int</td>
+<td>Y</td>
+<td>成交量</td>
+</tr>
+<tr>
+<td>price</td>
+<td>float</td>
+<td>Y</td>
+<td>成交均价（元）</td>
+</tr>
+<tr>
+<td>amount</td>
+<td>float</td>
+<td>Y</td>
+<td>成交金额（元）</td>
+</tr>
+<tr>
+<td>pre_close</td>
+<td>float</td>
+<td>Y</td>
+<td>昨收价</td>
+</tr>
+<tr>
+<td>turnover_rate</td>
+<td>float</td>
+<td>Y</td>
+<td>换手率（%）</td>
+</tr>
+<tr>
+<td>volume_ratio</td>
+<td>float</td>
+<td>Y</td>
+<td>量比</td>
+</tr>
+<tr>
+<td>float_share</td>
+<td>float</td>
+<td>Y</td>
+<td>流通股本（万股）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">代码示例</h3>
+<div class="codehilite"><pre># 导入sdk包
+import tushare as ts
+
+# 配置凭据，如果已全局配置了，可以忽略。
+ts.set_token('&lt;REDACTED&gt;')
+
+# 获取接口实例
+pro = ts.pro_api()
+
+# 拉取接口(etf_auction)数据
+#获取180607.SZ的开盘集合竞价成交情况
+df=pro.etf_auction(ts_code='180607.SZ')
+
+# 获取2026年9月11日开盘集合竞价成交情况
+df=pro.etf_auction(trade_date='20260911',fields='ts_code, trade_date,vol,price,amount,turnover_rate,volume_ratio')
+print(df)
+</pre></div>
+<h3 id="_5">数据结果</h3>
+<div class="codehilite"><pre>     ts_code trade_date  vol  price  amount turnover_rate  volume_ratio
+0     501001.SH   20260911    0    NaN     0.0          None      0.000000
+1     501005.SH   20260911    0    NaN     0.0          None      0.000000
+2     501007.SH   20260911    0    NaN     0.0          None      0.000000
+3     501008.SH   20260911    0    NaN     0.0          None      0.000000
+4     501009.SH   20260911    0    NaN     0.0          None      0.000000
+...         ...        ...  ...    ...     ...           ...           ...
+1711  180607.SZ   20260911  700  5.050  3535.0          None      0.251875
+1712  180701.SZ   20260911  300  3.836  1150.8          None      0.039973
+1713  180801.SZ   20260911    0    NaN     0.0          None      0.000000
+1714  180901.SZ   20260911    0    NaN     0.0          None      0.000000
+1715  181001.SZ   20260911    0    NaN     0.0          None      0.000000
+</pre></div>
+</div></body></html>

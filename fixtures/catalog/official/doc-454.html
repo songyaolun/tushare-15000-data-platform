@@ -1,0 +1,152 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=454 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="etf">ETF实时参考</h1>
+<h3 id="_1">接口介绍</h3>
+<p>接口：rt_etf_sz_iopv<br/>
+描述：ETF实时净值和申购赎回数据参考，目前只提供深市<br/>
+限量：单次最大5000条，完全覆盖当前总量<br/>
+权限：本接口为单独开权限的接口，跟积分多个无关。正式权限请参阅 <u><a href="https://tushare.pro/document/1?doc_id=290">权限说明</a> </u></p>
+<h3 id="_2">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>N</td>
+<td>ETF代码（默认为空，即一次全市场。支持单个和多个ETF过滤提取）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_3">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>trade_time</td>
+<td>datetime</td>
+<td>Y</td>
+<td>交易时间</td>
+</tr>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>ETF代码</td>
+</tr>
+<tr>
+<td>vol</td>
+<td>float</td>
+<td>Y</td>
+<td>成交量（份）</td>
+</tr>
+<tr>
+<td>num</td>
+<td>int</td>
+<td>Y</td>
+<td>成交笔数</td>
+</tr>
+<tr>
+<td>amount</td>
+<td>float</td>
+<td>Y</td>
+<td>成交金额（元）</td>
+</tr>
+<tr>
+<td>price</td>
+<td>float</td>
+<td>Y</td>
+<td>最新价（元）</td>
+</tr>
+<tr>
+<td>iopv</td>
+<td>float</td>
+<td>Y</td>
+<td>最近参考净值</td>
+</tr>
+<tr>
+<td>pre_iopv</td>
+<td>float</td>
+<td>Y</td>
+<td>前一日参考净值</td>
+</tr>
+<tr>
+<td>buy_num</td>
+<td>int</td>
+<td>Y</td>
+<td>申购笔数</td>
+</tr>
+<tr>
+<td>buy_vol</td>
+<td>float</td>
+<td>Y</td>
+<td>申购买量(份)</td>
+</tr>
+<tr>
+<td>sell_num</td>
+<td>int</td>
+<td>Y</td>
+<td>赎回笔数</td>
+</tr>
+<tr>
+<td>sell_vol</td>
+<td>float</td>
+<td>Y</td>
+<td>赎回买量（份）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">代码示例</h3>
+<div class="codehilite"><pre># 导入sdk包
+import tushare as ts
+
+# 配置凭据，如果已全局配置了，可以忽略。
+ts.set_token('&lt;REDACTED&gt;')
+
+# 获取接口实例
+pro = ts.pro_api()
+
+# 示例： 获取单个ETF（159103.SZ）的最新参考
+df = pro.rt_etf_sz_iopv(ts_code="159103.SZ")
+print(df)
+
+# 示例： 获取两个ETF的最新参考（159103.SZ,159105.SZ）
+df = pro.rt_etf_sz_iopv(ts_code="159103.SZ,159105.SZ")
+print(df)
+
+# 示例：获取深市ETF全部实时参考指标
+df = pro.rt_etf_sz_iopv()
+
+#示例：获取深市ETF指定指标的实时参考
+df = pro.rt_etf_sz_iopv(fields='trade_time,ts_code,iopv,buy_num,buy_vol,sell_num,sell_vol')
+print(df)
+</pre></div>
+<h3 id="_5">数据结果</h3>
+<div class="codehilite"><pre>             trade_time    ts_code    iopv  buy_num   buy_vol  sell_num  sell_vol
+0    2026-03-20 10:27:27  161039.SZ  0.0000        0    0.0000         0    0.0000
+1    2026-03-20 10:28:45  159003.SZ  0.0000        7    1.1101        18    3.3692
+2    2026-03-20 10:28:48  159005.SZ  0.0000       26    5.3240         4    0.5903
+3    2026-03-20 10:29:03  159102.SZ  0.7776        0    0.0000         0    0.0000
+4    2026-03-20 10:29:09  159108.SZ  0.9792        1  100.0000         0    0.0000
+..                   ...        ...     ...      ...       ...       ...       ...
+923  2026-03-20 10:28:00  180302.SZ  0.0000        0    0.0000         0    0.0000
+924  2026-03-20 10:29:09  180402.SZ  0.0000        0    0.0000         0    0.0000
+925  2026-03-20 10:29:06  180606.SZ  0.0000        0    0.0000         0    0.0000
+926  2026-03-20 10:29:06  180701.SZ  0.0000        0    0.0000         0    0.0000
+927  2026-03-20 10:29:00  180901.SZ  0.0000        0    0.0000         0    0.0000
+</pre></div>
+</div></body></html>

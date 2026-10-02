@@ -1,0 +1,18 @@
+{
+  "source": "deterministic_synthetic",
+  "market_claims": false,
+  "observed_at": "2024-01-03T00:00:00Z",
+  "interfaces": [
+    "cb_daily",
+    "cn_cpi",
+    "daily",
+    "dividend",
+    "fund_adj",
+    "fund_daily",
+    "fut_daily",
+    "moneyflow",
+    "stock_basic",
+    "sw_daily",
+    "ths_hot"
+  ]
+}

@@ -1,0 +1,156 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=470 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h2 id="etf-">ETF实时分钟-日累计</h2>
+<hr/>
+<p>接口：rt_etf_min_daily<br/>
+描述：获取ETF实时分钟数据日累计，包括1~60min<br/>
+限量：单次最大1000行数据，支持股票当日开盘以来的所有ETF历史分钟数据提取（仅支持一个个代码提取，不同同时提取多个）<br/>
+权限：正式权限请参阅 <u><a href="https://tushare.pro/document/1?doc_id=290">权限说明</a> </u></p>
+<p><br/></p>
+<p><strong>输入参数</strong></p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>freq</td>
+<td>str</td>
+<td>Y</td>
+<td>1MIN,5MIN,15MIN,30MIN,60MIN （大写）</td>
+</tr>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>只支持单个</td>
+</tr>
+</tbody>
+</table>
+<p><br/></p>
+<p><strong>freq参数说明</strong></p>
+<table>
+<thead>
+<tr>
+<th>freq</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1MIN</td>
+<td>1分钟</td>
+</tr>
+<tr>
+<td>5MIN</td>
+<td>5分钟</td>
+</tr>
+<tr>
+<td>15MIN</td>
+<td>15分钟</td>
+</tr>
+<tr>
+<td>30MIN</td>
+<td>30分钟</td>
+</tr>
+<tr>
+<td>60MIN</td>
+<td>60分钟</td>
+</tr>
+</tbody>
+</table>
+<p><br/></p>
+<p><strong>输出参数</strong></p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>股票代码</td>
+</tr>
+<tr>
+<td>time</td>
+<td>None</td>
+<td>Y</td>
+<td>交易时间</td>
+</tr>
+<tr>
+<td>open</td>
+<td>float</td>
+<td>Y</td>
+<td>开盘价</td>
+</tr>
+<tr>
+<td>close</td>
+<td>float</td>
+<td>Y</td>
+<td>收盘价</td>
+</tr>
+<tr>
+<td>high</td>
+<td>float</td>
+<td>Y</td>
+<td>最高价</td>
+</tr>
+<tr>
+<td>low</td>
+<td>float</td>
+<td>Y</td>
+<td>最低价</td>
+</tr>
+<tr>
+<td>vol</td>
+<td>float</td>
+<td>Y</td>
+<td>成交量(股）</td>
+</tr>
+<tr>
+<td>amount</td>
+<td>float</td>
+<td>Y</td>
+<td>成交额（元）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>代码示例</strong></p>
+<div class="codehilite"><pre># 导入sdk包
+import tushare as ts
+
+# 配置凭据，如果已全局配置了，可以忽略。
+ts.set_token('&lt;REDACTED&gt;')
+
+# 获取接口实例
+pro = ts.pro_api()
+# 获取科创芯片设计ETF（588780.SH）当日1分钟实时行情
+df = pro.rt_etf_min_daily(ts_code='588780.SH',freq='1MIN')
+</pre></div>
+<p><br/></p>
+<p><strong>数据结果</strong></p>
+<div class="codehilite"><pre>         code  freq                 time   open  close   high    low         vol      amount
+0   588780.SH  1MIN  2026-06-10 09:30:00  1.024  1.024  1.024  1.024    729200.0    746701.0
+1   588780.SH  1MIN  2026-06-10 09:31:00  1.024  1.038  1.038  1.024   3068800.0   3169337.0
+2   588780.SH  1MIN  2026-06-10 09:32:00  1.038  1.052  1.052  1.038   4226200.0   4415521.0
+3   588780.SH  1MIN  2026-06-10 09:33:00  1.053  1.048  1.055  1.048   3050700.0   3209216.0
+4   588780.SH  1MIN  2026-06-10 09:34:00  1.048  1.047  1.050  1.046   6535400.0   6853982.0
+5   588780.SH  1MIN  2026-06-10 09:35:00  1.047  1.056  1.057  1.047   4770400.0   5010528.0
+6   588780.SH  1MIN  2026-06-10 09:36:00  1.057  1.061  1.062  1.056   4914000.0   5197668.0
+7   588780.SH  1MIN  2026-06-10 09:37:00  1.060  1.059  1.061  1.058   2550800.0   2701928.0
+8   588780.SH  1MIN  2026-06-10 09:38:00  1.060  1.062  1.062  1.058   2812800.0   2980502.0
+9   588780.SH  1MIN  2026-06-10 09:39:00  1.063  1.062  1.064  1.060  13340700.0  14165413.0
+10  588780.SH  1MIN  2026-06-10 09:40:00  1.060  1.060  1.061  1.059   5964500.0   6321852.0
+</pre></div>
+</div></body></html>

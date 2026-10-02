@@ -1,0 +1,121 @@
+<!-- source_url: https://tushare.pro/document/2?doc_id=469 -->
+<html><body><div class="content col-md-9 col-sm-8 col-xs-12">
+<h1 id="sw">SW指数历史分钟</h1>
+<h3 id="_1">接口介绍</h3>
+<p>接口：sw_mins<br/>
+描述：获取申万指数历史分钟数据<br/>
+限量：单次最大5000条，可根据代码或日期循环提取<br/>
+积分：本接口是单独的权限，具体请参阅<a href="https://tushare.pro/document/1?doc_id=290">积分获取办法</a></p>
+<h3 id="_2">输入参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>必选</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>指数代码</td>
+</tr>
+<tr>
+<td>freq</td>
+<td>str</td>
+<td>Y</td>
+<td>分钟频度（1min/5min/15min/30min/60min）</td>
+</tr>
+<tr>
+<td>start_date</td>
+<td>datetime</td>
+<td>N</td>
+<td>开始日期 格式：2023-08-25 09:00:00</td>
+</tr>
+<tr>
+<td>end_date</td>
+<td>datetime</td>
+<td>N</td>
+<td>结束时间 格式：2023-08-25 19:00:00</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_3">输出参数</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>类型</th>
+<th>默认显示</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ts_code</td>
+<td>str</td>
+<td>Y</td>
+<td>指数代码</td>
+</tr>
+<tr>
+<td>trade_time</td>
+<td>str</td>
+<td>Y</td>
+<td>交易时间</td>
+</tr>
+<tr>
+<td>open</td>
+<td>float</td>
+<td>Y</td>
+<td>开盘点数</td>
+</tr>
+<tr>
+<td>close</td>
+<td>float</td>
+<td>Y</td>
+<td>收盘点数</td>
+</tr>
+<tr>
+<td>high</td>
+<td>float</td>
+<td>Y</td>
+<td>最高点数</td>
+</tr>
+<tr>
+<td>low</td>
+<td>float</td>
+<td>Y</td>
+<td>最低点数</td>
+</tr>
+<tr>
+<td>amount</td>
+<td>float</td>
+<td>Y</td>
+<td>成交金额（元）</td>
+</tr>
+<tr>
+<td>vol</td>
+<td>float</td>
+<td>Y</td>
+<td>成交量（股）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">代码示例</h3>
+<div class="codehilite"><pre>pro = ts.pro_api()
+
+#获取申万Ａ指指数2026-06-03的1分钟数据
+df = pro.sw_mins(ts_code='801003.SI', freq='1min', start_date='2026-06-03 09:00:00', end_date='2026-06-03 19:00:00')
+</pre></div>
+<h3 id="_5">数据结果</h3>
+<div class="codehilite"><pre>    ts_code         trade_time      open     close      high       low        amount    vol
+0    801003.SI  2026-06-03 15:00:00  5028.279  5027.740  5028.279  5027.740  2.694226e+10  1.449213e+09
+1    801003.SI  2026-06-03 14:59:00  5031.757  5031.757  5031.757  5031.757  0.000000e+00  0.000000e+00
+2    801003.SI  2026-06-03 14:58:00  5031.633  5031.757  5031.757  5031.633  1.078606e+09  6.064699e+07
+3    801003.SI  2026-06-03 14:57:00  5029.491  5031.280  5031.280  5029.491  1.712534e+10  9.325039e+08
+4    801003.SI  2026-06-03 14:56:00  5028.709  5029.367  5029.429  5028.708  1.485450e+10  7.643498e+08
+</pre></div>
+</div></body></html>
