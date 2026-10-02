@@ -333,7 +333,8 @@ class Client:
         if any(word in message for word in ("权限", "积分", "token", "permission", "unauthorized")):
             raise ProviderError("unauthorized", "接口访问权限不足或凭据无效")
         if any(word in message for word in (
-            "接口不存在", "不支持", "deprecated", "unsupported", "api not found",
+            "接口不存在", "请指定正确的接口名", "不支持",
+            "deprecated", "unsupported", "api not found",
         )):
             raise ProviderError("unsupported", "接口不可用或不受支持")
         if any(word in message for word in ("参数", "parameter", "argument")):
@@ -350,6 +351,10 @@ class Client:
         observed_at 由调用方提供，不自动替换为系统时间或业务生效时间。
         """
         _safe_inputs(api_name, params)
+        if api_name == "pro_bar":
+            from .bars import compose_bars
+
+            return compose_bars(self, params, observed_at)
         response: dict[str, Any] = {}
         for attempt in range(self.retries + 1):
             failure: tuple[ErrorKind, str] | None = None

@@ -33,7 +33,8 @@ def test_load_policies_and_duplicate_rejection(
     assert len(policies) == 250
     assert policies["daily"].primary_key == ["ts_code", "trade_date"]
     assert policies["income_vip"].minimal_params == {"period": "20231231", "ts_code": "000001.SZ"}
-    assert policies["pro_bar"].lifecycle == "blocked"
+    assert policies["pro_bar"].lifecycle == "research"
+    assert policies["pro_bar"].primary_key == ["ts_code", "trade_date"]
     data_directory = tmp_path / "data"
     data_directory.mkdir()
     (data_directory / "policies.json").write_text(

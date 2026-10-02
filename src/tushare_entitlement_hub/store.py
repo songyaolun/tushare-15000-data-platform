@@ -81,7 +81,10 @@ def task_identity(task: dict[str, Any]) -> str:
     fields = ("api_name", "date_field", "start", "end", "mode", "params", "source", "policy_hash")
     if any(field not in task for field in fields):
         raise ValueError("task_payload_incomplete")
-    return digest({field: task[field] for field in fields})
+    payload = {field: task[field] for field in fields}
+    if "account" in task:
+        payload["account"] = task["account"]
+    return digest(payload)
 
 
 class Store:
@@ -178,24 +181,12 @@ class Store:
 
         参数为接口、观察时间、证据来源、状态和公开证据；返回 None 并保存观测。
         示例：record_probe('daily', '2024-01-03T00:00:00Z', 'fixture', 'empty', {})
-        使 probes 表增加一条 empty 记录，不改变真实账户生命周期。
+        使 probes 表增加一条 empty 记录；所有账户结果均不改变文档生命周期。
         """
         self.connection.execute(
             "INSERT OR REPLACE INTO probes VALUES (?, ?, ?, ?, ?)",
             [api_name, observed_at, source, status, encode(evidence)],
         )
-        if source == "live" and status in {"unauthorized", "unsupported", "available", "empty"}:
-            entries = [entry for entry in self.catalog() if entry.api_name == api_name]
-            for entry in entries:
-                if status in {"unauthorized", "unsupported"}:
-                    entry.lifecycle = "blocked"
-                elif entry.lifecycle == "blocked" and entry.policy is not None:
-                    entry.lifecycle = entry.policy.lifecycle
-            for entry in entries:
-                self.connection.execute(
-                    "INSERT OR REPLACE INTO catalog VALUES (?, ?)",
-                    [entry.api_name, encode(asdict(entry))],
-                )
 
     def save_plan(self, tasks: list[dict[str, Any]], observed_at: str) -> None:
         """登记计划中全部日期分片，已有完成记录不覆盖；两天计划形成两条 planned 任务。

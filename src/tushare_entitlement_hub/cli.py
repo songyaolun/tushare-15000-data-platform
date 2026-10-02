@@ -18,12 +18,14 @@ import typer
 from .catalog import fetch_documentation, sync_catalog
 from .client import Client, FakeTransport, HttpTransport, ProviderError
 from .coverage import coverage_report
+from .credentials import configured_credential
 from .ingest import plan_tasks, probe, run_task
 from .models import CatalogEntry
 from .products import build_products
 from .quality import audit_rows
 from .raw import RawStore, assert_public
 from .store import Store, encode
+from .survey import survey
 
 app = typer.Typer(help="Tushare 权益总账、离线采集与信息产品。", no_args_is_help=True)
 catalog_app = typer.Typer(help="发现接口并管理权益总账。")
@@ -129,7 +131,7 @@ def credential_prompt() -> str:
 
     示例：调用方显式执行 live 请求时，安全输入的值仅返回给当前 HTTPS 发送步骤。
     """
-    return getpass.getpass("Tushare 凭据（输入不回显）：")
+    return configured_credential() or getpass.getpass("Tushare 凭据（输入不回显）：")
 
 
 @contextmanager
@@ -139,6 +141,7 @@ def open_client(
     fixture: Path | None,
     live: bool,
     account: str = "local",
+    credential_file: Path | None = None,
 ) -> Iterator[Client]:
     """选择互斥的 fixture 或显式 live 传输；fixture daily.json 产生零网络 Client。
 
@@ -153,7 +156,13 @@ def open_client(
         responses = content[entry.api_name] if isinstance(content, dict) else content
         yield Client(FakeTransport(responses), raw, account="fixture")
     else:
-        with HttpTransport(credential_prompt, live=True) as transport:
+        def credential_provider() -> str:
+            """在实际发送时读取显式凭据文件或既有环境；例如未指定文件则使用交互回调。"""
+            if credential_file is not None:
+                return configured_credential(credential_file) or ""
+            return credential_prompt()
+
+        with HttpTransport(credential_provider, live=True) as transport:
             yield Client(
                 transport, raw, account=account, rate_per_minute=entry.frequency_per_minute or 60
             )
@@ -225,6 +234,8 @@ def capability_probe(
     observed_at: str | None = None,
     account: str = "local",
     raw_directory: Path = Path("data/raw"),
+    credential_file: Path | None = None,
+    parameters: Path | None = None,
 ) -> None:
     """按政策探活；capability probe daily --fixture responses.json 仅记录离线证据。
 
@@ -233,14 +244,52 @@ def capability_probe(
     """
     with open_store(ctx) as store:
         entry = find_entry(store, api_name)
-        with open_client(entry, raw_directory, fixture, live, account) as client:
+        with open_client(entry, raw_directory, fixture, live, account, credential_file) as client:
             typer.echo(
                 encode(
                     probe(
-                        entry, client, store, timestamp(observed_at), "live" if live else "fixture"
+                        entry, client, store, timestamp(observed_at), "live" if live else "fixture",
+                        read_json(parameters) if parameters else None,
                     )
                 )
             )
+
+
+@capability_app.command("survey")
+def capability_survey(
+    ctx: typer.Context,
+    live: bool = False,
+    credential_file: Path | None = None,
+    output: Path = Path("data/capability-survey"),
+    parameters: Path | None = None,
+    account: str = "local",
+    refresh: bool = False,
+    apis: str | None = None,
+) -> None:
+    """实测公共只读目录并保存样本和结果；须显式 --live，写接口始终排除。
+
+    参数含既有凭据路径、样本输出目录、按API参数映射及可选逗号分隔接口列表。
+    示例：capability survey --live --apis trade_cal,namechange 输出逐项状态及 report.json。
+    默认复用同账户同政策的成功证据；--refresh 强制重新请求。
+    """
+    with open_store(ctx) as store:
+        if not live:
+            raise ValueError("live_opt_in_required")
+        entries = store.catalog()
+        if not entries:
+            raise ValueError("catalog_required")
+        selected = apis.split(",") if apis else None
+        if selected and set(selected) - {entry.api_name for entry in entries}:
+            raise ValueError("unknown_api")
+        with open_client(
+            entries[0], output / "raw", None, True, account, credential_file
+        ) as client:
+            report = survey(
+                store, client, output, lambda: timestamp(None),
+                parameters=read_json(parameters) if parameters else None,
+                refresh=refresh, api_names=selected,
+            )
+            typer.echo(encode({"counts": report["counts"], "report": str(output / "report.json")}))
 
 
 @ingest_app.command("plan")
@@ -254,6 +303,7 @@ def ingest_plan(
     observed_at: str | None = None,
     live: bool = False,
     parameters: Path | None = None,
+    account: str = "local",
 ) -> None:
     """生成可复用任务计划；ingest plan daily 2024-01-02 2024-01-03 输出两个日期任务。
 
@@ -270,6 +320,7 @@ def ingest_plan(
             store,
             "live" if live else "fixture",
             read_json(parameters) if parameters else None,
+            account,
         )
         store.save_plan(plans, timestamp(observed_at))
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -304,6 +355,7 @@ def ingest_run(
     observed_at: str | None = None,
     references: Path | None = None,
     account: str = "local",
+    credential_file: Path | None = None,
 ) -> None:
     """执行已保存任务；ingest run plan.json --fixture responses.json 可从失败任务恢复。
 
@@ -323,7 +375,7 @@ def ingest_run(
                 entry = find_entry(store, task["api_name"])
                 if entry.api_name not in clients:
                     clients[entry.api_name] = stack.enter_context(
-                        open_client(entry, raw_directory, fixture, live, account)
+                        open_client(entry, raw_directory, fixture, live, account, credential_file)
                     )
                 results.append(
                     run_task(

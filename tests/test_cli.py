@@ -19,6 +19,36 @@ def invoke(tmp_path, arguments):
     return CliRunner().invoke(cli.app, ["--db", str(tmp_path / "hub.duckdb"), *arguments])
 
 
+def test_cli_survey_live_opt_in_and_credential_file(tmp_path, entry, monkeypatch):
+    """场景：批量探测显式联网且凭据来自指定文件；预期：拒绝隐式联网并生成样本。"""
+    assert invoke(tmp_path, ["capability", "survey"]).exit_code == 1
+    assert invoke(tmp_path, ["capability", "survey", "--live"]).exit_code == 1
+    store = Store(tmp_path / "hub.duckdb")
+    store.save_catalog([entry])
+    store.close()
+    assert invoke(tmp_path, ["capability", "survey", "--live", "--apis", "unknown"]).exit_code == 1
+    credentials = tmp_path / "credentials.env"
+    credentials.write_text("TUSHARE_TOKEN=fixture-value\n")
+
+    def handler(request):
+        """离线确认发送时取得凭据；输入HTTP请求，返回固定公开数据。"""
+        assert json.loads(request.content)["token"] == "fixture-value"
+        return httpx.Response(200, json={"code": 0, "data": {
+            "fields": ["ts_code", "trade_date", "close"], "items": [["A.SH", "20240102", 2]],
+        }})
+
+    def transport(provider, live):
+        """构造模拟HTTPS传输，确保测试不访问真实网络。"""
+        return HttpTransport(provider, live=live, http_transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(cli, "HttpTransport", transport)
+    result = invoke(tmp_path, ["capability", "survey", "--live", "--credential-file",
+                              str(credentials), "--output", str(tmp_path / "survey")])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "survey/report.json").exists()
+    assert "fixture-value" not in result.output
+
+
 def test_cli_full_offline_workflow(tmp_path, entry):
     """场景：探活、计划、执行、审计、产品与债务；预期：CLI闭环成功。
 
@@ -153,6 +183,15 @@ def test_cli_error_boundaries_and_source_mismatch(tmp_path, entry):
     assert invoke(tmp_path, ["quality", "audit", "unknown"]).exit_code == 1
     assert invoke(tmp_path, ["quality", "audit", entry.api_name]).exit_code == 1
     assert invoke(tmp_path, ["capability", "probe", entry.api_name]).exit_code == 1
+    from dataclasses import asdict
+
+    from tushare_entitlement_hub.store import digest
+
+    database = Store(tmp_path / "hub.duckdb")
+    database.record_probe(entry.api_name, OBS, "live", "available", {
+        "account": "local", "request_policy": digest(asdict(entry.policy)),
+    })
+    database.close()
     plan = tmp_path / "live.json"
     assert (
         invoke(
