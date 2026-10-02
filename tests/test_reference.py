@@ -446,3 +446,20 @@ def test_selective_rebuild_verifies_unselected_artifacts(store, tmp_path):
     Path(result['datasets'][0]['files']['accepted']['jsonl']).write_text('broken')
     result = rebuild_reference(root, api_names=[], progress=lambda _: None)
     assert result['counts'] == {'artifact_verification_failed': 1}
+
+
+def test_quarantine_parquet_keeps_invalid_source_values(tmp_path):
+    """场景：日期无法解析的隔离记录导出Parquet；预期：导出成功且原值与问题码完整保留。"""
+    contract = contract_for()
+    accepted, rejected, quality = evaluate_records(
+        [({'ts_code': 'A', 'trade_date': 'broken'}, 'response', 0, 'request')], contract, OBS,
+    )
+    assert quality['status'] == 'failed'
+    manifest = write_dataset_files(tmp_path / 'dataset', accepted, rejected, contract)
+    with duckdb.connect() as connection:
+        row = connection.execute(
+            "SELECT source_fields->>'trade_date', issues->>0 FROM read_parquet(?)",
+            [manifest['files']['quarantine']['parquet']],
+        ).fetchone()
+    assert row == ('broken', 'invalid_field:trade_date')
+    assert verified_files(manifest)

@@ -90,7 +90,7 @@ def write_dataset_files(
             parquet = destination / f"{label}.parquet"
             with duckdb.connect() as connection:
                 connection.execute("SET threads=1")
-                columns = reference_columns(contract, rows) if label == "accepted" else None
+                columns = reference_columns(contract, rows)
                 connection.execute(
                     "CREATE TABLE exported AS SELECT * FROM read_json(?, "
                     "format='newline_delimited', columns=?, "
