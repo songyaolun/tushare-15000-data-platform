@@ -123,9 +123,14 @@ class HttpTransport:
             raise ProviderError("contract_failure", "公开请求参数包含访问凭据")
         payload: Any = None
         error: tuple[ErrorKind, str] | None = None
+        requested_fields = params.get("fields", "")
+        if not isinstance(requested_fields, str):
+            raise ProviderError("contract_failure", "输出字段必须为逗号分隔字符串")
+        request_parameters = {name: value for name, value in params.items() if name != "fields"}
         try:
             response = self._client.post(self._base_url, json={
-                "api_name": api_name, "token": token, "params": params, "fields": "",
+                "api_name": api_name, "token": token,
+                "params": request_parameters, "fields": requested_fields,
             })
             if response.status_code == 429 or 500 <= response.status_code <= 599:
                 error = ("transient_failure", "提供方暂时不可用")
@@ -327,7 +332,7 @@ class Client:
             raise ProviderError("unauthorized", "接口访问未获授权")
         message = str(response.get("msg", "")).lower()
         if any(phrase in message for phrase in (
-            "每分钟最多访问", "访问频率超限", "rate limit exceeded", "too many requests",
+            "每分钟最多访问", "频率超限", "rate limit exceeded", "too many requests",
         )):
             raise ProviderError("transient_failure", "提供方明确报告访问频率超限")
         if any(word in message for word in ("权限", "积分", "token", "permission", "unauthorized")):

@@ -25,3 +25,5 @@ uv run pytest --cov=tushare_entitlement_hub --cov-report=term-missing --cov-fail
 ```
 
 官方目录来自 [Tushare 接口文档](https://tushare.pro/document/2) 和 [积分与独立权限总表](https://tushare.pro/document/1?doc_id=290)。固定快照与抓取清单位于 fixtures/catalog/official。线上文档同步需显式执行 `catalog sync --online`；真实数据请求另需显式 live 选项。
+
+通用本地数据层支持正式采集、标准化、逐行验收以及 JSONL、Parquet、DuckDB 导出。后续产品可直接复用数据，不受既有产品分类限制。运行方式和质量边界见[本地数据参考](docs/本地数据参考.md)。

@@ -24,6 +24,7 @@ from .models import CatalogEntry
 from .products import build_products
 from .quality import audit_rows
 from .raw import RawStore, assert_public
+from .reference import build_reference, rebuild_reference
 from .store import Store, encode
 from .survey import survey
 
@@ -35,6 +36,7 @@ backfill_app = typer.Typer(help="制定历史回填计划。")
 quality_app = typer.Typer(help="审计已存标准数据。")
 coverage_app = typer.Typer(help="展示权益利用率和覆盖债务。")
 products_app = typer.Typer(help="构建可审计的 Markdown/JSON 产品。")
+reference_app = typer.Typer(help="正式采集并发布独立于产品的本地数据参考。")
 for command_name, application in (
     ("catalog", catalog_app),
     ("capability", capability_app),
@@ -43,6 +45,7 @@ for command_name, application in (
     ("quality", quality_app),
     ("coverage", coverage_app),
     ("products", products_app),
+    ("reference", reference_app),
 ):
     app.add_typer(application, name=command_name)
 
@@ -290,6 +293,47 @@ def capability_survey(
                 refresh=refresh, api_names=selected,
             )
             typer.echo(encode({"counts": report["counts"], "report": str(output / "report.json")}))
+
+
+@reference_app.command("build")
+def reference_build(
+    ctx: typer.Context, live: bool = False, credential_file: Path | None = None,
+    output: Path = Path("data/reference"), parameters: Path | None = None,
+    account: str = "local", refresh: bool = False, apis: str | None = None,
+) -> None:
+    """显式执行完整声明范围采集并导出通用本地数据；不依赖十类产品。
+
+    输入凭据路径、输出位置、完整参数映射和可选接口列表，返回None并输出发布摘要。
+    示例：reference build --live --apis daily --parameters ranges.json 生成Parquet和DuckDB。
+    参数映射完整替换政策样例，清单始终保留实际请求范围，不声明未知历史覆盖。
+    """
+    if not live:
+        raise typer.BadParameter("live_opt_in_required")
+    with open_store(ctx) as store:
+        entries = store.catalog()
+        if not entries:
+            raise ValueError("catalog_required")
+        selected = apis.split(",") if apis else None
+        if selected and set(selected) - {entry.api_name for entry in entries}:
+            raise ValueError("unknown_api")
+        with open_client(
+            entries[0], output / "raw", None, True, account, credential_file
+        ) as client:
+            result = build_reference(
+                store, client, output, lambda: timestamp(None),
+                read_json(parameters) if parameters else None, selected, refresh,
+            )
+            typer.echo(encode({"counts": result["counts"], "database": result["database"]}))
+
+
+@reference_app.command("rebuild")
+def reference_rebuild(output: Path = Path("data/reference")) -> None:
+    """校验已有原始页并离线重建通用数据；例如reference rebuild --output data/reference。
+
+    输入发布目录，返回None并输出计数。不会读取凭据、发起网络请求或更新观察时间。
+    """
+    result = rebuild_reference(output)
+    typer.echo(encode({"counts": result["counts"], "database": result["database"]}))
 
 
 @ingest_app.command("plan")
