@@ -19,6 +19,7 @@ from .catalog import fetch_documentation, sync_catalog
 from .client import Client, FakeTransport, HttpTransport, ProviderError
 from .coverage import coverage_report
 from .credentials import configured_credential
+from .equity_research.cli import research_app
 from .ingest import plan_tasks, probe, run_task
 from .models import CatalogEntry
 from .product_foundation.cli import foundation_app
@@ -48,6 +49,7 @@ for command_name, application in (
     ("products", products_app),
     ("reference", reference_app),
     ("product-foundation", foundation_app),
+    ("research", research_app),
 ):
     app.add_typer(application, name=command_name)
 

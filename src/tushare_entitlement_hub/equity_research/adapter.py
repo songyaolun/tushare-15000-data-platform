@@ -1,0 +1,401 @@
+"""只读参考库适配：逐批扫描、有限当前观察集、明确报价语义与时点门禁。"""
+
+from __future__ import annotations
+
+import json
+from collections import defaultdict
+from dataclasses import replace
+from math import isfinite
+from pathlib import Path
+from typing import Any, cast
+
+import duckdb
+
+from ..catalog import load_policies
+from ..product_foundation.batch_io import batches
+from ..product_foundation.entities import resolve_alias
+from ..product_foundation.numeric import (
+    TypedFact,
+    UnitCertification,
+    adapt_numeric,
+    source_evidence,
+)
+from ..product_foundation.progress import ProgressCallback
+from ..product_foundation.reference import _inspect_source
+from ..product_foundation.reference_scan import map_availability, reference_rows
+from ..product_foundation.registry import load_registry
+from ..product_foundation.temporal import availability_gate
+from ..reference_contract import ReferenceContract, load_reference_contracts
+from ..store import digest
+from .models import ResearchConfig, ResearchInputs, ResearchRow
+
+SOURCE_APIS = frozenset(
+    {
+        "stock_basic",
+        "daily",
+        "daily_basic",
+        "stk_limit",
+        "suspend_d",
+        "stk_shock",
+        "stk_high_shock",
+        "limit_list_d",
+        "limit_list_ths",
+        "moneyflow",
+        "moneyflow_dc",
+        "moneyflow_ths",
+        "margin_detail",
+        "cyq_chips",
+        "block_trade",
+        "top_inst",
+        "rt_min",
+        "income",
+        "income_vip",
+        "balancesheet",
+        "balancesheet_vip",
+        "cashflow",
+        "cashflow_vip",
+        "fina_audit",
+        "share_float",
+        "stk_seasoned",
+        "pledge_stat",
+        "pledge_detail",
+        "st",
+        "stock_st",
+        "stk_alert",
+        "cb_basic",
+        "cb_share",
+        "cb_call",
+        "repurchase",
+        "dividend",
+        "stk_holdertrade",
+        "cn_pmi",
+        "cn_ppi",
+        "cn_m",
+        "cn_cpi",
+        "cn_gdp",
+        "sf_month",
+        "major_news",
+        "disclosure_date",
+        "cn_schedule",
+        "idx_anns",
+        "namechange",
+    }
+)
+EVENT_APIS = frozenset(
+    {
+        "share_float",
+        "stk_seasoned",
+        "pledge_detail",
+        "cb_basic",
+        "cb_call",
+        "repurchase",
+        "dividend",
+        "stk_holdertrade",
+        "major_news",
+        "disclosure_date",
+        "cn_schedule",
+        "idx_anns",
+        "namechange",
+        "stk_alert",
+        "st",
+        "stock_st",
+        "cyq_chips",
+    }
+)
+UNRESOLVED_APIS = frozenset({"major_news", "idx_anns", "cn_schedule"})
+QUOTE_FIELDS = {
+    "cb_basic": {"conv_price"},
+    "cyq_chips": {"price"},
+    "stk_limit": {"up_limit", "down_limit"},
+    "block_trade": {"price"},
+}
+
+
+def quoted_numeric(row: ResearchRow, name: str, certificate: UnitCertification) -> TypedFact:
+    """认证转股价、筹码价、涨跌停边界等非日线成交报价，保持其独立价格语义。
+
+    例：cb_basic.conv_price=10且元/CNY证书得到10；不要求转债有当日成交。
+    本函数仅供固定报价字段白名单调用，不用于daily.close的成交价格门禁。
+    """
+    raw = row.raw
+    reasons: set[str] = set()
+    value = raw.get(name)
+    current_unit = raw.get("standard_units", {}).get(name) or raw.get("source_units", {}).get(name)
+    if current_unit == certificate.target_unit:
+        multiplier = 1.0
+    elif current_unit == certificate.source_unit:
+        multiplier = certificate.multiplier
+    else:
+        multiplier = 1.0
+        reasons.add("unit_mismatch")
+    if raw.get("quality_tier") != "verified" or raw.get("is_quarantined") is True:
+        reasons.add("quote_quality_unverified")
+    if raw.get("business_variant_key"):
+        reasons.add("business_variant_unresolved")
+    if certificate.dimension != "price" or certificate.currency != "CNY":
+        reasons.add("quote_basis_unverified")
+    if (
+        type(value) not in {int, float}
+        or not isfinite(cast(float, value))
+        or cast(float, value) <= 0
+    ):
+        reasons.add("invalid_quote")
+    elif not isfinite(cast(float, value) * multiplier):
+        reasons.add("nonfinite_conversion")
+    return TypedFact(
+        fact_id=digest([row.source_api, raw["source_record_id"], name, certificate.to_dict()]),
+        entity_id=row.entity_id or "cn:market:A:all",
+        field=name,
+        value=None if reasons else cast(float, value) * multiplier,
+        unit=certificate.target_unit,
+        dimension=certificate.dimension,
+        currency=certificate.currency,
+        availability=row.availability,
+        quality_tier="verified" if not reasons else "unknown",
+        certification=certificate,
+        evidence_refs=(source_evidence(raw, name, row.availability),),
+        reason_codes=tuple(sorted(reasons)),
+    )
+
+
+def prepare_numeric(row: ResearchRow, config: ResearchConfig) -> ResearchRow:
+    """仅适配调用方认证过且实际存在的字段；例：缺revenue证书不生成财务值。
+
+    认证证据晚于研究时点时由扫描层先剔除对应证书，原始字段不改写。
+    """
+    numeric = {}
+    for certificate in config.foundation.certifications:
+        if certificate.source_api != row.source_api or certificate.field not in row.raw:
+            continue
+        name = certificate.field
+        numeric[name] = (
+            quoted_numeric(row, name, certificate)
+            if name in QUOTE_FIELDS.get(row.source_api, set())
+            else adapt_numeric(
+                row.raw, name, row.entity_id or "cn:market:A:all", row.availability, certificate
+            )
+        )
+    return replace(row, numeric=numeric)
+
+
+def adapt_row(
+    raw: dict[str, Any],
+    contract: ReferenceContract,
+    config: ResearchConfig,
+    cutoff: str,
+) -> ResearchRow:
+    """在数值计算前核验来源、时点、实体及质量；例：隔离行或未来公告直接拒绝。
+
+    文本事件允许entity_id=None，后续只能生成候选；其他接口必须有唯一有效别名。
+    """
+    api = contract.policy.api_name
+    if raw.get("source_api") != api or raw.get("contract_hash") != contract.fingerprint:
+        raise ValueError("source_contract_mismatch")
+    if raw.get("quality_tier") not in {"verified", "usable_with_annotation"} or (
+        raw.get("is_quarantined") is True
+    ):
+        raise ValueError("quarantined_or_unknown_quality")
+    mapping = next(
+        (item for item in config.foundation.time_mappings if item.source_api == api), None
+    )
+    if mapping is None:
+        raise ValueError("time_mapping_missing")
+    if any(
+        raw.get(field) is not None and field not in mapping.public_fields
+        for field in ("ann_date", "f_ann_date", "pub_date")
+    ):
+        raise ValueError("public_field_mapping_missing")
+    availability = map_availability(raw, contract, mapping)
+    if not availability_gate(availability, cutoff).passed:
+        raise ValueError("row_unavailable")
+    if (
+        api not in EVENT_APIS
+        and availability.data_as_of is not None
+        and len(availability.data_as_of) == 10
+        and availability.data_as_of > cutoff[:10]
+    ):
+        raise ValueError("future_business_date")
+    entity_mapping = next(
+        (item for item in config.foundation.entity_mappings if item.source_api == api), None
+    )
+    entity_id = None
+    if entity_mapping is not None:
+        business_time = availability.data_as_of or availability.effective_from
+        if business_time is None:
+            raise ValueError("entity_business_time_unknown")
+        entity_id = resolve_alias(
+            config.foundation.aliases,
+            entity_mapping.namespace,
+            str(raw.get(entity_mapping.key_field, "")),
+            cutoff,
+            effective_at=business_time,
+            market_timezone=mapping.market_timezone,
+        )
+    if entity_id is None and api not in UNRESOLVED_APIS:
+        raise ValueError("entity_unresolved")
+    return ResearchRow(entity_id=entity_id, source_api=api, raw=raw, availability=availability)
+
+
+def retain_current(
+    groups: dict[tuple[str, str, str], list[ResearchRow]],
+    row: ResearchRow,
+    config: ResearchConfig,
+    *,
+    entity_counts: dict[str, int] | None = None,
+) -> bool:
+    """流式保留当前业务期间及同序变体，宏观保留最近两个期间；返回是否容量溢出。
+
+    例：daily旧日后遇新日，旧行释放；share_float事件全部保留，超过容量整组拒绝。
+    财务按报表口径分别保留最新期，未在内存物化完整历史。
+    """
+    key = (
+        row.entity_id or "unresolved",
+        row.text("report_type") or "",
+        row.text("comp_type") or "",
+    )
+    candidates = groups.setdefault(key, [])
+    previous_count = len(candidates)
+    candidates.append(row)
+    if row.source_api not in EVENT_APIS:
+        periods = sorted({item.availability.data_as_of or "" for item in candidates}, reverse=True)
+        width = 2 if row.source_api.startswith("cn_") or row.source_api == "sf_month" else 1
+        chosen = set(periods[:width])
+        candidates[:] = [
+            item for item in candidates if (item.availability.data_as_of or "") in chosen
+        ]
+    if entity_counts is None:
+        retained_count = sum(len(values) for group, values in groups.items() if group[0] == key[0])
+    else:
+        retained_count = entity_counts.get(key[0], 0) + len(candidates) - previous_count
+        entity_counts[key[0]] = retained_count
+    return retained_count > config.maximum_rows_per_entity_source
+
+
+def load_inputs(
+    reference_path: Path,
+    cutoff: str,
+    run_id: str,
+    config: ResearchConfig,
+    *,
+    progress: ProgressCallback | None = None,
+) -> tuple[ResearchInputs, dict[str, int]]:
+    """只读按512行扫描已绑定来源，返回有限研究观察集与扫描账本。
+
+    例：无实体/时间绑定时scanned_rows=0；缺表输出原因而非虚构空市场。
+    任一来源超过全局容量则整个来源降级，决不使用被截断的精确总量。
+    """
+    from ..pit import time_boundary
+
+    visible_certificates = tuple(
+        certificate
+        for certificate in config.foundation.certifications
+        if all(
+            time_boundary(ref.observed_at) <= time_boundary(cutoff)
+            and (
+                ref.public_available_at is None
+                or time_boundary(ref.public_available_at) <= time_boundary(cutoff)
+            )
+            for ref in certificate.evidence_refs
+        )
+    )
+    effective_config = replace(
+        config, foundation=replace(config.foundation, certifications=visible_certificates)
+    )
+    contracts = load_reference_contracts(load_policies())
+    registry = {entry.api: entry for entry in load_registry()}
+    rows_by_api: dict[str, tuple[ResearchRow, ...]] = {}
+    source_reasons: dict[str, tuple[str, ...]] = {}
+    local_reasons: dict[str, tuple[str, ...]] = {}
+    counts = {"scanned_rows": 0, "retained_rows": 0, "excluded_rows": 0, "batches": 0}
+    with duckdb.connect(
+        str(reference_path), read_only=True, config={"threads": 1, "memory_limit": "512MB"}
+    ) as connection:
+        tables = set(
+            connection.execute(
+                "SELECT table_schema,table_name FROM information_schema.tables"
+            ).fetchall()
+        )
+        if ("main", "catalog") not in tables:
+            raise ValueError("reference_catalog_missing")
+        manifests = {}
+        for api, payload in connection.execute("SELECT api_name,manifest FROM catalog").fetchall():
+            if api in manifests:
+                raise ValueError("reference_catalog_duplicate")
+            manifests[api] = json.loads(payload)
+        for api in sorted(SOURCE_APIS):
+            entry = registry.get(api)
+            if entry is None:
+                source_reasons[api] = ("source_not_registered",)
+                continue
+            reasons, readable = _inspect_source(
+                connection,
+                entry,
+                contracts[api],
+                manifests.get(api),
+                tables,
+                cutoff,
+                config.thresholds,
+            )
+            entity_bound = any(item.source_api == api for item in config.foundation.entity_mappings)
+            time_bound = any(item.source_api == api for item in config.foundation.time_mappings)
+            if not time_bound or (not entity_bound and api not in UNRESOLVED_APIS):
+                reasons.add("research_bindings_missing")
+                readable = False
+            if not readable:
+                source_reasons[api] = tuple(sorted(reasons))
+                continue
+            groups: dict[tuple[str, str, str], list[ResearchRow]] = defaultdict(list)
+            entity_counts: dict[str, int] = {}
+            overflow_entities: set[str] = set()
+            overflow_source = False
+            for batch in batches(
+                reference_rows(connection, api, batch_size=config.thresholds.fact_batch_size),
+                config.thresholds.fact_batch_size,
+            ):
+                counts["batches"] += 1
+                counts["scanned_rows"] += len(batch)
+                for raw in batch:
+                    try:
+                        row = adapt_row(raw, contracts[api], effective_config, cutoff)
+                    except (ValueError, TypeError, KeyError, OverflowError):
+                        counts["excluded_rows"] += 1
+                        reasons.add("rows_excluded_by_adapter")
+                        continue
+                    identity = row.entity_id or "unresolved"
+                    if overflow_source or identity in overflow_entities:
+                        continue
+                    if retain_current(groups, row, config, entity_counts=entity_counts):
+                        overflow_entities.add(identity)
+                        local_reasons[api + "/" + identity] = ("entity_source_capacity_exceeded",)
+                        groups = defaultdict(
+                            list,
+                            {key: values for key, values in groups.items() if key[0] != identity},
+                        )
+                retained_count = sum(map(len, groups.values()))
+                if retained_count > min(
+                    config.maximum_source_rows, config.maximum_total_rows - counts["retained_rows"]
+                ):
+                    overflow_source = True
+                    groups.clear()
+                    reasons.add("source_capacity_exceeded")
+                if progress is not None:
+                    progress({"stage": "scan_reference", "source_api": api, **counts})
+            retained = tuple(
+                prepare_numeric(row, effective_config)
+                for key in sorted(groups)
+                for row in sorted(groups[key], key=lambda item: str(item.raw["source_record_id"]))
+            )
+            counts["retained_rows"] += len(retained)
+            rows_by_api[api] = retained
+            source_reasons[api] = tuple(sorted(reasons))
+    counts["discarded_rows"] = (
+        counts["scanned_rows"] - counts["retained_rows"] - counts["excluded_rows"]
+    )
+    return ResearchInputs(
+        analysis_as_of=cutoff,
+        run_id=run_id,
+        config=effective_config,
+        rows_by_api=rows_by_api,
+        source_reasons=source_reasons,
+        entity_source_reasons=local_reasons,
+    ), counts

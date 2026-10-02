@@ -1,0 +1,179 @@
+"""六产品依赖编排与原子运行边界，结果可按输入指纹确定性复用。"""
+
+from __future__ import annotations
+
+import json
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+import duckdb
+
+from ..product_foundation.contracts import Truth
+from ..product_foundation.progress import ProgressCallback
+from ..reference_storage import file_checksum
+from ..standard import normalize_timestamp
+from ..store import encode
+from .adapter import load_inputs
+from .candidates import build_candidates
+from .common import gate, make_result
+from .events import build_events
+from .flow import build_flow
+from .fundamental import build_fundamental
+from .governance import build_governance
+from .market import build_market
+from .models import MARKET_ENTITY, PRODUCT_IDS, RULE_VERSION, ResearchConfig, ResearchResult
+from .storage import initialize_tables, run_identity, save_results, verify_run
+
+PRODUCT_ALIASES = dict(zip(("P01", "P04", "P06", "P07", "P03", "P13"), PRODUCT_IDS, strict=True))
+
+
+def select_products(selection: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """展开产品别名和依赖并保持拓扑顺序；例：选择P03同时运行P04/P06/P07。
+
+    空选择表示六项全部运行，未知产品直接拒绝，不默默跳过拼写错误。
+    """
+    requested = (
+        {PRODUCT_ALIASES.get(name, name) for name in selection} if selection else set(PRODUCT_IDS)
+    )
+    if not requested <= set(PRODUCT_IDS):
+        raise ValueError("unknown_research_product")
+    expanded = set(requested)
+    if requested & {"equity_research_candidates/v1", "event_thesis_review/v1"}:
+        expanded.update(PRODUCT_IDS[1:4])
+    return tuple(sorted(requested)), tuple(name for name in PRODUCT_IDS if name in expanded)
+
+
+def run_research(
+    reference_path: Path,
+    product_path: Path,
+    analysis_as_of: str,
+    config: ResearchConfig | None = None,
+    selection: tuple[str, ...] = (),
+    *,
+    progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """从只读参考库运行六产品或依赖闭包，原子保存并返回确定性运行摘要。
+
+    例：相同reference/as-of/config再次运行直接校验复用，行数和摘要完全相同。
+    缺绑定、缺字段和空输入仍输出明确降级结果；任何写入异常回滚本次全部记录。
+    """
+    if not reference_path.is_file():
+        raise ValueError("reference_library_missing")
+    if reference_path.resolve() == product_path.resolve() or (
+        product_path.exists() and reference_path.samefile(product_path)
+    ):
+        raise ValueError("input_output_path_collision")
+    cutoff = normalize_timestamp(analysis_as_of)
+    configured = config or ResearchConfig()
+    requested, products = select_products(selection)
+    reference_hash = file_checksum(reference_path)
+    run_id = run_identity(reference_hash, cutoff, configured, requested)
+    if progress is not None:
+        progress({"stage": "start", "run_id": run_id, "products": list(products)})
+    product_path.parent.mkdir(parents=True, exist_ok=True)
+    with duckdb.connect(
+        str(product_path), config={"threads": 1, "memory_limit": "512MB"}
+    ) as connection:
+        initialize_tables(connection)
+        existing = connection.execute(
+            "SELECT payload FROM research.run WHERE run_id=?", [run_id]
+        ).fetchone()
+        if existing is not None:
+            summary = verify_run(connection, json.loads(existing[0]))
+            connection.execute(
+                "INSERT OR REPLACE INTO research.metadata VALUES('current_run',?)", [encode(run_id)]
+            )
+            if progress is not None:
+                progress({"stage": "reused", "run_id": run_id})
+            return summary
+        inputs, processing = load_inputs(
+            reference_path, cutoff, run_id, configured, progress=progress
+        )
+        produced: dict[str, tuple[ResearchResult, ...]] = {}
+        for product in products:
+            if product == PRODUCT_IDS[0]:
+                results = build_market(inputs)
+            elif product == PRODUCT_IDS[1]:
+                results = build_fundamental(inputs)
+            elif product == PRODUCT_IDS[2]:
+                results = build_governance(inputs)
+            elif product == PRODUCT_IDS[3]:
+                results = build_flow(inputs)
+            elif product == PRODUCT_IDS[4]:
+                results = build_candidates(
+                    inputs,
+                    produced[PRODUCT_IDS[1]],
+                    produced[PRODUCT_IDS[2]],
+                    produced[PRODUCT_IDS[3]],
+                )
+            else:
+                upstream = tuple(result for name in PRODUCT_IDS[1:4] for result in produced[name])
+                results = build_events(inputs, upstream)
+            if not results:
+                results = (
+                    make_result(
+                        inputs,
+                        product,
+                        MARKET_ENTITY,
+                        gates=(gate("input_scope", Truth.UNKNOWN, "empty_input"),),
+                        details={"mode": "observed_research", "reason": "empty_input"},
+                    ),
+                )
+            produced[product] = results
+            if progress is not None:
+                progress(
+                    {"stage": "product_complete", "product_id": product, "results": len(results)}
+                )
+        if file_checksum(reference_path) != reference_hash:
+            raise ValueError("reference_changed_during_read")
+        all_results = tuple(result for name in products for result in produced[name])
+        product_states = {
+            name: dict(sorted(Counter(result.envelope.state.value for result in results).items()))
+            for name, results in produced.items()
+        }
+        summary = {
+            "schema_version": RULE_VERSION,
+            "run_id": run_id,
+            "analysis_as_of": cutoff,
+            "mode": "observed_research",
+            "historical_pit_certified": False,
+            "status": "incomplete"
+            if any(
+                result.envelope.state.value in {"blocked", "incomplete", "unsupported"}
+                for result in all_results
+            )
+            else "complete",
+            "requested_products": list(requested),
+            "products": list(products),
+            "product_states": product_states,
+            "processing": processing,
+            "result_count": len(all_results),
+        }
+        connection.execute("BEGIN TRANSACTION")
+        try:
+            summary["counts"] = save_results(
+                connection, all_results, configured.thresholds.fact_batch_size
+            )
+            metadata = {
+                "run_id": run_id,
+                "rule_version": RULE_VERSION,
+                "reference_sha256": reference_hash,
+                "analysis_as_of": cutoff,
+                "config": configured.to_dict(),
+                "selection": list(requested),
+                "products": list(products),
+                "summary": summary,
+            }
+            connection.execute("INSERT INTO research.run VALUES (?,?)", [run_id, encode(metadata)])
+            connection.execute(
+                "INSERT OR REPLACE INTO research.metadata VALUES('current_run',?)", [encode(run_id)]
+            )
+            verify_run(connection, metadata, batch_size=configured.thresholds.fact_batch_size)
+            connection.execute("COMMIT")
+        except Exception:
+            connection.execute("ROLLBACK")
+            raise
+    if progress is not None:
+        progress({"stage": "complete", "run_id": run_id})
+    return summary
