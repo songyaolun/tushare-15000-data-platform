@@ -147,7 +147,7 @@ def initialize_library(
             previous = store.metadata("run_id")
             if previous is not None:
                 processing.emit("validate_existing")
-                store.verify_contents(batch_size=policy.fact_batch_size)
+                store.verify_contents()
             if previous == run_id:
                 summary = store.verify_snapshot({entry.api for entry in entries})
                 processing.emit("reused")

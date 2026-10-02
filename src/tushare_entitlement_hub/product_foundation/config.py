@@ -6,7 +6,19 @@ from pathlib import Path
 from .model import Count, Fraction, Identifier, Model, Positive
 
 MAXIMUM_CONTRIBUTION_ERROR = 1e-8
-DEFAULT_FACT_BATCH_SIZE = 512
+MAX_FACT_BATCH_SIZE = 512
+DEFAULT_FACT_BATCH_SIZE = MAX_FACT_BATCH_SIZE
+READ_BATCH_SIZE = 128
+
+
+def validate_batch_size(size: int, *, error_code: str = "invalid_batch_size") -> None:
+    """检查批大小为1到事实批上限之间的整数，避免配置驱动的无界Python对象分配。
+
+    输入512返回None；输入513、百万、布尔值或非正整数抛ValueError。
+    配置可传入自身错误码，直接读写入口默认使用invalid_batch_size。
+    """
+    if type(size) is not int or not 1 <= size <= MAX_FACT_BATCH_SIZE:
+        raise ValueError(error_code)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -27,14 +39,11 @@ class FoundationPolicy(Model):
         """拒绝没有统计意义的样本门槛和空 Top-K；例如 minimum_peer_count=1 → 错误。
 
         输入版本及阈值，输出校验后的不可变配置；默认 minimum_peer_count → 30。
+        事实批大小仅允许1到512；例如 fact_batch_size=513 → invalid_foundation_policy。
         """
         super().__post_init__()
-        if (
-            self.minimum_peer_count < 2
-            or self.top_k < 1
-            or self.weight_perturbation >= 1
-            or self.fact_batch_size < 1
-        ):
+        validate_batch_size(self.fact_batch_size, error_code="invalid_foundation_policy")
+        if self.minimum_peer_count < 2 or self.top_k < 1 or self.weight_perturbation >= 1:
             raise ValueError("invalid_foundation_policy")
 
 

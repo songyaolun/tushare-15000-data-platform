@@ -23,7 +23,7 @@ from .batch_io import (
     insert_records,
     stage_records,
 )
-from .config import DEFAULT_FACT_BATCH_SIZE
+from .config import DEFAULT_FACT_BATCH_SIZE, READ_BATCH_SIZE, validate_batch_size
 from .entities import Entity, EntityAlias, EntityRelation
 from .features import FeatureValue
 from .model import Model
@@ -382,7 +382,9 @@ class ProductStore:
         输入一千条事实及 batch_size=512，输出按输入顺序排列的一千个身份；
         同批重复也幂等，任何不可变冲突抛错。用 with ProductStore 包裹整个调用，
         即可在后续批次失败时回滚所有批次；单条 put 同样使用此路径。
+        批大小仅允许1到512；输入百万级大小在消费records或执行SQL之前拒绝。
         """
+        validate_batch_size(batch_size)
         if table not in TABLES:
             raise ValueError("product_table_model_mismatch")
         identities = []
@@ -418,15 +420,16 @@ class ProductStore:
             identities.extend(batch_ids)
         return identities
 
-    def verify_contents(self, *, batch_size: int = DEFAULT_FACT_BATCH_SIZE) -> None:
+    def verify_contents(self, *, batch_size: int = READ_BATCH_SIZE) -> None:
         """流式重验模型、身份和 SQL 投影，按批次集合式检查实体引用及证据边。
 
         输入完整库返回 None；改动投影、身份、实体或血缘均抛固定原因码。
         先集合式检查引用与血缘，再遍历当前事务；遍历期间不在同连接执行其他 SQL，
         最后核对实际遍历行数，避免结果被引擎中断时将部分扫描误认成完整验证。
+        输入合法batch_size=512时实际每次最多读取128行；超限大小在任何SQL之前拒绝。
         """
-        if type(batch_size) is not int or batch_size < 1:
-            raise ValueError("invalid_batch_size")
+        validate_batch_size(batch_size)
+        read_size = min(batch_size, READ_BATCH_SIZE)
         if set(self.tables()) != set(TABLES):
             raise ValueError("product_tables_missing")
         for table, (model, keys, columns) in TABLES.items():
@@ -438,7 +441,7 @@ class ProductStore:
             ).fetchall()[0][0]
             checked_rows = 0
             result = self.connection.sql(f'SELECT to_json(stored) FROM product."{table}" stored')
-            while batch := result.fetchmany(batch_size):
+            while batch := result.fetchmany(read_size):
                 checked_rows += len(batch)
                 for raw in batch:
                     stored = json.loads(raw[0])

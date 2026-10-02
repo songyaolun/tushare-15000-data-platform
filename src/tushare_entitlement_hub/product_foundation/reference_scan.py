@@ -15,11 +15,11 @@ from ..standard import normalize_date, normalize_period, normalize_timestamp
 from ..store import digest
 from .batch_io import batches
 from .bindings import FoundationBindings, TimeMapping
-from .config import DEFAULT_FACT_BATCH_SIZE
+from .config import DEFAULT_FACT_BATCH_SIZE, READ_BATCH_SIZE, validate_batch_size
 from .contracts import QualityGateResult, Truth
 from .entities import resolve_alias
 from .model import Model
-from .numeric import adapt_numeric
+from .numeric import TypedFact, adapt_numeric
 from .registry import ConsumerSpec
 from .storage import ProductStore
 from .storage_records import GateRecord
@@ -27,16 +27,18 @@ from .temporal import AvailabilityFact, availability_gate, public_time_boundary
 
 
 def reference_rows(
-    connection: duckdb.DuckDBPyConnection, api: str, *, batch_size: int = DEFAULT_FACT_BATCH_SIZE
+    connection: duckdb.DuckDBPyConnection, api: str, *, batch_size: int = READ_BATCH_SIZE
 ) -> Iterator[dict[str, Any]]:
     """分批读取已验证接口名的 accepted 表，只解码已知 JSON 元数据。
 
     输入 daily，逐条产出来源记录；永不读取 quarantine 行内容。
+    batch_size允许1到512，但每次实际读取最多128行；输入512也只fetch至多128行。
+    非法大小在执行SQL之前拒绝，读取默认值与事实写入配置独立。
     """
-    if type(batch_size) is not int or batch_size < 1:
-        raise ValueError("invalid_batch_size")
+    validate_batch_size(batch_size)
+    read_size = min(batch_size, READ_BATCH_SIZE)
     cursor = connection.execute(f'SELECT to_json(source_row) FROM accepted."{api}" source_row')
-    while batch := cursor.fetchmany(batch_size):
+    while batch := cursor.fetchmany(read_size):
         for values in batch:
             row = json.loads(values[0])
             for key in (
@@ -142,7 +144,10 @@ def consume_rows(
     返回接口原因集合和最近业务期间，隔离行从不进入此函数。业务时间未知时不解析
     实体；例如2020年旧行在2026年观察后按2020年生命周期归属，不按当前代码复用归属。
     每批集合式写入时间、数值和门禁，并通过 progress 报告本批行数；无实体映射不扫描。
+    读取保持独立小批；例如512条来源各产生两个数值事实，数值缓冲分两次512条写入。
+    写入异常在单行适配的异常处理之外传播，由调用者事务回滚，不转成行失败原因。
     """
+    validate_batch_size(batch_size)
     time_mapping = next(
         (item for item in bindings.time_mappings if item.source_api == entry.api), None
     )
@@ -161,13 +166,12 @@ def consume_rows(
         return {"entity_mapping_missing"}, None
     reasons: set[str] = set()
     dates = set()
-    for source_batch in batches(
-        reference_rows(connection, entry.api, batch_size=batch_size), batch_size
-    ):
+    for source_batch in batches(reference_rows(connection, entry.api), batch_size):
         availability_facts: list[Model] = []
         typed_facts: list[Model] = []
         gates: list[Model] = []
         for row in source_batch:
+            row_typed_facts: list[TypedFact] = []
             row_codes: set[str] = set()
             row_id = digest([run_id, entry.api, str(row.get("source_record_id"))])
             try:
@@ -207,10 +211,15 @@ def consume_rows(
                             fact = adapt_numeric(
                                 row, field, entity_id, availability, certificates.get(field)
                             )
-                            typed_facts.append(fact)
+                            row_typed_facts.append(fact)
                             row_codes.update(fact.reason_codes)
             except (ValueError, TypeError, OverflowError, KeyError):
                 row_codes.add("row_adaptation_failed")
+            for fact in row_typed_facts:
+                typed_facts.append(fact)
+                if len(typed_facts) == batch_size:
+                    store.put_many("typed_fact", typed_facts, batch_size=batch_size)
+                    typed_facts.clear()
             if row_codes:
                 gates.append(
                     GateRecord(

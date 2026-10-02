@@ -8,17 +8,18 @@ from typing import Any, TypeVar
 import duckdb
 
 from ..store import encode
+from .config import validate_batch_size
 
 Item = TypeVar("Item")
 
 
 def batches(values: Iterable[Item], size: int) -> Iterator[list[Item]]:
-    """按正整数上限惰性分批，不一次展开全部输入。
+    """按允许范围内的正整数惰性分批，不一次展开全部输入。
 
     输入 range(5)、size=2，依次输出 [0,1]、[2,3]、[4]；非法大小抛固定错误。
+    size=513在开始迭代输入前拒绝，任意一批最多保留512个输入对象。
     """
-    if type(size) is not int or size < 1:
-        raise ValueError("invalid_batch_size")
+    validate_batch_size(size)
     iterator = iter(values)
     while batch := list(islice(iterator, size)):
         yield batch
