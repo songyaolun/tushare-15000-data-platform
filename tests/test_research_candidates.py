@@ -331,9 +331,9 @@ def test_empty_inputs_produce_no_fabricated_security():
 
 def test_accounting_type_isolates_financial_and_unknown_market_profiles():
     """场景：工业样本足够、金融及未知口径不足；预期：后两者不借工业样本取得分位。"""
-    inputs = research_inputs(33, flat=True)
+    inputs = research_inputs(34, flat=True)
     fundamental, governance, flow = research_parents(inputs)
-    changes = {30: "2", 31: None, 32: "unexpected"}
+    changes = {30: "2", 31: None, 32: "unexpected", 33: "7"}
     fundamental = tuple(
         replace(parent, details_json=encode({"comp_type": changes[index]}))
         if index in changes
@@ -344,6 +344,7 @@ def test_accounting_type_isolates_financial_and_unknown_market_profiles():
     assert all(result.envelope.rank is not None for result in results[:30])
     assert results[30].envelope.feature_profile == "market_only/comp_type_2"
     assert results[31].envelope.feature_profile == "market_only/comp_type_unknown"
+    assert results[33].envelope.feature_profile == "market_only/comp_type_7"
     assert all(result.envelope.score is None for result in results[30:])
 
 

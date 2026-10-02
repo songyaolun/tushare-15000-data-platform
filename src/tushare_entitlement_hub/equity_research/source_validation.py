@@ -9,6 +9,7 @@ from typing import Any
 import duckdb
 
 from ..catalog import load_policies
+from ..product_foundation.config import READ_BATCH_SIZE, validate_batch_size
 from ..product_foundation.contracts import EvidenceRef
 from ..product_foundation.numeric import source_evidence
 from ..product_foundation.reference_scan import map_availability
@@ -29,8 +30,8 @@ def verify_source_evidence(
     例：把证据source_record_id改成不存在的记录，即使产品内子表同步修改也拒绝。
     仅校验当前参考指纹对应批次；其他历史批次仍校验其内部模型及完整血缘。
     """
-    if type(batch_size) is not int or batch_size < 1:
-        raise ValueError("invalid_batch_size")
+    validate_batch_size(batch_size)
+    read_size = min(batch_size, READ_BATCH_SIZE)
     contracts = load_reference_contracts(load_policies())
     mappings = {mapping.source_api: mapping for mapping in config.foundation.time_mappings}
     assertion_groups = [item.evidence_refs for item in config.foundation.aliases]
@@ -43,7 +44,7 @@ def verify_source_evidence(
         cursor = products.execute(
             "SELECT DISTINCT payload FROM research.evidence WHERE run_id=?", [run_id]
         )
-        while batch := cursor.fetchmany(batch_size):
+        while batch := cursor.fetchmany(read_size):
             grouped: dict[str, list[EvidenceRef]] = defaultdict(list)
             for (payload,) in batch:
                 reference = EvidenceRef.from_json(payload)

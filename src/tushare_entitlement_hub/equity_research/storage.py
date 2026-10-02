@@ -10,6 +10,7 @@ from typing import Any
 
 import duckdb
 
+from ..product_foundation.config import READ_BATCH_SIZE, validate_batch_size
 from ..product_foundation.contracts import EvidenceRef
 from ..reference_storage import file_checksum
 from ..store import digest, encode
@@ -160,6 +161,7 @@ def save_results(
 
     每张表缓冲最多batch_size行，不构造全库JSON数组。
     """
+    validate_batch_size(batch_size)
     pending: dict[str, list[dict[str, Any]]] = {table: [] for table in RESEARCH_TABLES}
     counts: Counter[str] = Counter()
     for result in results:
@@ -182,12 +184,14 @@ def stored_rows(
 
     同连接读取期间不运行其他SQL，防止游标被覆盖而漏验尾部。
     """
+    validate_batch_size(batch_size)
+    read_size = min(batch_size, READ_BATCH_SIZE)
     for table in RESEARCH_TABLES:
         cursor = connection.execute(
             f'SELECT record_id,run_id,result_id,payload FROM research."{table}" WHERE run_id=?',
             [run_id],
         )
-        while batch := cursor.fetchmany(batch_size):
+        while batch := cursor.fetchmany(read_size):
             for record_id, stored_run, result_id, payload in batch:
                 yield (
                     table,
@@ -208,8 +212,8 @@ def verify_run(
     例：把signal的unknown改为false、删证据或改贡献均导致验证失败。
     返回原始运行摘要，valid仅代表完整性，不表示历史可交易或数据齐备。
     """
-    if type(batch_size) is not int or batch_size < 1:
-        raise ValueError("invalid_batch_size")
+    validate_batch_size(batch_size)
+    read_size = min(batch_size, READ_BATCH_SIZE)
     config = ResearchConfig.from_dict(metadata["config"])
     run_id = metadata["run_id"]
     selection = metadata["selection"]
@@ -264,7 +268,7 @@ def verify_run(
         只读取result表，避免物理子表被错误修改后成为校验真值来源。
         """
         cursor = connection.execute("SELECT payload FROM research.result WHERE run_id=?", [run_id])
-        while batch := cursor.fetchmany(batch_size):
+        while batch := cursor.fetchmany(read_size):
             for (payload,) in batch:
                 result = ResearchResult.from_json(payload)
                 envelope = result.envelope

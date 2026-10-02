@@ -66,7 +66,7 @@ def _parent_context(
             raw_type = parent.details.get("comp_type")
             company_type = (
                 raw_type
-                if isinstance(raw_type, str) and raw_type in {"1", "2", "3", "4"}
+                if isinstance(raw_type, str) and raw_type in {"1", "2", "3", "4", "7"}
                 else "unknown"
             )
             quality = parent.metric("quality_score")
