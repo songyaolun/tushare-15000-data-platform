@@ -21,6 +21,7 @@ from .coverage import coverage_report
 from .credentials import configured_credential
 from .ingest import plan_tasks, probe, run_task
 from .models import CatalogEntry
+from .product_foundation.cli import foundation_app
 from .products import build_products
 from .quality import audit_rows
 from .raw import RawStore, assert_public
@@ -46,6 +47,7 @@ for command_name, application in (
     ("coverage", coverage_app),
     ("products", products_app),
     ("reference", reference_app),
+    ("product-foundation", foundation_app),
 ):
     app.add_typer(application, name=command_name)
 

@@ -1,2 +1,4 @@
 # 官方 HTML 快照保留示例表格行尾填充，源码仍使用默认空白检查。
 fixtures/catalog/official/*.html whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+# 覆盖矩阵保留附件的 CRLF 字节及固定摘要；仍检查其他行尾空白。
+src/tushare_entitlement_hub/data/product_consumers.csv -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
