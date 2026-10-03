@@ -252,6 +252,7 @@ def _index(inputs: ResearchInputs, row: ResearchRow) -> dict[str, Any]:
     """解释指数身份、收益和估值状态；例：点位102对昨收100核得当前收益0.02。
 
     基准必须显式登记为index。元数据不发明上市状态，行情只用已认证点位及比例。
+    估值字段存在但均未认证时，输出unknown及index_valuation_units_unverified原因。
     """
     api = row.source_api
     refs = _refs(row, *CONTEXT_FIELDS[api])
@@ -285,10 +286,12 @@ def _index(inputs: ResearchInputs, row: ResearchRow) -> dict[str, Any]:
             )
             else "current_observation"
         )
+        observed = any(_number(row, field) is not None for field in fields)
         return _result(
-            "observed" if any(_number(row, field) is not None for field in fields) else "unknown",
+            "observed" if observed else "unknown",
             facts,
             refs,
+            *(() if observed else ("index_valuation_units_unverified",)),
         )
     close, previous = _number(row, "close", "index"), _number(row, "pre_close", "index")
     facts["current_index"] = _values(row, ("close", "pre_close", "pct_chg", "amount"))

@@ -5,6 +5,8 @@ from datetime import date, timedelta
 
 import pytest
 
+from tushare_entitlement_hub.equity_research.consumption import execute_consumption
+from tushare_entitlement_hub.equity_research.consumption_registry import load_consumption_registry
 from tushare_entitlement_hub.equity_research.context_consumers import (
     CONTEXT_FIELDS,
     consume_context,
@@ -1060,3 +1062,63 @@ def test_supplier_technical_values_without_local_peers_remain_nonindependent(api
         for check in result["facts"]["observations"][0]["same_day_checks"].values()
     )
     assert result["facts"]["independent_evidence"] is False
+
+
+@pytest.mark.parametrize(
+    "certified_field",
+    ["missing_numeric", "missing_certification", "pe_ttm", "pb", "turnover_rate"],
+)
+def test_index_valuation_consumption_requires_at_least_one_certified_numeric(certified_field):
+    """消费入口必须区分原始数字与认证值，来源无其他缺口时仍返回明确估值认证原因。
+
+    输入pe_ttm=10、pb=2、turnover_rate=0.03，numeric缺失或所有真实TypedFact的
+    certification=None时输出unknown及index_valuation_units_unverified；分别只认证
+    三字段之一时输出observed、空原因集合，并且仅该字段的估值状态为observed。
+    """
+    values = {"pe_ttm": 10.0, "pb": 2.0, "turnover_rate": 0.03}
+    source = context_row(
+        "index_dailybasic", {"ts_code": "I", "trade_date": "20260930", **values}, entity=INDEX
+    )
+    if certified_field == "missing_numeric":
+        source = replace(source, numeric={})
+    else:
+        source = replace(
+            source,
+            numeric={
+                field: fact
+                if field == certified_field
+                else replace(
+                    fact,
+                    value=None,
+                    quality_tier="unknown",
+                    certification=None,
+                    reason_codes=("unit_unverified",),
+                )
+                for field, fact in source.numeric.items()
+            },
+        )
+    inputs = replace(context_inputs(source), source_reasons={"index_dailybasic": ()})
+    registration = next(
+        item for item in load_consumption_registry() if item.spec.api == "index_dailybasic"
+    )
+    assert (registration.spec.product, registration.handler) == ("P01", "context")
+    assert inputs.reasons("index_dailybasic", INDEX) == ()
+    assert {field: source.raw[field] for field in values} == values
+    if certified_field == "missing_certification":
+        assert set(source.numeric) == set(values)
+        assert all(
+            isinstance(fact, TypedFact) and fact.certification is None
+            for fact in source.numeric.values()
+        )
+    record, references, _ = execute_consumption(inputs, registration, INDEX)
+    observed = certified_field in values
+    assert record["executed"] is True
+    assert record["retained_row_count"] == 1
+    assert record["status"] == ("observed" if observed else "unknown")
+    assert record["reason_codes"] == ([] if observed else ["index_valuation_units_unverified"])
+    assert references
+    valuation = record["facts"]["observations"][0]["valuation_context"]
+    for field, value in values.items():
+        certified = field == certified_field
+        assert valuation[field]["status"] == ("observed" if certified else "unknown")
+        assert valuation[field]["value"] == (value if certified else None)
