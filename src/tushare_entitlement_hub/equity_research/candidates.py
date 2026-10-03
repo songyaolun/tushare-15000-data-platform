@@ -110,6 +110,9 @@ def _rank_and_explain(
 
     例如完整档 30 只、市场档 29 只，后者名次全部未知；删因子后保留其余权重
     相对比例，输出包含基线的最小和最大名次。完整档前 20% 才能进入优先研究。
+    同一分组内实体及数值完全相同的场景复用分位，场景名称仍独立保留；
+    例如全为None的基线与三个删因子输入只计算一次。缓存最多包含基线加三个场景，
+    不跨同行分组、档位或构建调用复用，也不把仅排序相同的不同数值当成相同输入。
     """
     finished = []
     groups: dict[tuple[str, tuple[str, ...]], list[ResearchResult]] = {}
@@ -119,6 +122,7 @@ def _rank_and_explain(
     for (profile, _), group in sorted(groups.items()):
         scores = {result.envelope.entity_id: result.envelope.score for result in group}
         ranked = percentiles(inputs, scores, profile)
+        ranking_cache = {tuple(scores.items()): ranked}
         scenarios: dict[str, dict[str, float]] = {}
         for factor in sorted(
             {
@@ -137,9 +141,12 @@ def _rank_and_explain(
                 else None
                 for result in group
             }
+            population = tuple(remaining.items())
+            if population not in ranking_cache:
+                ranking_cache[population] = percentiles(inputs, remaining, profile)
             scenarios[factor] = {
                 identity: 1 + (1 - item.percentile) * (item.peer_count - 1)
-                for identity, item in percentiles(inputs, remaining, profile).items()
+                for identity, item in ranking_cache[population].items()
                 if item.percentile is not None
             }
         for result in group:

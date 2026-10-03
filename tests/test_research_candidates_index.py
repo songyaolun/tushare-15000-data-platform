@@ -89,25 +89,37 @@ def candidate_fingerprint(results):
     return digest.hexdigest()
 
 
-def test_parent_collections_are_indexed_once_for_5911_entities():
-    """5911实体×3父结果只扫描17733条父记录，各候选保留恰好对应的三个父ID和既有门禁。"""
+def test_parent_collections_are_indexed_once_for_5911_entities(monkeypatch):
+    """完整5911构建只扫描17733条父记录、排序7次，父ID和全部JSON字节与cb4e879一致。"""
     context, original = candidate_scenario(count=5911)
     groups = tuple(SinglePassParents(group) for group in original)
+    sorted_pools = []
+    average = features._average_ranks
+
+    def counted(pool):
+        """三项因子、基线和三个不同删因子输入各排序一次；例：第八次说明仍有重复排序。"""
+        sorted_pools.append(len(pool))
+        assert len(sorted_pools) <= 7
+        return average(pool)
+
+    monkeypatch.setattr(features, "_average_ranks", counted)
     started = perf_counter()
     results = build_candidates(context, *groups)
     seconds = perf_counter() - started
     assert len(results) == 5911
     assert [group.passes for group in groups] == [1, 1, 1]
     assert [group.visits for group in groups] == [5911, 5911, 5911]
+    assert sorted_pools == [5911] * 7
     for result, *parents in zip(results, *original, strict=True):
         assert result.parent_result_ids == tuple(
             sorted(item.envelope.result_id for item in parents)
         )
         assert result.envelope.peer_count == 5911
         assert all(check.passed for check in result.envelope.quality_gates)
+    fingerprint = candidate_fingerprint(results)
+    assert fingerprint == "67b2ef7118a9bc3f0afeb8fcce0d4972618c69a289f548ff11259ae801242a1b"
     print(
-        f"5911实体：父访问17733次，build_candidates={seconds:.3f}s，"
-        f"完整结果SHA256={candidate_fingerprint(results)}"
+        f"5911实体：父访问17733次，排序7次，build_candidates={seconds:.3f}s，完整结果SHA256={fingerprint}"
     )
 
 
