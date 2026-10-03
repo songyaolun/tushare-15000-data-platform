@@ -30,6 +30,7 @@ from .fundamental import build_fundamental
 from .governance import build_governance
 from .market import build_market
 from .models import MARKET_ENTITY, PRODUCT_IDS, RULE_VERSION, ResearchConfig, ResearchResult
+from .persistence_runtime import PersistenceError, PersistenceProgress
 from .storage import initialize_tables, run_identity, save_results, verify_run
 
 PRODUCT_ALIASES = dict(zip(("P01", "P04", "P06", "P07", "P03", "P13"), PRODUCT_IDS, strict=True))
@@ -89,10 +90,19 @@ def run_research(
             "SELECT payload FROM research.run WHERE run_id=?", [run_id]
         ).fetchone()
         if existing is not None:
-            summary = verify_run(connection, json.loads(existing[0]))
-            connection.execute(
-                "INSERT OR REPLACE INTO research.metadata VALUES('current_run',?)", [encode(run_id)]
-            )
+            try:
+                summary = verify_run(connection, json.loads(existing[0]), progress=progress)
+            except Exception as error:
+                raise PersistenceError("verify", error) from error
+            try:
+                connection.execute(
+                    "INSERT OR REPLACE INTO research.metadata VALUES('current_run',?)",
+                    [encode(run_id)],
+                )
+            except Exception as error:
+                trace = PersistenceProgress("commit", progress, run_id)
+                trace.operation = "metadata"
+                raise trace.failure(error) from error
             if progress is not None:
                 progress({"stage": "reused", "run_id": run_id})
             return summary
@@ -100,6 +110,7 @@ def run_research(
             reference_path, cutoff, run_id, configured, progress=progress
         )
         produced: dict[str, tuple[ResearchResult, ...]] = {}
+        upstream: tuple[ResearchResult, ...] = ()
         for product in products:
             if product == PRODUCT_IDS[0]:
                 results = build_market(inputs)
@@ -166,11 +177,24 @@ def run_research(
         }
         if configured.binding_audit:
             summary["bindings"] = binding_summary(configured, summary["consumption"])
-        connection.execute("BEGIN TRANSACTION")
+        active_phase = "save"
+        begun = False
+        transaction_trace = PersistenceProgress("commit", progress, run_id)
         try:
+            connection.execute("BEGIN TRANSACTION")
+            begun = True
             summary["counts"] = save_results(
-                connection, all_results, configured.thresholds.fact_batch_size
+                connection,
+                all_results,
+                configured.thresholds.fact_batch_size,
+                progress=progress,
+                run_id=run_id,
             )
+            # 保存完成后重建必须从数据库读取；释放上游、来源和结果对象，避免两套全量对象共存。
+            produced.clear()
+            del all_results, inputs, result, results, upstream
+            active_phase = "commit"
+            transaction_trace.operation = "metadata"
             metadata = {
                 "run_id": run_id,
                 "rule_version": RULE_VERSION,
@@ -187,11 +211,31 @@ def run_research(
             connection.execute(
                 "INSERT OR REPLACE INTO research.metadata VALUES('current_run',?)", [encode(run_id)]
             )
-            verify_run(connection, metadata, batch_size=configured.thresholds.fact_batch_size)
+            active_phase = "verify"
+            verify_run(
+                connection,
+                metadata,
+                batch_size=configured.thresholds.fact_batch_size,
+                progress=progress,
+            )
+            active_phase = "commit"
+            transaction_trace.operation = "commit"
             connection.execute("COMMIT")
-        except Exception:
-            connection.execute("ROLLBACK")
-            raise
+        except Exception as error:
+            failure = PersistenceError(active_phase, error)
+            if active_phase == "commit":
+                transaction_trace.failure(error)
+            elif not begun:
+                trace = PersistenceProgress("save", progress, run_id)
+                trace.operation = "begin"
+                trace.failure(error)
+            try:
+                if begun:
+                    connection.execute("ROLLBACK")
+            except Exception as rollback_error:
+                rollback_trace = PersistenceProgress("rollback", progress, run_id)
+                raise rollback_trace.failure(rollback_error) from error
+            raise failure from error
     if progress is not None:
         progress({"stage": "complete", "run_id": run_id})
     return summary

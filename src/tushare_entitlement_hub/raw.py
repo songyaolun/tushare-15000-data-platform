@@ -28,6 +28,7 @@ def assert_public(value: Any) -> None:
     示例：assert_public({'ts_code': '000001.SZ'}) 返回 None；
     assert_public({'nested': {'token': '<REDACTED>'}}) 抛出 ValueError。
     实际凭据值的回显另由发送时持有凭据的传输层检查，本函数不会读取任何环境变量。
+    赋值匹配必需冒号或等号；没有两种分隔符的文本只跳过不可能命中的正则，不缓存任何值。
     """
     if isinstance(value, dict):
         for name, child in value.items():
@@ -44,7 +45,11 @@ def assert_public(value: Any) -> None:
     elif isinstance(value, (list, tuple)):
         for child in value:
             assert_public(child)
-    elif isinstance(value, str) and _ASSIGNMENT.search(value):
+    elif (
+        isinstance(value, str)
+        and (str.__contains__(value, ":") or str.__contains__(value, "="))
+        and _ASSIGNMENT.search(value)
+    ):
         raise ValueError("拒绝保存疑似凭据赋值的数据")
 
 

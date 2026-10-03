@@ -11,6 +11,7 @@ from .binding_builder import build_failure_code, write_research_config
 from .binding_io import BuildLimits
 from .event_parents import PARENT_FAILURE_CODES
 from .models import ResearchConfig
+from .persistence_runtime import PersistenceError
 from .pipeline import run_research
 from .storage import RESULT_PAYLOAD_CAPACITY_ERROR, validate_research
 
@@ -89,11 +90,17 @@ def run(
     except (ValueError, OSError, duckdb.Error, TypeError, KeyError) as error:
         reason = (
             str(error)
-            if isinstance(error, ValueError)
-            and str(error) in {RESULT_PAYLOAD_CAPACITY_ERROR, *PARENT_FAILURE_CODES}
+            if isinstance(error, PersistenceError)
+            or (
+                isinstance(error, ValueError)
+                and str(error) in {RESULT_PAYLOAD_CAPACITY_ERROR, *PARENT_FAILURE_CODES}
+            )
             else "research_run_failed"
         )
-        typer.echo(encode({"status": "failed", "reason_codes": [reason]}))
+        failure: dict[str, Any] = {"status": "failed", "reason_codes": [reason]}
+        if isinstance(error, PersistenceError):
+            failure.update(phase=error.phase, category=error.category)
+        typer.echo(encode(failure))
         raise typer.Exit(1) from None
     typer.echo(encode(summary))
     if summary["status"] == "incomplete":

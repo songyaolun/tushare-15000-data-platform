@@ -88,7 +88,18 @@ def test_real_synthetic_pipeline_metrics_idempotency_and_dependencies(tmp_path):
         assert verify_run(connection, read_metadata(connection, first["run_id"])) == first
     replay = []
     assert run_research(reference, output, AS_OF, config, progress=replay.append) == first
-    assert [event["stage"] for event in replay] == ["start", "reused"]
+    assert [event["stage"] for event in replay if event["stage"] != "verify-progress"] == [
+        "start",
+        "verify-start",
+        "verify-complete",
+        "reused",
+    ]
+    assert {event["operation"] for event in replay if event["stage"] == "verify-progress"} == {
+        "primary_keys",
+        "rebuild",
+        "physical_projections",
+        "summary",
+    }
     assert run_research(reference, output, AS_OF, config) == first
     assert validate_research(reference, output)["valid"]
     assert before == file_checksum(reference)
@@ -189,7 +200,7 @@ def test_read_change_and_transaction_failure_leave_no_partial_results(libraries,
         raise ValueError("synthetic_validation_failure")
 
     monkeypatch.setattr(pipeline, "verify_run", reject_saved_run)
-    with pytest.raises(ValueError, match="synthetic_validation_failure"):
+    with pytest.raises(ValueError, match="research_verify_validation_failed"):
         run_research(reference, output, AS_OF, config, ("P01",))
     with duckdb.connect(str(output), config=DATABASE_CONFIG) as connection:
         for table in (*RESEARCH_TABLES, "run", "metadata"):
@@ -456,6 +467,13 @@ def test_verify_database_count_result_missing_is_rejected(libraries, query_fragm
 
     with duckdb.connect(str(output), config=DATABASE_CONFIG) as connection:
         metadata = read_metadata(connection, summary["run_id"])
+        if query_fragment == "count(DISTINCT record_id)":
+            # 有主键时由数据库约束保证唯一；移除约束后仍必须执行完整重复检查。
+            connection.execute(
+                "CREATE TABLE research.unconstrained AS SELECT * FROM research.feature"
+            )
+            connection.execute("DROP TABLE research.feature")
+            connection.execute("ALTER TABLE research.unconstrained RENAME TO feature")
         with pytest.raises(ValueError, match=expected):
             verify_run(MissingCount(), metadata)
 

@@ -184,3 +184,15 @@ def test_unknown_storage_table_rejected_without_sql():
     """表名白名单在任何SQL或容量处理前拒绝未知表；无需建立连接即可验证边界。"""
     with pytest.raises(ValueError, match="^unknown_research_table$"):
         storage.insert_rows(None, "result; DROP SCHEMA research", [])
+
+
+def test_read_capacity_is_checked_before_model_reconstruction(tmp_path):
+    """外部写入超过8MiB的JSON时，逐行读取在模型重建前固定失败，不按512行预取整个大批。"""
+    payload = encode({"text": "x" * storage.MAXIMUM_RESULT_JSON_BYTES})
+    with duckdb.connect(str(tmp_path / "oversized.duckdb"), config=DATABASE_CONFIG) as connection:
+        storage.initialize_tables(connection)
+        connection.execute(
+            "INSERT INTO research.result VALUES ('large','run','large',?)", [payload]
+        )
+        with pytest.raises(ValueError, match="research_projection_payload_capacity_exceeded"):
+            list(storage.stored_rows(connection, "run", 512))

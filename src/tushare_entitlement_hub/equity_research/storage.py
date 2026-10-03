@@ -10,8 +10,8 @@ from typing import Any
 
 import duckdb
 
-from ..product_foundation.config import READ_BATCH_SIZE, validate_batch_size
-from ..product_foundation.contracts import EvidenceRef
+from ..product_foundation.config import validate_batch_size
+from ..product_foundation.progress import ProgressCallback
 from ..reference_storage import file_checksum
 from ..store import digest, encode
 from .consumption import count_consumption, summarize_consumption, validate_result_consumption
@@ -21,31 +21,19 @@ from .consumption_registry import (
     validate_consumption_registry,
 )
 from .models import PRODUCT_IDS, RULE_VERSION, ResearchConfig, ResearchResult
+from .persistence_runtime import (
+    RESULT_PAYLOAD_CAPACITY_ERROR as RESULT_PAYLOAD_CAPACITY_ERROR,
+)
+from .persistence_runtime import (
+    PersistenceProgress,
+    ResultPayloadCapacityError,
+)
+from .projection import RESEARCH_TABLES, EncodedRecord, accumulate_records, project_result
 from .source_validation import verify_source_evidence
 
-RESEARCH_TABLES = ("result", "feature", "contribution", "evidence", "gate", "signal", "lineage")
 MAXIMUM_INSERT_ROWS = 128
 MAXIMUM_INSERT_JSON_BYTES = 512 * 1024
 MAXIMUM_RESULT_JSON_BYTES = 8 * 1024 * 1024
-RESULT_PAYLOAD_CAPACITY_ERROR = "research_result_payload_capacity_exceeded"
-
-
-class ResultPayloadCapacityError(ValueError):
-    """结果超限的内部诊断：只保留产品、实体和字节数，异常文本仍为固定安全码。"""
-
-    def __init__(self, payload: Any, payload_bytes: int) -> None:
-        """提取最小定位字段，诊断属性不保存载荷对象；例如P06市场结果超限可读取三个同名属性。
-
-        product_id/entity_id缺失或不是字符串时记None；str(error)始终只返回容量原因码，
-        CLI不输出诊断属性、原文或JSON载荷。
-        """
-        super().__init__(RESULT_PAYLOAD_CAPACITY_ERROR)
-        envelope = payload.get("envelope") if isinstance(payload, dict) else None
-        metadata = envelope if isinstance(envelope, dict) else {}
-        product_id, entity_id = metadata.get("product_id"), metadata.get("entity_id")
-        self.product_id = product_id if isinstance(product_id, str) else None
-        self.entity_id = entity_id if isinstance(entity_id, str) else None
-        self.payload_bytes = payload_bytes
 
 
 def run_identity(
@@ -74,71 +62,8 @@ def record_rows(result: ResearchResult) -> Iterator[tuple[str, dict[str, Any]]]:
     例：一个指标、一个谓词得到feature和signal记录，unknown按原字符串保存。
     所有派生表键由结果与完整语义生成，重复运行不会产生第二份记录。
     """
-    identity = result.envelope.result_id
-    run_id = result.envelope.run_id
-    yield (
-        "result",
-        {
-            "record_id": identity,
-            "run_id": run_id,
-            "result_id": identity,
-            "payload": result.to_dict(),
-        },
-    )
-    payloads: list[tuple[str, Any, dict[str, Any]]] = []
-    payloads.extend(("feature", item.name, item.to_dict()) for item in result.metrics)
-    payloads.extend(
-        ("contribution", item.feature_id, item.to_dict()) for item in result.envelope.contributions
-    )
-    payloads.extend(
-        ("gate", item.gate_id, item.to_dict()) for item in result.envelope.quality_gates
-    )
-    payloads.extend(
-        ("signal", name, {"predicate_id": name, "result": value.value})
-        for name, value in result.predicate_results.items()
-    )
-    references: dict[str, EvidenceRef] = {}
-    for relationship, evidence in (
-        ("used", result.envelope.evidence_refs),
-        ("contrary", result.envelope.contrary_evidence),
-    ):
-        for reference in evidence:
-            evidence_id = digest(reference.to_dict())
-            references[evidence_id] = reference
-            payloads.append(
-                (
-                    "lineage",
-                    [relationship, evidence_id],
-                    {
-                        "relationship": relationship,
-                        "evidence_id": digest([identity, "evidence", evidence_id]),
-                        "parent_result_id": None,
-                    },
-                )
-            )
-    payloads.extend(("evidence", key, reference.to_dict()) for key, reference in references.items())
-    payloads.extend(
-        (
-            "lineage",
-            ["parent", parent],
-            {
-                "relationship": "parent",
-                "evidence_id": None,
-                "parent_result_id": parent,
-            },
-        )
-        for parent in result.parent_result_ids
-    )
-    for table, key, payload in payloads:
-        yield (
-            table,
-            {
-                "record_id": digest([identity, table, key]),
-                "run_id": run_id,
-                "result_id": identity,
-                "payload": payload,
-            },
-        )
+    for row in project_result(result):
+        yield row.table, row.decoded()
 
 
 def fingerprints(rows: Iterable[tuple[str, dict[str, Any]]]) -> dict[str, list[int]]:
@@ -187,62 +112,109 @@ def insert_rows(
     """
     if table not in RESEARCH_TABLES:
         raise ValueError("unknown_research_table")
-    columns: list[list[str]] = [[], [], [], []]
-    pending_bytes = 0
+    buffer = _InsertBuffer(connection, table, MAXIMUM_INSERT_ROWS)
+    for row in rows:
+        buffer.add(
+            EncodedRecord(
+                table, row["record_id"], row["run_id"], row["result_id"], encode(row["payload"])
+            )
+        )
+    buffer.flush()
 
-    def flush() -> None:
-        """写入一个有界参数批并立即释放缓冲；例：两行对应四个等长参数列。"""
-        connection.execute(
-            f'INSERT INTO research."{table}" '
+
+class _InsertBuffer:
+    """共享行数/字节限批器，内部规范JSON直接复用；不放宽公开字典写入边界。"""
+
+    def __init__(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        table: str,
+        row_limit: int,
+        trace: PersistenceProgress | None = None,
+    ) -> None:
+        """初始化四列缓冲；例：row_limit=128仍受512KiB约束，大结果独占一批。"""
+        self.connection, self.table, self.row_limit, self.trace = (
+            connection,
+            table,
+            row_limit,
+            trace,
+        )
+        self.columns: list[list[str]] = [[], [], [], []]
+        self.pending_bytes = 0
+
+    def add(self, row: EncodedRecord) -> None:
+        """接收一个已通过公开边界的规范快照，超8MiB结果在SQL前失败；例：两条400KiB分批写入。"""
+        size = len(row.payload.encode("utf-8"))
+        if self.trace is not None:
+            self.trace.table = self.table
+        if self.table == "result" and size > MAXIMUM_RESULT_JSON_BYTES:
+            raise ResultPayloadCapacityError(json.loads(row.payload), size)
+        if self.columns[0] and self.pending_bytes + size > MAXIMUM_INSERT_JSON_BYTES:
+            self.flush()
+        for column, value in zip(
+            self.columns, (row.record_id, row.run_id, row.result_id, row.payload), strict=True
+        ):
+            column.append(value)
+        self.pending_bytes += size
+        if (
+            len(self.columns[0]) >= self.row_limit
+            or self.pending_bytes >= MAXIMUM_INSERT_JSON_BYTES
+        ):
+            self.flush()
+
+    def flush(self) -> None:
+        """把非空批写入事务后清空，报告实际写入量；例：空缓冲不执行SQL。"""
+        if not self.columns[0]:
+            return
+        self.connection.execute(
+            f'INSERT INTO research."{self.table}" '
             "SELECT unnest(?::VARCHAR[]), unnest(?::VARCHAR[]), "
             "unnest(?::VARCHAR[]), CAST(unnest(?::VARCHAR[]) AS JSON)",
-            columns,
+            self.columns,
         )
-        for values in columns:
+        if self.trace is not None:
+            self.trace.advance(self.table, len(self.columns[0]), self.pending_bytes)
+        for values in self.columns:
             values.clear()
-
-    for row in rows:
-        payload = encode(row["payload"])
-        payload_bytes = len(payload.encode("utf-8"))
-        if table == "result" and payload_bytes > MAXIMUM_RESULT_JSON_BYTES:
-            raise ResultPayloadCapacityError(row["payload"], payload_bytes)
-        if columns[0] and (
-            len(columns[0]) >= MAXIMUM_INSERT_ROWS
-            or pending_bytes + payload_bytes > MAXIMUM_INSERT_JSON_BYTES
-        ):
-            flush()
-            pending_bytes = 0
-        for values, field in zip(columns[:3], ("record_id", "run_id", "result_id"), strict=True):
-            values.append(row[field])
-        columns[3].append(payload)
-        pending_bytes += payload_bytes
-    if columns[0]:
-        flush()
+        self.pending_bytes = 0
 
 
 def save_results(
-    connection: duckdb.DuckDBPyConnection, results: Iterable[ResearchResult], batch_size: int
+    connection: duckdb.DuckDBPyConnection,
+    results: Iterable[ResearchResult],
+    batch_size: int,
+    *,
+    progress: ProgressCallback | None = None,
+    run_id: str | None = None,
 ) -> dict[str, int]:
-    """将业务结果逐批拆表写入并计数；例：重复主键会失败并由上层事务回滚。
+    """每结果只序列化根一次，七表各自按行数/字节限批，完成表示事务内写入，不代表提交。
 
-    结果载荷按单条写入，其他表最多缓冲min(batch_size,128)行；实际JSON插入另有
-    512KiB字节预算。完整消费与血缘全部保留，不构造全库JSON数组。
+    例：128个小结果可合批，超512KiB的合法结果独占一批；失败由外层统一回滚。
+    不减少任何消费记录、正反证或血缘，不更改物理记录键及载荷。
     """
     validate_batch_size(batch_size)
-    pending: dict[str, list[dict[str, Any]]] = {table: [] for table in RESEARCH_TABLES}
-    counts: Counter[str] = Counter()
-    for result in results:
-        for table, row in record_rows(result):
-            pending[table].append(row)
-            counts[table] += 1
-            write_size = 1 if table == "result" else min(batch_size, MAXIMUM_INSERT_ROWS)
-            if len(pending[table]) >= write_size:
-                insert_rows(connection, table, pending[table])
-                pending[table].clear()
-    for table, rows in pending.items():
-        if rows:
-            insert_rows(connection, table, rows)
-    return {table: counts[table] for table in RESEARCH_TABLES}
+    trace = PersistenceProgress("save", progress, run_id)
+    try:
+        trace.emit("start-save")
+        trace.operation = "write"
+        buffers = {
+            table: _InsertBuffer(connection, table, min(batch_size, MAXIMUM_INSERT_ROWS), trace)
+            for table in RESEARCH_TABLES
+        }
+        counts: Counter[str] = Counter()
+        for result in results:
+            for row in project_result(result):
+                buffers[row.table].add(row)
+                counts[row.table] += 1
+            trace.result_completed()
+        for buffer in buffers.values():
+            buffer.flush()
+        trace.emit("save-complete")
+        return {table: counts[table] for table in RESEARCH_TABLES}
+    except Exception as error:
+        # 独立调用方仍可按DuckDB约束异常处理；阶段信息通过进度提供。
+        trace.failure(error)
+        raise
 
 
 def stored_rows(
@@ -253,27 +225,109 @@ def stored_rows(
     同连接读取期间不运行其他SQL，防止游标被覆盖而漏验尾部。
     """
     validate_batch_size(batch_size)
-    read_size = min(batch_size, READ_BATCH_SIZE)
-    for table in RESEARCH_TABLES:
+    for row in _stored_records(connection, run_id, RESEARCH_TABLES):
+        yield row.table, row.decoded()
+
+
+def _stored_records(
+    connection: duckdb.DuckDBPyConnection, run_id: str, tables: tuple[str, ...]
+) -> Iterator[EncodedRecord]:
+    """逐条取出物理JSON并重新检查公开边界，避免512个8MiB结果同时进入Python。
+
+    例：读取两个大结果每次fetchmany(1)，不随配置批大小提高在途载荷数。
+    SQL表名仅来自本模块固定表集合，输入值仍绑定参数。
+    """
+    for table in tables:
         cursor = connection.execute(
             f'SELECT record_id,run_id,result_id,payload FROM research."{table}" WHERE run_id=?',
             [run_id],
         )
-        while batch := cursor.fetchmany(read_size):
-            for record_id, stored_run, result_id, payload in batch:
-                yield (
-                    table,
-                    {
-                        "record_id": record_id,
-                        "run_id": stored_run,
-                        "result_id": result_id,
-                        "payload": json.loads(payload),
-                    },
-                )
+        while batch := cursor.fetchmany(1):
+            record_id, stored_run, result_id, payload = batch[0]
+            if len(payload.encode("utf-8")) > MAXIMUM_RESULT_JSON_BYTES:
+                raise ValueError("research_projection_payload_capacity_exceeded")
+            yield EncodedRecord(
+                table, record_id, stored_run, result_id, encode(json.loads(payload))
+            )
+
+
+def _verify_keys(
+    connection: duckdb.DuckDBPyConnection, run_id: str, trace: PersistenceProgress
+) -> None:
+    """按真实主键约束或完整去重检查验证七表键和反向引用，不跳过缺约束表。
+
+    例：正常库不重复建立COUNT DISTINCT哈希表；有人重建无主键表时仍扫描并拒绝重复键。
+    子表与父结果的引用检查保持完整，任何缺失计数也按原固定错误拒绝。
+    """
+    trace.step("primary_keys")
+    constrained = {
+        table
+        for table, columns in connection.execute(
+            "SELECT table_name,constraint_column_names FROM duckdb_constraints() "
+            "WHERE database_name=current_database() AND schema_name='research' "
+            "AND constraint_type='PRIMARY KEY'",
+            [],
+        ).fetchall()
+        if columns == ["record_id"]
+    }
+    for table in RESEARCH_TABLES:
+        trace.table = table
+        if table not in constrained:
+            duplicate = connection.execute(
+                f'SELECT count(*)-count(DISTINCT record_id) FROM research."{table}" WHERE run_id=?',
+                [run_id],
+            ).fetchone()
+            if duplicate is None or duplicate[0]:
+                raise ValueError("research_primary_key_invalid")
+        orphan = connection.execute(
+            f'SELECT count(*) FROM research."{table}" child '
+            "LEFT JOIN research.result parent ON child.result_id=parent.record_id "
+            "AND child.run_id=parent.run_id WHERE child.run_id=? "
+            "AND parent.record_id IS NULL",
+            [run_id],
+        ).fetchone()
+        if orphan is None or orphan[0]:
+            raise ValueError("research_result_reference_missing")
+    parents = connection.execute(
+        "SELECT count(*) FROM research.lineage edge LEFT JOIN research.result parent "
+        "ON (edge.payload->>'parent_result_id')=parent.record_id AND edge.run_id=parent.run_id "
+        "WHERE edge.run_id=? AND (edge.payload->>'relationship')='parent' "
+        "AND parent.record_id IS NULL",
+        [run_id],
+    ).fetchone()
+    if parents is None or parents[0]:
+        raise ValueError("research_parent_reference_missing")
 
 
 def verify_run(
-    connection: duckdb.DuckDBPyConnection, metadata: dict[str, Any], *, batch_size: int = 512
+    connection: duckdb.DuckDBPyConnection,
+    metadata: dict[str, Any],
+    *,
+    batch_size: int = 512,
+    progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """完整重建全部结果和物理投影，并报告安全子阶段；例：缺少子表记录仍抛projection_mismatch。
+
+    开始/结束及阶段事件不写入摘要，重跑保持同一运行键和JSON；失败不输出数据库异常原文。
+    """
+    validate_batch_size(batch_size)
+    trace = PersistenceProgress("verify", progress, metadata.get("run_id"))
+    try:
+        trace.emit("verify-start")
+        summary = _verify_run(connection, metadata, batch_size=batch_size, trace=trace)
+        trace.emit("verify-complete")
+        return summary
+    except Exception as error:
+        trace.failure(error)
+        raise
+
+
+def _verify_run(
+    connection: duckdb.DuckDBPyConnection,
+    metadata: dict[str, Any],
+    *,
+    batch_size: int,
+    trace: PersistenceProgress,
 ) -> dict[str, Any]:
     """重建全部结果及派生表，校验主键、引用、范围、三值状态和规则版本。
 
@@ -281,7 +335,6 @@ def verify_run(
     返回原始运行摘要，valid仅代表完整性，不表示历史可交易或数据齐备。
     """
     validate_batch_size(batch_size)
-    read_size = min(batch_size, READ_BATCH_SIZE)
     validate_consumption_registry()
     config = ResearchConfig.from_dict(metadata["config"])
     from .binding_builder import binding_summary, verify_binding_audit
@@ -310,63 +363,47 @@ def verify_run(
         tuple(metadata["selection"]),
     ):
         raise ValueError("research_run_identity_mismatch")
-    for table in RESEARCH_TABLES:
-        duplicate = connection.execute(
-            f'SELECT count(*)-count(DISTINCT record_id) FROM research."{table}" WHERE run_id=?',
-            [run_id],
-        ).fetchone()
-        if duplicate is None or duplicate[0]:
-            raise ValueError("research_primary_key_invalid")
-        orphan = connection.execute(
-            f'SELECT count(*) FROM research."{table}" child '
-            "LEFT JOIN research.result parent ON child.result_id=parent.record_id "
-            "AND child.run_id=parent.run_id WHERE child.run_id=? "
-            "AND parent.record_id IS NULL",
-            [run_id],
-        ).fetchone()
-        if orphan is None or orphan[0]:
-            raise ValueError("research_result_reference_missing")
-    parents = connection.execute(
-        "SELECT count(*) FROM research.lineage edge LEFT JOIN research.result parent "
-        "ON (edge.payload->>'parent_result_id')=parent.record_id AND edge.run_id=parent.run_id "
-        "WHERE edge.run_id=? AND (edge.payload->>'relationship')='parent' "
-        "AND parent.record_id IS NULL",
-        [run_id],
-    ).fetchone()
-    if parents is None or parents[0]:
-        raise ValueError("research_parent_reference_missing")
-
+    _verify_keys(connection, run_id, trace)
+    trace.step("rebuild")
+    actual = {table: [0, 0] for table in RESEARCH_TABLES}
     product_states: dict[str, Counter[str]] = {}
     consumption_counts: dict[str, Counter[str]] = {}
 
-    def rebuilt_rows() -> Iterator[tuple[str, dict[str, Any]]]:
+    def rebuilt_rows() -> Iterator[EncodedRecord]:
         """按有限批次反序列化结果并产生规范派生行；例：非法100分范围在此拒绝。
 
         只读取result表，避免物理子表被错误修改后成为校验真值来源。
         """
-        cursor = connection.execute("SELECT payload FROM research.result WHERE run_id=?", [run_id])
-        while batch := cursor.fetchmany(read_size):
-            for (payload,) in batch:
-                result = ResearchResult.from_json(payload)
-                validate_result_consumption(result)
-                count_consumption(consumption_counts, result)
-                envelope = result.envelope
-                if (
-                    envelope.run_id != run_id
-                    or envelope.model_version != RULE_VERSION
-                    or envelope.product_id not in metadata["products"]
-                    or envelope.analysis_as_of != metadata["analysis_as_of"]
-                ):
-                    raise ValueError("research_result_context_mismatch")
-                product_states.setdefault(envelope.product_id, Counter())[envelope.state.value] += 1
-                yield from record_rows(result)
+        for stored in _stored_records(connection, run_id, ("result",)):
+            # 同一物理行只读一次：原始规范载荷与模型规范化后的投影分别散列，仍能发现差异。
+            accumulate_records((stored,), actual)
+            result = ResearchResult.from_json(stored.payload)
+            validate_result_consumption(result)
+            count_consumption(consumption_counts, result)
+            envelope = result.envelope
+            if (
+                envelope.run_id != run_id
+                or envelope.model_version != RULE_VERSION
+                or envelope.product_id not in metadata["products"]
+                or envelope.analysis_as_of != metadata["analysis_as_of"]
+            ):
+                raise ValueError("research_result_context_mismatch")
+            product_states.setdefault(envelope.product_id, Counter())[envelope.state.value] += 1
+            for projected in project_result(result):
+                trace.advance(projected.table, 1, len(projected.payload.encode("utf-8")))
+                yield projected
+            trace.result_completed()
 
-    expected = fingerprints(rebuilt_rows())
-    actual = fingerprints(stored_rows(connection, run_id, batch_size))
+    expected = accumulate_records(rebuilt_rows())
+    trace.step("physical_projections")
+    for row in _stored_records(connection, run_id, RESEARCH_TABLES[1:]):
+        accumulate_records((row,), actual)
+        trace.advance(row.table, 1, len(row.payload.encode("utf-8")))
     if expected != actual or metadata["summary"]["counts"] != {
         table: values[0] for table, values in actual.items()
     }:
         raise ValueError("research_projection_mismatch")
+    trace.step("summary")
     summary = metadata["summary"]
     reconstructed = {
         "schema_version": RULE_VERSION,
