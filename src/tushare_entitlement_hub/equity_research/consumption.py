@@ -19,6 +19,7 @@ from .consumption_registry import (
     registry_fingerprint,
     resolve_consumer,
 )
+from .context_aggregation import MAXIMUM_DETAILED_ROWS, row_fingerprint
 from .models import MARKET_ENTITY, ResearchInputs, ResearchResult, ResearchRow
 
 CONSUMPTION_STATUSES = frozenset(
@@ -58,11 +59,27 @@ def consume_core(
 
     输入已适配daily.close=10且有证书，输出认证值10、字段引用和当前期间；
     无证书只记录字段存在，不把原始数字变成可计算值，无行则unknown。
+    P01当期超过64行时全量审计，只展示最多8行认证值，披露全量认证覆盖和抽样范围。
     """
     registration = next(item for item in load_consumption_registry() if item.spec.api == api)
     fields = registration.spec.selected_fields
     current = max((row.availability.data_as_of or "" for row in rows), default="")
     selected = tuple(row for row in rows if (row.availability.data_as_of or "") == current)
+    current_record_count = len(selected)
+    aggregation = None
+    certified_counts = {}
+    if product == "P01" and current_record_count > MAXIMUM_DETAILED_ROWS:
+        from .market_evidence import MarketEvidence
+
+        aggregation = MarketEvidence("core_" + api, fields, non_null_fields=True)
+        for row in selected:
+            aggregation.add(row, "current")
+        certified_counts = {
+            field: sum(row.number(field) is not None for row in selected) for field in fields
+        }
+        selected = tuple(row for _, (row, _) in sorted(aggregation.samples.items()))
+    elif product == "P01":
+        selected = tuple(sorted(selected, key=lambda row: row_fingerprint(row, fields)))
     references = unique_evidence(
         ref
         for row in selected
@@ -86,8 +103,17 @@ def consume_core(
         "facts": {
             "engine": PRODUCT_ALIASES[product],
             "current_period": current or None,
-            "current_record_count": len(selected),
+            "current_record_count": current_record_count,
             "certified_values": certified,
+            **(
+                {
+                    "market_evidence_audit": aggregation.summary(),
+                    "certified_values_scope": "evidence_sample_only",
+                    "certified_field_counts": certified_counts,
+                }
+                if aggregation is not None
+                else {}
+            ),
             "calculation_scope": "current_observation",
             "independent_evidence": False,
             "historical_pit_certified": False,

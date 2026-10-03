@@ -11,6 +11,7 @@ from ..product_foundation.numeric import price_gate
 from ..product_foundation.temporal import availability_gate
 from ..standard import normalize_date, normalize_period
 from .common import gate, latest, make_result, metric
+from .market_evidence import DAILY_FIELDS, LIMIT_FIELDS, SUSPENSION_FIELDS, MarketEvidence
 from .models import MARKET_ENTITY, ResearchInputs, ResearchResult, ResearchRow
 
 
@@ -148,7 +149,7 @@ def _suspension(
     inputs: ResearchInputs,
     identity: str,
     trade_day: str | None,
-) -> tuple[Truth, tuple[ResearchRow, ...], list[dict[str, Any]]]:
+) -> tuple[Truth, tuple[ResearchRow, ...]]:
     """按证券和同交易日连接停复牌，明确S优先保守排除，R只说明当日复牌记录。
 
     例：日线有成交但同日S记录仍输出TRUE；日内时段单列，不把日内停牌当全天无成交。
@@ -169,31 +170,10 @@ def _suspension(
     )
     rejected = len(accepted) != len(rows)
     rows = accepted
-    observations = []
-    for row in rows:
-        timing = row.text("suspend_timing")
-        scope = (
-            "intraday"
-            if timing is not None
-            else "full_day"
-            if ("suspend_timing" in row.raw and row.raw["suspend_timing"] in (None, ""))
-            else "unknown"
-        )
-        observations.append(
-            {
-                "entity_id": identity,
-                "trade_date": trade_day,
-                "source_record_id": row.availability.source_record_id,
-                "suspend_type": row.text("suspend_type"),
-                "suspend_timing": timing,
-                "scope": scope,
-                "available_at": row.availability.available_at,
-            }
-        )
     if any(
         row.text("suspend_type") == "S" and not row.raw.get("business_variant_key") for row in rows
     ):
-        return Truth.TRUE, rows, observations
+        return Truth.TRUE, rows
     uncertain = (
         rejected
         or bool(inputs.reasons("suspend_d", identity))
@@ -203,7 +183,7 @@ def _suspension(
         )
         or (not rows and (trade_day is None or "suspend_d" not in inputs.config.complete_scopes))
     )
-    return Truth.UNKNOWN if uncertain else Truth.FALSE, rows, observations
+    return Truth.UNKNOWN if uncertain else Truth.FALSE, rows
 
 
 def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
@@ -213,6 +193,21 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
     0.75、跌停占比0.5和E0=58.333…；前10%数量向上取整。任何一项缺失均不发布E0。
     无成交、未知价格、停牌和旧日记录分别记录，空输入也返回带缺口的单一结果。
     """
+    evidence = {
+        "eligible_daily": MarketEvidence("eligible_daily", DAILY_FIELDS),
+        "excluded_daily": MarketEvidence("excluded_daily", ("close", "vol", "amount")),
+        "limit_used": MarketEvidence("limit_used", LIMIT_FIELDS),
+        "suspension_used": MarketEvidence("suspension_used", SUSPENSION_FIELDS),
+        "suspension_contrary": MarketEvidence("suspension_contrary", SUSPENSION_FIELDS),
+    }
+    for role, api, fields in (
+        ("daily_input", "daily", DAILY_FIELDS),
+        ("limit_input", "stk_limit", LIMIT_FIELDS),
+        ("suspension_input", "suspend_d", SUSPENSION_FIELDS),
+    ):
+        evidence[role] = MarketEvidence(role, fields, sample=False)
+        for row in inputs.rows(api):
+            evidence[role].add(row, "retained")
     visible = {
         api: rows
         if api == "suspend_d"
@@ -243,22 +238,14 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
         "excluded_suspended_count": 0,
         "excluded_suspension_unknown_count": 0,
     }
-    suspension_observations = []
-    suspension_refs: list[EvidenceRef] = []
-    suspension_contrary: list[EvidenceRef] = []
     for identity in inputs.entity_ids:
         rows = tuple(daily_by_entity.get(identity, ()))
         selected = latest(
             tuple(row for row in rows if trade_day is not None and _day(row) == trade_day)
         )
-        suspension, suspension_rows, event_details = _suspension(inputs, identity, trade_day)
-        suspension_observations.extend(event_details)
-        state_refs = tuple(
-            ref
-            for row in suspension_rows
-            for ref in row.evidence("trade_date", "suspend_type", "suspend_timing")
-        )
-        suspension_refs.extend(state_refs)
+        suspension, suspension_rows = _suspension(inputs, identity, trade_day)
+        for row in suspension_rows:
+            evidence["suspension_used"].add(row, suspension.value)
         if suspension is not Truth.FALSE:
             counts[
                 "excluded_suspended_count"
@@ -266,7 +253,8 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
                 else "excluded_suspension_unknown_count"
             ] += 1
             excluded.extend((selected,) if selected is not None else rows)
-            suspension_contrary.extend(state_refs)
+            for row in suspension_rows:
+                evidence["suspension_contrary"].add(row, suspension.value)
             continue
         if selected is None:
             counts["excluded_price_unknown_count"] += 1
@@ -308,11 +296,11 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
             continue
         eligible.append(selected)
     denominator = len(eligible)
-    price_refs = tuple(
-        ref
-        for row in eligible
-        for ref in row.evidence("trade_date", "close", "vol", "amount", "pct_chg")
-    )
+    for row in eligible:
+        evidence["eligible_daily"].add(row, "eligible")
+    for row in excluded:
+        evidence["excluded_daily"].add(row, "excluded")
+    price_refs = evidence["eligible_daily"].references()
     breadth = (
         sum(cast(float, row.number("pct_chg")) > 0 for row in eligible) / denominator
         if denominator
@@ -329,7 +317,6 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
         else None
     )
     down_count = 0
-    limit_refs: list[EvidenceRef] = []
     limit_known = 0
     for row in eligible:
         limit = latest(
@@ -347,7 +334,8 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
         ):
             limit_known += 1
             down_count += int(cast(float, row.number("close", "元")) <= value)
-            limit_refs.extend(limit.evidence("down_limit", "trade_date"))
+            evidence["limit_used"].add(limit, "known")
+    limit_refs = evidence["limit_used"].references()
     down_share = down_count / denominator if denominator and limit_known == denominator else None
     features = (
         metric(
@@ -387,10 +375,10 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
     for api in ("cn_pmi", "cn_ppi", "cn_m", "sf_month", "cn_gdp", "cn_cpi"):
         state, observations = _macro(inputs, api)
         states.append(state)
-        macro_refs.extend(
-            ref
-            for row in observations
-            for ref in row.evidence(
+        role = "macro_" + api
+        evidence[role] = MarketEvidence(
+            role,
+            (
                 "month",
                 "quarter",
                 "pmi010000",
@@ -400,8 +388,11 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
                 "inc_month",
                 "gdp_yoy",
                 "nt_yoy",
-            )
+            ),
         )
+        for row in observations:
+            evidence[role].add(row, state["status"])
+        macro_refs.extend(evidence[role].references())
     result = make_result(
         inputs,
         "market_context/v1",
@@ -417,9 +408,9 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
         ),
         profile="market_observed_daily",
         contributions=components,
-        references=macro_refs + suspension_refs,
-        contrary=tuple(ref for row in excluded for ref in row.evidence("close", "vol", "amount"))
-        + tuple(suspension_contrary),
+        references=macro_refs + list(evidence["suspension_used"].references()),
+        contrary=evidence["excluded_daily"].references()
+        + evidence["suspension_contrary"].references(),
         details={
             "trade_date": trade_day,
             "denominator_count": denominator,
@@ -427,7 +418,8 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
             **counts,
             "down_limit_known_count": limit_known,
             "macro_states": states,
-            "suspension_observations": suspension_observations,
+            "suspension_observations": evidence["suspension_used"].suspension_observations(),
+            "market_evidence_audit": {role: item.summary() for role, item in evidence.items()},
             "research_topics": ["优先复核流动性"]
             if breadth is not None
             and breadth < 0.35
@@ -437,8 +429,18 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
             "thresholds_calibrated": False,
         },
     )
+    # 来源业务日期来自全量参与证据，不能因抽样漏掉较新日期。
+    source_as_of: dict[str, str] = {}
+    for role, item in evidence.items():
+        if role not in {"excluded_daily", "suspension_contrary"}:
+            for api, period in item.source_as_of.items():
+                source_as_of[api] = max(period, source_as_of.get(api, ""))
     result = replace(
         result,
-        envelope=replace(result.envelope, data_as_of=trade_day or inputs.analysis_as_of[:10]),
+        envelope=replace(
+            result.envelope,
+            data_as_of=trade_day or inputs.analysis_as_of[:10],
+            source_as_of=source_as_of,
+        ),
     )
     return (result,)
