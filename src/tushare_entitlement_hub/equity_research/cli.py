@@ -11,7 +11,7 @@ from .binding_builder import build_failure_code, write_research_config
 from .binding_io import BuildLimits
 from .models import ResearchConfig
 from .pipeline import run_research
-from .storage import validate_research
+from .storage import RESULT_PAYLOAD_CAPACITY_ERROR, validate_research
 
 research_app = typer.Typer(help="离线运行P01/P03/P04/P06/P07/P13股票研究产品。")
 
@@ -85,8 +85,13 @@ def run(
         summary = run_research(
             reference, output, as_of, inputs, tuple(product or ()), progress=print_progress
         )
-    except (ValueError, OSError, duckdb.Error, TypeError, KeyError):
-        typer.echo(encode({"status": "failed", "reason_codes": ["research_run_failed"]}))
+    except (ValueError, OSError, duckdb.Error, TypeError, KeyError) as error:
+        reason = (
+            RESULT_PAYLOAD_CAPACITY_ERROR
+            if isinstance(error, ValueError) and str(error) == RESULT_PAYLOAD_CAPACITY_ERROR
+            else "research_run_failed"
+        )
+        typer.echo(encode({"status": "failed", "reason_codes": [reason]}))
         raise typer.Exit(1) from None
     typer.echo(encode(summary))
     if summary["status"] == "incomplete":

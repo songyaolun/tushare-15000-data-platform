@@ -145,6 +145,17 @@ class ResearchInputs:
     entity_source_reasons: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @cached_property
+    def entity_kinds(self) -> dict[str, str]:
+        """一次索引显式实体类型，避免高基数上下文逐行重复遍历全部实体。
+
+        例如登记cn:index:I:published后，该键映射index；未登记身份不产生猜测值。
+        """
+        return {
+            entity.identity.entity_id: entity.identity.kind.value
+            for entity in self.config.foundation.entities
+        }
+
+    @cached_property
     def record_periods(self) -> dict[tuple[str, str], str]:
         """一次建立来源行的时间索引；例：(daily,id)映射交易日，不复制来源载荷。
 

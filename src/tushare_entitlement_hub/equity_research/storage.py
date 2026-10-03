@@ -26,6 +26,8 @@ from .source_validation import verify_source_evidence
 RESEARCH_TABLES = ("result", "feature", "contribution", "evidence", "gate", "signal", "lineage")
 MAXIMUM_INSERT_ROWS = 128
 MAXIMUM_INSERT_JSON_BYTES = 512 * 1024
+MAXIMUM_RESULT_JSON_BYTES = 8 * 1024 * 1024
+RESULT_PAYLOAD_CAPACITY_ERROR = "research_result_payload_capacity_exceeded"
 
 
 def run_identity(
@@ -162,7 +164,8 @@ def insert_rows(
     """按行数和JSON字节双重限批，以参数列写入，避免整批json_each反复解析。
 
     例：512条小记录至少分4次写入；两条各400KiB的JSON分别写入，单条超限记录独占
-    一批且不截断。表名受白名单控制，主键与载荷参数分离，冲突拒绝而非覆盖。
+    一批且不截断。单result最多8MiB UTF8，超限在其SQL调用前抛固定容量错误。
+    表名受白名单控制，主键与载荷参数分离，冲突拒绝而非覆盖。
     """
     if table not in RESEARCH_TABLES:
         raise ValueError("unknown_research_table")
@@ -183,6 +186,8 @@ def insert_rows(
     for row in rows:
         payload = encode(row["payload"])
         payload_bytes = len(payload.encode("utf-8"))
+        if table == "result" and payload_bytes > MAXIMUM_RESULT_JSON_BYTES:
+            raise ValueError(RESULT_PAYLOAD_CAPACITY_ERROR)
         if columns[0] and (
             len(columns[0]) >= MAXIMUM_INSERT_ROWS
             or pending_bytes + payload_bytes > MAXIMUM_INSERT_JSON_BYTES

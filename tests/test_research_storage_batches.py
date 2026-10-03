@@ -112,3 +112,75 @@ def test_insert_failure_rolls_back_previously_flushed_batches(monkeypatch):
             storage.insert_rows(connection, "result", expected + [expected[0]])
         connection.execute("ROLLBACK")
         assert connection.execute('SELECT COUNT(*) FROM research."result"').fetchone() == (0,)
+
+
+@pytest.mark.parametrize("offset", [-1, 0, 1])
+def test_result_payload_eight_mib_boundary_before_sql(offset):
+    """单结果8MiB边界前后按UTF8精确计量；超限时SQL从未执行，合法载荷完整持久化。"""
+    assert storage.MAXIMUM_RESULT_JSON_BYTES == 8 * 1024 * 1024
+    overhead = len(encode({"text": ""}).encode())
+    rows = storage_rows(["x" * (storage.MAXIMUM_RESULT_JSON_BYTES - overhead + offset)])
+    with duckdb.connect(":memory:", config=DATABASE_CONFIG) as connection:
+        storage.initialize_tables(connection)
+        recording = RecordingConnection(connection)
+        if offset > 0:
+            with pytest.raises(ValueError, match="^research_result_payload_capacity_exceeded$"):
+                storage.insert_rows(recording, "result", rows)
+            assert recording.batches == []
+            assert connection.execute("SELECT count(*) FROM research.result").fetchone() == (0,)
+        else:
+            storage.insert_rows(recording, "result", rows)
+            verify_written_rows(connection, rows)
+
+
+def test_result_capacity_counts_utf8_and_preserves_outer_transaction(monkeypatch):
+    """中文按UTF8字节而非字符计量；超限后的外层回滚清除先前已写结果，不截断任何载荷。"""
+    monkeypatch.setattr(storage, "MAXIMUM_RESULT_JSON_BYTES", len(encode({"text": "中"}).encode()))
+    with duckdb.connect(":memory:", config=DATABASE_CONFIG) as connection:
+        storage.initialize_tables(connection)
+        connection.execute("BEGIN TRANSACTION")
+        storage.insert_rows(connection, "result", storage_rows(["中"]))
+        with pytest.raises(ValueError, match="^research_result_payload_capacity_exceeded$"):
+            storage.insert_rows(connection, "result", storage_rows(["中文"]))
+        connection.execute("ROLLBACK")
+        assert connection.execute("SELECT count(*) FROM research.result").fetchone() == (0,)
+
+
+def test_cli_exposes_only_fixed_result_capacity_error(monkeypatch, tmp_path):
+    """存储容量错误沿research run返回固定原因码和退出1，不回显超大载荷或底层异常。"""
+    from typer.testing import CliRunner
+
+    from tushare_entitlement_hub.cli import app
+    from tushare_entitlement_hub.equity_research import cli
+
+    def oversized_result(*args, **kwargs):
+        """模拟存储容量门禁；任意运行参数均抛固定容量错误，不产生DuckDB或报告。"""
+        raise ValueError(storage.RESULT_PAYLOAD_CAPACITY_ERROR)
+
+    monkeypatch.setattr(cli, "run_research", oversized_result)
+    result = CliRunner().invoke(
+        app,
+        [
+            "research",
+            "run",
+            "--reference",
+            str(tmp_path / "ref"),
+            "--output",
+            str(tmp_path / "out"),
+            "--as-of",
+            "2026-10-03T12:00:00Z",
+            "--product",
+            "P01",
+        ],
+    )
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "status": "failed",
+        "reason_codes": ["research_result_payload_capacity_exceeded"],
+    }
+
+
+def test_unknown_storage_table_rejected_without_sql():
+    """表名白名单在任何SQL或容量处理前拒绝未知表；无需建立连接即可验证边界。"""
+    with pytest.raises(ValueError, match="^unknown_research_table$"):
+        storage.insert_rows(None, "result; DROP SCHEMA research", [])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from math import fsum, isclose, isfinite
 from typing import Any, cast
@@ -12,7 +13,9 @@ from ..product_foundation.contracts import EvidenceRef, Truth
 from ..product_foundation.numeric import price_gate
 from ..product_foundation.temporal import availability_gate
 from ..standard import normalize_date
+from ..store import digest
 from .common import gate, latest, unique_evidence
+from .context_aggregation import MAXIMUM_DETAILED_ROWS, ContextAggregate, context_status
 from .models import ResearchInputs, ResearchRow
 
 CONTEXT_FIELDS = {
@@ -191,14 +194,7 @@ def _kind(inputs: ResearchInputs, row: ResearchRow) -> str | None:
 
     不靠证券代码后缀猜测指数、股票或市场身份，保证指数不会混入股票候选。
     """
-    return next(
-        (
-            item.identity.kind.value
-            for item in inputs.config.foundation.entities
-            if item.identity.entity_id == row.entity_id
-        ),
-        None,
-    )
+    return inputs.entity_kinds.get(row.entity_id or "")
 
 
 def _peer(
@@ -1101,6 +1097,8 @@ def consume_context(
     当前状态，技术/组合来源的independent_evidence始终False，core_score_contribution恒为0。
     冲突优先，其次未知和历史受限；observed与not_applicable混合仅在无未决组时为observed。
     例：SSE已观测而SZSE未知，接口整体仍为unknown。
+    超过64条输入时逐组处理全部记录，只输出聚合统计、全量指纹及显式分层证据样本。
+    小规模多组门禁按组键附加稳定摘要，例如SSE与SZSE不会写入相同的gate主键。
     """
     if api not in CONTEXT_FIELDS or product not in {"P01", "P03"}:
         raise ValueError("unsupported_context_consumer")
@@ -1120,7 +1118,12 @@ def consume_context(
         key = (row.entity_id, row.text("ts_code")) + tuple(row.text(field) for field in keys)
         groups[key].append(row)
     observations = []
-    for group in groups.values():
+    aggregate = (
+        ContextAggregate(api, rows, usable, CONTEXT_FIELDS[api], inputs.analysis_as_of)
+        if len(rows) > MAXIMUM_DETAILED_ROWS
+        else None
+    )
+    for key, group in groups.items():
         candidates = tuple(group)
         if api in {"stk_weekly_monthly", "stk_week_month_adj"}:
             end_dates = [_day(row, "end_date", aligned=False) for row in group]
@@ -1130,14 +1133,16 @@ def consume_context(
             )
         selected = latest(candidates)
         if selected is None:
-            observations.append(
-                _result(
-                    "unknown",
-                    {"version_status": "ambiguous"},
-                    tuple(ref for row in group for ref in _refs(row, *CONTEXT_FIELDS[api])),
-                    "context_current_version_ambiguous",
-                )
+            observation = _result(
+                "unknown",
+                {"version_status": "ambiguous"},
+                tuple(ref for row in group for ref in _refs(row, *CONTEXT_FIELDS[api])),
+                "context_current_version_ambiguous",
             )
+            if aggregate is not None:
+                aggregate.add(key, len(group), observation)
+            else:
+                observations.append(observation)
             continue
         if api in PERIOD_APIS:
             observation = _period(inputs, selected)
@@ -1161,23 +1166,22 @@ def consume_context(
             observation = _quote_check(inputs, selected)
         else:
             observation = _technical(inputs, selected)
-        observations.append(observation)
-    states = {item["status"] for item in observations}
+        if aggregate is not None:
+            aggregate.add(key, len(group), observation)
+        else:
+            observations.append(observation)
+    aggregated = aggregate.finish() if aggregate is not None else None
     status = (
-        "conflict"
-        if "conflict" in states
-        else "unknown"
-        if "unknown" in states
-        else "not_enabled_due_to_history"
-        if "not_enabled_due_to_history" in states
-        else "observed"
-        if "observed" in states
-        else "not_applicable"
-        if states == {"not_applicable"}
-        else "unknown"
+        aggregated["status"]
+        if aggregated
+        else context_status({item["status"] for item in observations})
     )
-    reasons = {reason for item in observations for reason in item["reason_codes"]}
-    if not observations:
+    reasons = (
+        set(aggregated["reason_codes"])
+        if aggregated
+        else {reason for item in observations for reason in item["reason_codes"]}
+    )
+    if not groups:
         reasons.add("context_accepted_rows_unavailable")
     if len(usable) != len(rows):
         reasons.add("context_rows_rejected_by_quality_or_time")
@@ -1190,14 +1194,26 @@ def consume_context(
             "core_score_contribution": 0,
             "calculation_scope": "current_observation",
             "historical_pit_certified": False,
-            "observations": [
-                item["facts"]
-                | {"status": item["status"], "reason_codes": list(item["reason_codes"])}
-                for item in observations
-            ],
+            **(
+                aggregated["facts"]
+                if aggregated
+                else {
+                    "observations": [
+                        item["facts"]
+                        | {"status": item["status"], "reason_codes": list(item["reason_codes"])}
+                        for item in observations
+                    ]
+                }
+            ),
         },
-        "evidence_refs": unique_evidence(
-            ref for item in observations for ref in item["evidence_refs"]
+        "evidence_refs": aggregated["evidence_refs"]
+        if aggregated
+        else unique_evidence(ref for item in observations for ref in item["evidence_refs"]),
+        "gates": aggregated["gates"]
+        if aggregated
+        else tuple(
+            replace(check, gate_id=f"{check.gate_id}/{digest(key)}") if len(groups) > 1 else check
+            for key, item in zip(groups, observations, strict=True)
+            for check in item["gates"]
         ),
-        "gates": tuple(check for item in observations for check in item["gates"]),
     }
