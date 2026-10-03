@@ -70,11 +70,15 @@ def index_parents(
 
     例如同证券的 P04/P06/P07 返回一个含三个父 ID 的 bundle；重复相同对象不序列化，
     同 ID 的不同对象才比较完整规范 JSON，冲突报 research_event_parent_conflict。
-    错截止父结果不参与；缺实体报固定错误；每实体超过64个唯一父版本整组失败。
+    首先跳过错截止父结果，不校验其实体或比较内容；当前截止缺实体报固定错误。
+    首次接纳唯一ID时同步分组，第65个版本立即失败，不再读取剩余父结果流。
     多版本全部保留并标记歧义，父排序及摘要与输入顺序无关，也不受重复次数影响。
     """
     unique: dict[str, ResearchResult] = {}
+    grouped: dict[str, list[str]] = {}
     for parent in upstream:
+        if parent.envelope.analysis_as_of != inputs.analysis_as_of:
+            continue
         if not isinstance(parent.envelope.entity_id, str) or not parent.envelope.entity_id:
             raise ValueError("research_event_parent_entity_missing")
         result_id = parent.envelope.result_id
@@ -83,15 +87,13 @@ def index_parents(
             if previous is not parent and previous.to_json() != parent.to_json():
                 raise ValueError("research_event_parent_conflict")
         else:
+            result_ids = grouped.setdefault(parent.envelope.entity_id, [])
+            if len(result_ids) >= MAXIMUM_ENTITY_PARENTS:
+                raise ValueError("research_event_parent_capacity_exceeded")
+            result_ids.append(result_id)
             unique[result_id] = parent
-    grouped: dict[str, list[str]] = {}
-    for result_id, parent in unique.items():
-        if parent.envelope.analysis_as_of == inputs.analysis_as_of:
-            grouped.setdefault(parent.envelope.entity_id, []).append(result_id)
     bundles = {}
     for identity, result_ids in grouped.items():
-        if len(result_ids) > MAXIMUM_ENTITY_PARENTS:
-            raise ValueError("research_event_parent_capacity_exceeded")
         ordered = tuple(sorted(result_ids))
         parents = tuple(unique[result_id] for result_id in ordered)
         products = Counter(parent.envelope.product_id for parent in parents)
