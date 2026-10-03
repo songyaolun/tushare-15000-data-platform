@@ -1,5 +1,6 @@
 """不可用评分特征的审计信息与排除血缘回归测试，全程使用合成数据。"""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from tushare_entitlement_hub.product_foundation.contracts import DecisionEnvelop
 from tushare_entitlement_hub.product_foundation.features import (
     FeatureWeight,
     ScorePolicy,
+    rank_scores,
     score_features,
 )
 from tushare_entitlement_hub.product_foundation.storage import ProductStore
@@ -227,3 +229,19 @@ def test_optional_excluded_evidence_survives_scored_envelope_roundtrip() -> None
     assert optional.excluded_evidence == (future,)
     assert optional.evidence_refs == ()
     assert optional.contribution is None
+
+
+@pytest.mark.parametrize("missing_score", [False, True])
+def test_unavailable_score_is_excluded_from_rank_population(missing_score: bool) -> None:
+    """场景：分数为空或带阻断原因；预期：均不进入排名分母，保留空名次和缺样本原因。"""
+    policy = audit_score_policy()
+    result = score_features((feature(),), policy)
+    unavailable = replace(
+        result,
+        score=None if missing_score else result.score,
+        reason_codes=("required_feature_missing",),
+    )
+    ranked = rank_scores((unavailable,), policy.thresholds)[unavailable.result_id]
+    assert ranked.rank is None
+    assert ranked.peer_count == 0
+    assert ranked.reason_codes == ("insufficient_rank_sample",)

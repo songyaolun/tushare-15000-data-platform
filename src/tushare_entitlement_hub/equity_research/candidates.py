@@ -38,10 +38,24 @@ class _Candidate:
     exclusion_reason: str | None
 
 
+def _index_parents(results: tuple[ResearchResult, ...]) -> dict[str, ResearchResult | None]:
+    """一次索引全部父结果，只保留每实体的唯一对象，重复实体标记为无效。
+
+    先判同实体条数，再由调用方校验截止；不去重相同对象，也不预先丢弃错截止父结果。
+    例：输入[A当前、A未来、B当前]返回{A: None, B: B当前}，A不能任选当前版本。
+    扫描时间与父条数成正比，后续查找为常量时间，不序列化或复制父模型。
+    """
+    indexed: dict[str, ResearchResult | None] = {}
+    for result in results:
+        identity = result.envelope.entity_id
+        indexed[identity] = None if identity in indexed else result
+    return indexed
+
+
 def _parent_context(
     inputs: ResearchInputs,
     identity: str,
-    groups: tuple[tuple[ResearchResult, ...], ...],
+    groups: tuple[dict[str, ResearchResult | None], ...],
 ) -> tuple[tuple[ResearchResult, ...], tuple[QualityGateResult, ...], float | None, str]:
     """选择同实体、同截止的唯一父结果，风险和可行性缺失均保留未知。
 
@@ -54,13 +68,11 @@ def _parent_context(
     for index, (name, results) in enumerate(
         zip(("fundamental", "governance", "flow"), groups, strict=True)
     ):
-        matches = tuple(result for result in results if result.envelope.entity_id == identity)
-        valid = len(matches) == 1 and matches[0].envelope.analysis_as_of == inputs.analysis_as_of
-        if not valid:
+        parent = results.get(identity)
+        if parent is None or parent.envelope.analysis_as_of != inputs.analysis_as_of:
             if index:
                 checks.append(gate(name + "_parent", Truth.UNKNOWN, name + "_parent_unavailable"))
             continue
-        parent = matches[0]
         parents.append(parent)
         if index == 0:
             raw_type = parent.details.get("comp_type")
@@ -206,7 +218,9 @@ def build_candidates(
 
     例如 Q0=80、V0=L0=0.5 得到完整档 63.5 分；缺 Q0 时市场档为 50 分。
     PE/PB 非正值进入 problem_research，缺风险检查不会被任何高分抵消。
+    三类父集合各索引一次；例如5911实体和三类各5911父结果只扫描17733条父记录。
     """
+    parent_indexes = tuple(_index_parents(group) for group in (fundamental, governance, flow))
     facts: dict[str, _Candidate] = {}
     selected_date = max(
         (row.availability.data_as_of or "" for row in inputs.rows("daily")), default=""
@@ -215,7 +229,7 @@ def build_candidates(
         parents, parent_gates, quality, company_type = _parent_context(
             inputs,
             identity,
-            (fundamental, governance, flow),
+            parent_indexes,
         )
         daily = latest(inputs.rows("daily", identity))
         valuation = latest(inputs.rows("daily_basic", identity))

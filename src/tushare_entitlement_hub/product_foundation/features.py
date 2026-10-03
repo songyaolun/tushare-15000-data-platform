@@ -168,6 +168,8 @@ def percentile_ranks(
 
     例如三条 [10,10,20] 且最小样本为 3，输出 [0.25,0.25,1]；全同值为 0.5。
     空值和不合格行不计分母，最上层仍不足则给空分位及原因。
+    每个实际选中的同行池只计算一次平均秩；例如5911行共享同池时仅排序一次。
+    排名缓存只属于本次调用，键包含完整截止、范围、档位和路径，不跨输入复用。
     """
     if len({row.entity_id for row in rows}) != len(rows):
         raise ValueError("duplicate_peer_entity")
@@ -178,6 +180,7 @@ def percentile_ranks(
                 pools[
                     (row.analysis_as_of, row.scope_id, row.feature_profile, row.peer_path[:length])
                 ][row.entity_id] = row.value
+    ranks: dict[tuple[str, str, str, tuple[str, ...]], dict[str, float]] = {}
     result = {}
     for row in rows:
         choice = PercentileResult(
@@ -188,11 +191,17 @@ def percentile_ranks(
         )
         if row.eligible and row.value is not None:
             for length in range(len(row.peer_path), 0, -1):
-                pool = pools[
-                    (row.analysis_as_of, row.scope_id, row.feature_profile, row.peer_path[:length])
-                ]
+                key = (
+                    row.analysis_as_of,
+                    row.scope_id,
+                    row.feature_profile,
+                    row.peer_path[:length],
+                )
+                pool = pools[key]
                 if len(pool) >= policy.minimum_peer_count:
-                    percentile = (_average_ranks(pool)[row.entity_id] - 1) / (len(pool) - 1)
+                    if key not in ranks:
+                        ranks[key] = _average_ranks(pool)
+                    percentile = (ranks[key][row.entity_id] - 1) / (len(pool) - 1)
                     choice = PercentileResult(
                         percentile=1 - percentile if lower_is_better else percentile,
                         peer_count=len(pool),
