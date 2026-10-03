@@ -30,6 +30,24 @@ MAXIMUM_RESULT_JSON_BYTES = 8 * 1024 * 1024
 RESULT_PAYLOAD_CAPACITY_ERROR = "research_result_payload_capacity_exceeded"
 
 
+class ResultPayloadCapacityError(ValueError):
+    """结果超限的内部诊断：只保留产品、实体和字节数，异常文本仍为固定安全码。"""
+
+    def __init__(self, payload: Any, payload_bytes: int) -> None:
+        """提取最小定位字段，诊断属性不保存载荷对象；例如P06市场结果超限可读取三个同名属性。
+
+        product_id/entity_id缺失或不是字符串时记None；str(error)始终只返回容量原因码，
+        CLI不输出诊断属性、原文或JSON载荷。
+        """
+        super().__init__(RESULT_PAYLOAD_CAPACITY_ERROR)
+        envelope = payload.get("envelope") if isinstance(payload, dict) else None
+        metadata = envelope if isinstance(envelope, dict) else {}
+        product_id, entity_id = metadata.get("product_id"), metadata.get("entity_id")
+        self.product_id = product_id if isinstance(product_id, str) else None
+        self.entity_id = entity_id if isinstance(entity_id, str) else None
+        self.payload_bytes = payload_bytes
+
+
 def run_identity(
     reference_hash: str, cutoff: str, config: ResearchConfig, selection: tuple[str, ...]
 ) -> str:
@@ -187,7 +205,7 @@ def insert_rows(
         payload = encode(row["payload"])
         payload_bytes = len(payload.encode("utf-8"))
         if table == "result" and payload_bytes > MAXIMUM_RESULT_JSON_BYTES:
-            raise ValueError(RESULT_PAYLOAD_CAPACITY_ERROR)
+            raise ResultPayloadCapacityError(row["payload"], payload_bytes)
         if columns[0] and (
             len(columns[0]) >= MAXIMUM_INSERT_ROWS
             or pending_bytes + payload_bytes > MAXIMUM_INSERT_JSON_BYTES

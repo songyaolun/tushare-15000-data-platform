@@ -7,7 +7,13 @@ from dataclasses import replace
 from math import isfinite
 from typing import Any
 
-from ..product_foundation.contracts import EvidenceRef, QualityGateResult, Truth
+from ..product_foundation.contracts import (
+    ActionState,
+    EvidenceRef,
+    ProductState,
+    QualityGateResult,
+    Truth,
+)
 from ..product_foundation.temporal import availability_gate
 from ..store import encode
 from .common import gate, make_result, unique_evidence
@@ -137,14 +143,18 @@ def consumption_rows(
     registration: ConsumptionRegistration,
     entity_id: str,
 ) -> tuple[ResearchRow, ...]:
-    """按领域范围选行，市场或来源结果保留未关联实体，股票只接显式关联。
+    """按注册范围选行，市场承接非股票来源，stock行只进入对应实体结果。
 
     输入P06股票A和已认证转债关系，输出关联债券行；无关系输出空元组。
     factor_list/hm_list按实际因子或席位名称关联，未使用字典留在来源结果。
+    例：MARKET_ENTITY/share_float返回空，MARKET_ENTITY/cb_basic返回该来源全部行；
+    market范围始终返回全来源，普通实体的关联与索引规则保持不变。
     """
     api, scope = registration.spec.api, registration.entity_scope
-    if entity_id == MARKET_ENTITY or scope == "market":
+    if scope == "market":
         return inputs.rows(api)
+    if entity_id == MARKET_ENTITY:
+        return inputs.rows(api) if scope in {"bond", "dictionary", "event"} else ()
     if scope == "bond":
         related = {
             relation.from_entity_id
@@ -248,6 +258,8 @@ def execute_consumption(
         inputs.reasons(spec.api, entity_id)
     )
     if entity_id == MARKET_ENTITY:
+        if registration.entity_scope == "stock":
+            reasons.add("stock_scope_requires_entity")
         reasons.update(
             reason
             for key, values in inputs.entity_source_reasons.items()
@@ -296,6 +308,37 @@ def execute_consumption(
     return record, references, checks
 
 
+def stock_scope_gaps(
+    inputs: ResearchInputs,
+    registrations: tuple[ConsumptionRegistration, ...],
+    entities: set[str],
+) -> dict[str, dict[str, int | bool]]:
+    """按产品一次清点未获实体结果承接的stock行，只保存来源级计数，不复制行或证据。
+
+    例：share_float有1条无实体行和1条已映射但无结果的行，分别记unmapped_retained_rows=1、
+    unrepresented_retained_rows=1；适配器已排除的无实体行仅标记adapter_entity_rejections，
+    其数量仍计入扫描excluded_rows。所有已有对应结果的stock行不构成缺口。
+    """
+    gaps = {}
+    for item in registrations:
+        if item.entity_scope != "stock":
+            continue
+        unmapped = unrepresented = 0
+        for row in inputs.rows(item.spec.api):
+            if row.entity_id is None or row.entity_id == MARKET_ENTITY:
+                unmapped += 1
+            elif row.entity_id not in entities:
+                unrepresented += 1
+        rejected = "stock_entity_unresolved" in inputs.source_reasons.get(item.spec.api, ())
+        if unmapped or unrepresented or rejected:
+            gaps[item.spec.api] = {
+                "unmapped_retained_rows": unmapped,
+                "unrepresented_retained_rows": unrepresented,
+                "adapter_entity_rejections": rejected,
+            }
+    return gaps
+
+
 def attach_consumption(
     inputs: ResearchInputs,
     product: str,
@@ -305,16 +348,29 @@ def attach_consumption(
 
     输入只有未关联转债的P06，输出保留债券引用的市场范围结果；
     原股票分数、排名与贡献保持原值，新增旁证门禁不提升研究资格。
+    无对应实体结果的stock行只在市场结果保存缺口计数，不重新消费或任意分配给股票。
     """
     registrations = tuple(
         item
         for item in load_consumption_registry()
         if PRODUCT_ALIASES[item.spec.product] == product
     )
-    if not any(result.envelope.entity_id == MARKET_ENTITY for result in results) and any(
-        item.entity_scope in {"bond", "dictionary", "market", "event"}
-        and inputs.rows(item.spec.api)
-        for item in registrations
+    gaps = stock_scope_gaps(
+        inputs,
+        registrations,
+        {
+            result.envelope.entity_id
+            for result in results
+            if result.envelope.entity_id != MARKET_ENTITY
+        },
+    )
+    if not any(result.envelope.entity_id == MARKET_ENTITY for result in results) and (
+        gaps
+        or any(
+            item.entity_scope in {"bond", "dictionary", "market", "event"}
+            and inputs.rows(item.spec.api)
+            for item in registrations
+        )
     ):
         results += (
             make_result(
@@ -328,6 +384,7 @@ def attach_consumption(
         )
     attached = []
     for result in results:
+        has_stock_gaps = result.envelope.entity_id == MARKET_ENTITY and bool(gaps)
         records: list[dict[str, Any]] = []
         references: list[EvidenceRef] = []
         checks: list[QualityGateResult] = []
@@ -336,14 +393,25 @@ def attach_consumption(
             records.append(record)
             references.extend(evidence)
             checks.extend(gates)
+        if has_stock_gaps:
+            checks.append(
+                gate("stock_scope_gaps", Truth.UNKNOWN, "stock_rows_without_entity_result")
+            )
         evidence = unique_evidence(result.envelope.evidence_refs + tuple(references))
         periods = dict(result.envelope.source_as_of)
         for reference in evidence:
             period = inputs.record_periods.get((reference.source_api, reference.source_record_id))
             if period is not None:
                 periods[reference.source_api] = max(period, periods.get(reference.source_api, ""))
+        incomplete = has_stock_gaps and result.envelope.state not in {
+            ProductState.BLOCKED,
+            ProductState.UNSUPPORTED,
+        }
         envelope = replace(
             result.envelope,
+            state=ProductState.INCOMPLETE if incomplete else result.envelope.state,
+            action_state=ActionState.NO_CONCLUSION if incomplete else result.envelope.action_state,
+            decision_allowed=False if has_stock_gaps else result.envelope.decision_allowed,
             evidence_refs=evidence,
             source_as_of=periods,
             quality_gates=result.envelope.quality_gates + tuple(checks),
@@ -358,6 +426,8 @@ def attach_consumption(
             "consumption_version": CONSUMPTION_VERSION,
             "consumption": records,
         }
+        if has_stock_gaps:
+            details["stock_scope_gaps"] = gaps
         attached.append(replace(result, envelope=envelope, details_json=encode(details)))
     return tuple(attached)
 
@@ -404,6 +474,8 @@ def validate_result_consumption(result: ResearchResult) -> None:
         quality = record["field_quality"]
         if type(count) is not int or count < 0 or set(quality) != set(item.spec.selected_fields):
             raise ValueError("research_consumption_field_quality_invalid")
+        if result.envelope.entity_id == MARKET_ENTITY and item.entity_scope == "stock" and count:
+            raise ValueError("research_consumption_scope_mismatch")
         for values in quality.values():
             if (
                 set(values) != {"present_rows", "missing_rows", "certified_rows", "nonfinite_rows"}

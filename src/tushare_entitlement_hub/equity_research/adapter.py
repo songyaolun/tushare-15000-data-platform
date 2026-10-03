@@ -390,9 +390,15 @@ def load_inputs(
                 for raw in batch:
                     try:
                         row = adapt_row(raw, contracts[api], effective_config, cutoff)
-                    except (ValueError, TypeError, KeyError, OverflowError):
+                    except (ValueError, TypeError, KeyError, OverflowError) as error:
                         counts["excluded_rows"] += 1
                         reasons.add("rows_excluded_by_adapter")
+                        if (
+                            api not in UNRESOLVED_APIS
+                            and isinstance(error, ValueError)
+                            and str(error) in {"entity_unresolved", "entity_business_time_unknown"}
+                        ):
+                            reasons.add("stock_entity_unresolved")
                         continue
                     identity = retention_identity(row)
                     if overflow_source or identity in overflow_entities:
