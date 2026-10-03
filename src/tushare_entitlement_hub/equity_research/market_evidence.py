@@ -12,7 +12,7 @@ from .context_aggregation import fingerprint_leaf, row_fingerprint
 from .context_digest import DIGEST_ALGORITHM, MultisetDigest
 from .models import ResearchRow
 
-MARKET_EVIDENCE_VERSION = "market-evidence/v1"
+MARKET_EVIDENCE_VERSION = "market-evidence/v2"
 MAXIMUM_SAMPLE_ROWS = 8
 MAXIMUM_REFERENCE_BYTES = 4096
 MAXIMUM_OBSERVATION_BYTES = 4096
@@ -35,7 +35,8 @@ class MarketEvidence:
         """指定角色、关键字段和是否展示引用，初始化固定大小的多重集摘要。
 
         例如MarketEvidence('daily_input', DAILY_FIELDS, sample=False)只审计原始输入；
-        默认展示按行摘要排序的8个不同样本，重复行仍逐次参与总数与摘要。
+        每个有引用的状态保留至少一行，剩余名额按行摘要补齐，总数最多8行。
+        例如大量false与一条unknown并存时仍保留unknown，重复行仍逐次参与总数与摘要。
         non_null_fields=True沿用消费层仅引用非空字段的规则，无字段行仍计入摘要。
         """
         self.role = role
@@ -47,6 +48,7 @@ class MarketEvidence:
         self.candidate_reference_count = 0
         self.source_as_of: dict[str, str] = {}
         self.samples: dict[str, tuple[ResearchRow, tuple[EvidenceRef, ...]]] = {}
+        self.sample_statuses: dict[str, str] = {}
 
     def add(self, row: ResearchRow, status: str) -> None:
         """散列一条参与行的来源、时间、原值、证书及状态，并更新全量引用出现次数。
@@ -78,8 +80,25 @@ class MarketEvidence:
                 row.availability.data_as_of, self.source_as_of.get(row.source_api, "")
             )
         self.samples[fingerprint] = row, references
+        self.sample_statuses[fingerprint] = status
         if len(self.samples) > self.maximum_samples:
-            del self.samples[max(self.samples)]
+            self._trim_samples()
+
+    def _trim_samples(self) -> None:
+        """保留每个状态的最小摘要，再淘汰非必留样本中最大的摘要，只处理至多9个候选。
+
+        例如8条false后加入一条true，淘汰一条false并保留true；反序输入得到相同样本。
+        可展示状态超过总预算时抛固定容量错误，不静默丢失状态；不维护全量哈希集合。
+        """
+        mandatory: dict[str, str] = {}
+        for fingerprint in sorted(self.samples):
+            mandatory.setdefault(self.sample_statuses[fingerprint], fingerprint)
+        removable = self.samples.keys() - set(mandatory.values())
+        if not removable:
+            raise ValueError("research_market_sample_status_capacity_exceeded")
+        dropped = max(removable)
+        del self.samples[dropped]
+        del self.sample_statuses[dropped]
 
     def references(self) -> tuple[EvidenceRef, ...]:
         """返回已排序、去重的有界引用，保留原始定位字段，不改写或缩短来源身份。
@@ -102,8 +121,15 @@ class MarketEvidence:
             "full_fingerprint": self.rows_digest.hexdigest(),
             "fingerprint_algorithm": DIGEST_ALGORITHM,
             "status_counts": dict(sorted(self.status_counts.items())),
+            "sampled_status_counts": dict(sorted(Counter(self.sample_statuses.values()).items())),
             "sampling_policy": {
-                "method": "lowest_row_sha256" if self.maximum_samples else "fingerprint_only",
+                "method": "status_stratified_lowest_row_sha256"
+                if self.maximum_samples
+                else "fingerprint_only",
+                "stratify_by": "status",
+                "eligible_rows": "rows_with_candidate_references",
+                "minimum_rows_per_status": 1 if self.maximum_samples else 0,
+                "remaining_slots": "lowest_row_sha256",
                 "maximum_rows": self.maximum_samples,
                 "maximum_references": self.maximum_samples * len(self.fields),
                 "maximum_reference_bytes": MAXIMUM_REFERENCE_BYTES,
@@ -119,6 +145,7 @@ class MarketEvidence:
                     "source_api": row.source_api,
                     "source_record_id": row.availability.source_record_id,
                     "row_fingerprint": fingerprint,
+                    "status": self.sample_statuses[fingerprint],
                 }
                 for fingerprint, (row, _) in sorted(self.samples.items())
             ],

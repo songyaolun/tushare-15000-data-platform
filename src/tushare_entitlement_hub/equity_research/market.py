@@ -58,6 +58,7 @@ def _macro(inputs: ResearchInputs, api: str) -> tuple[dict[str, Any], tuple[Rese
 
     PMI采用认证index点数，增速采用ratio，社融当月量采用CNY元。宏观不进入E0。
     同期间多版本须能唯一选择，未来期间与尚未可见记录不能使用；公开可用时间单列。
+    返回当前及相邻期间的全部候选供审计；例如上期两份歧义版本也入指纹，不用于计算。
     """
     fields, unit = {
         "cn_pmi": (("pmi010000",), "index"),
@@ -93,15 +94,17 @@ def _macro(inputs: ResearchInputs, api: str) -> tuple[dict[str, Any], tuple[Rese
         state["reason_codes"].append("macro_period_unavailable")
         return state, ()
     period = max(periods)
-    current = latest(tuple(periods[period]))
-    previous = latest(tuple(periods.get(period - 1, ())))
+    current_candidates = tuple(periods[period])
+    previous_candidates = tuple(periods.get(period - 1, ()))
+    observations = previous_candidates + current_candidates
+    current = latest(current_candidates)
+    previous = latest(previous_candidates)
     if current is None or current.raw.get("business_variant_key"):
         state["reason_codes"].append("macro_version_ambiguous")
-        return state, tuple(periods[period])
+        return state, observations
     state["period"] = normalize_period(current.text(period_field), period_field)
     state["available_at"] = current.availability.available_at
     state["public_available_at"] = current.availability.public_available_at
-    observations = (current,) if previous is None else (previous, current)
     values = [current.number(field, unit) for field in fields]
     if any(value is None for value in values) or (
         api == "sf_month" and current.numeric["inc_month"].currency != "CNY"
@@ -197,6 +200,7 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
         "eligible_daily": MarketEvidence("eligible_daily", DAILY_FIELDS),
         "excluded_daily": MarketEvidence("excluded_daily", ("close", "vol", "amount")),
         "limit_used": MarketEvidence("limit_used", LIMIT_FIELDS),
+        "suspension_all": MarketEvidence("suspension_all", SUSPENSION_FIELDS),
         "suspension_used": MarketEvidence("suspension_used", SUSPENSION_FIELDS),
         "suspension_contrary": MarketEvidence("suspension_contrary", SUSPENSION_FIELDS),
     }
@@ -245,7 +249,9 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
         )
         suspension, suspension_rows = _suspension(inputs, identity, trade_day)
         for row in suspension_rows:
-            evidence["suspension_used"].add(row, suspension.value)
+            evidence["suspension_all"].add(row, suspension.value)
+            role = "suspension_used" if suspension is Truth.FALSE else "suspension_contrary"
+            evidence[role].add(row, suspension.value)
         if suspension is not Truth.FALSE:
             counts[
                 "excluded_suspended_count"
@@ -253,8 +259,6 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
                 else "excluded_suspension_unknown_count"
             ] += 1
             excluded.extend((selected,) if selected is not None else rows)
-            for row in suspension_rows:
-                evidence["suspension_contrary"].add(row, suspension.value)
             continue
         if selected is None:
             counts["excluded_price_unknown_count"] += 1
@@ -418,7 +422,7 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
             **counts,
             "down_limit_known_count": limit_known,
             "macro_states": states,
-            "suspension_observations": evidence["suspension_used"].suspension_observations(),
+            "suspension_observations": evidence["suspension_all"].suspension_observations(),
             "market_evidence_audit": {role: item.summary() for role, item in evidence.items()},
             "research_topics": ["优先复核流动性"]
             if breadth is not None
@@ -432,7 +436,7 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
     # 来源业务日期来自全量参与证据，不能因抽样漏掉较新日期。
     source_as_of: dict[str, str] = {}
     for role, item in evidence.items():
-        if role not in {"excluded_daily", "suspension_contrary"}:
+        if role not in {"excluded_daily", "suspension_contrary", "suspension_all"}:
             for api, period in item.source_as_of.items():
                 source_as_of[api] = max(period, source_as_of.get(api, ""))
     result = replace(

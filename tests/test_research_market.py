@@ -389,7 +389,7 @@ def test_same_day_suspension_excludes_traded_price_without_claiming_no_trade(tim
     assert result.details["excluded_no_trade_count"] == 0
     assert result.details["suspension_observations"][0]["scope"] == scope
     assert any(ref.source_api == "suspend_d" for ref in result.envelope.contrary_evidence)
-    assert any(ref.source_api == "suspend_d" for ref in result.envelope.evidence_refs)
+    assert not any(ref.source_api == "suspend_d" for ref in result.envelope.evidence_refs)
 
 
 def test_suspended_stock_without_daily_price_is_still_counted():

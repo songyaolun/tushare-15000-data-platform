@@ -123,7 +123,8 @@ def test_market_all_roles_count_every_row_and_samples_resolve(
         "eligible_daily": (1024, 5120),
         "excluded_daily": (512, 1536),
         "limit_used": (1024, 2048),
-        "suspension_used": (1280, 3840),
+        "suspension_all": (1280, 3840),
+        "suspension_used": (1024, 3072),
         "suspension_contrary": (256, 768),
     }
     sources = {
@@ -147,7 +148,8 @@ def test_market_all_roles_count_every_row_and_samples_resolve(
     ):
         source = sources[reference.source_api, reference.source_record_id]
         assert reference in source.evidence(*reference.fields)
-    assert audit["suspension_used"]["status_counts"] == {"false": 1024, "true": 256}
+    assert audit["suspension_all"]["status_counts"] == {"false": 1024, "true": 256}
+    assert audit["suspension_used"]["status_counts"] == {"false": 1024}
 
 
 def test_market_reversing_all_inputs_is_byte_identical(large_market_inputs, large_market_result):

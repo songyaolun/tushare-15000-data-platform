@@ -129,9 +129,11 @@ def test_one_security_many_suspension_events_never_expands_details():
     )
     result = build_market(market_inputs(1, (row(), *events)))[0]
     assert result.details["excluded_suspended_count"] == 1
-    assert result.details["market_evidence_audit"]["suspension_used"]["total_rows"] == 65
+    assert result.details["market_evidence_audit"]["suspension_all"]["total_rows"] == 65
+    assert result.details["market_evidence_audit"]["suspension_used"]["total_rows"] == 0
     assert len(result.details["suspension_observations"]) == 8
-    assert len(result.envelope.evidence_refs) == 16
+    assert not result.envelope.evidence_refs
+    assert len(result.envelope.contrary_evidence) == 19
     reverse = build_market(market_inputs(1, (row(), *reversed(events))))[0]
     assert result.to_json() == reverse.to_json()
 
@@ -182,7 +184,7 @@ def test_ambiguous_macro_base_and_consumption_are_both_bounded(count):
     record = next(item for item in result.details["consumption"] if item["api"] == "cn_ppi")
     assert record["retained_row_count"] == record["facts"]["current_record_count"] == count
     assert len(result.to_json().encode()) < 512 * 1024
-    if count > 64:
+    if count > 8:
         facts = record["facts"]
         assert facts["certified_values_scope"] == "evidence_sample_only"
         assert facts["certified_field_counts"]["ppi_yoy"] == count

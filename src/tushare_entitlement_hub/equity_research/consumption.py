@@ -19,7 +19,8 @@ from .consumption_registry import (
     registry_fingerprint,
     resolve_consumer,
 )
-from .context_aggregation import MAXIMUM_DETAILED_ROWS, row_fingerprint
+from .context_aggregation import row_fingerprint
+from .market_evidence import MAXIMUM_SAMPLE_ROWS
 from .models import MARKET_ENTITY, ResearchInputs, ResearchResult, ResearchRow
 
 CONSUMPTION_STATUSES = frozenset(
@@ -59,7 +60,7 @@ def consume_core(
 
     输入已适配daily.close=10且有证书，输出认证值10、字段引用和当前期间；
     无证书只记录字段存在，不把原始数字变成可计算值，无行则unknown。
-    P01当期超过64行时全量审计，只展示最多8行认证值，披露全量认证覆盖和抽样范围。
+    P01当期超过8行时全量审计，只展示最多8行认证值，披露全量认证覆盖和抽样范围。
     """
     registration = next(item for item in load_consumption_registry() if item.spec.api == api)
     fields = registration.spec.selected_fields
@@ -68,7 +69,7 @@ def consume_core(
     current_record_count = len(selected)
     aggregation = None
     certified_counts = {}
-    if product == "P01" and current_record_count > MAXIMUM_DETAILED_ROWS:
+    if product == "P01" and current_record_count > MAXIMUM_SAMPLE_ROWS:
         from .market_evidence import MarketEvidence
 
         aggregation = MarketEvidence("core_" + api, fields, non_null_fields=True)
