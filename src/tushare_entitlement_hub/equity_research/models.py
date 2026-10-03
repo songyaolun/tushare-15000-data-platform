@@ -10,7 +10,7 @@ from typing import Any, Literal
 from ..product_foundation.bindings import FoundationBindings
 from ..product_foundation.config import FoundationPolicy
 from ..product_foundation.contracts import DecisionEnvelope, EvidenceRef, Truth
-from ..product_foundation.entities import EntityRelation
+from ..product_foundation.entities import EntityAlias, EntityRelation
 from ..product_foundation.model import Count, EntityId, Identifier, Model, ReasonCode
 from ..product_foundation.numeric import TypedFact, source_evidence
 from ..product_foundation.temporal import AvailabilityFact
@@ -50,6 +50,7 @@ class ResearchConfig(Model):
     maximum_rows_per_entity_source: Count = 512
     maximum_source_rows: Count = 32768
     maximum_total_rows: Count = 131072
+    binding_audit_json: str = "{}"
 
     def __post_init__(self) -> None:
         """检查配置版本、容量与同行路径；例：容量为0或空同行路径均拒绝。
@@ -57,6 +58,8 @@ class ResearchConfig(Model):
         输入合法配置得到不可变认证边界，complete_scopes须使用API名称。
         """
         super().__post_init__()
+        if not isinstance(json.loads(self.binding_audit_json), dict):
+            raise ValueError("invalid_binding_audit")
         if (
             self.version != RULE_VERSION
             or self.maximum_rows_per_entity_source < 1
@@ -65,6 +68,26 @@ class ResearchConfig(Model):
             or any(not path for path in self.peer_paths.values())
         ):
             raise ValueError("invalid_research_configuration")
+
+    @cached_property
+    def aliases_by_key(self) -> dict[tuple[str, str], tuple[EntityAlias, ...]]:
+        """按命名空间和代码一次建立别名索引，保留同代码的全部生命周期及冲突。
+
+        输入5000个股票别名，逐行解析只检查当前代码的候选；同代码两实体仍失败关闭。
+        """
+        grouped: dict[tuple[str, str], list[EntityAlias]] = {}
+        for alias in self.foundation.aliases:
+            grouped.setdefault((alias.namespace, alias.alias), []).append(alias)
+        return {key: tuple(values) for key, values in grouped.items()}
+
+    @property
+    def binding_audit(self) -> dict[str, Any]:
+        """返回生成配置的独立审计对象；例：默认配置返回{}，不自动信任来源。
+
+        输入配置内的规范JSON，输出可供运行边界核验的指纹、截止及来源缺口。
+        """
+        result: dict[str, Any] = json.loads(self.binding_audit_json)
+        return result
 
 
 @dataclass(frozen=True, kw_only=True)

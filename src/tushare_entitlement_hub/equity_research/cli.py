@@ -7,11 +7,56 @@ import duckdb
 import typer
 
 from ..store import encode
+from .binding_builder import build_failure_code, write_research_config
+from .binding_io import BuildLimits
 from .models import ResearchConfig
 from .pipeline import run_research
 from .storage import validate_research
 
 research_app = typer.Typer(help="离线运行P01/P03/P04/P06/P07/P13股票研究产品。")
+
+
+@research_app.command("build-config")
+def build_config(
+    reference: Annotated[Path, typer.Option(help="只读reference DuckDB")],
+    output: Annotated[Path, typer.Option(help="ResearchConfig JSON输出")],
+    as_of: Annotated[str, typer.Option("--as-of", help="带时区的绑定生成截止时间")],
+    audit: Annotated[Path | None, typer.Option(help="独立审计JSON，默认config.audit.json")] = None,
+    batch_size: Annotated[int, typer.Option(help="单批最多512行")] = 128,
+    maximum_source_rows: Annotated[int, typer.Option(help="单接口扫描硬上限")] = 2_000_000,
+    maximum_total_rows: Annotated[int, typer.Option(help="全库扫描硬上限")] = 5_000_000,
+    maximum_entities: Annotated[int, typer.Option(help="主数据条数硬上限")] = 50_000,
+) -> None:
+    """显式生成研究绑定，成功0、失败1；stdout提供不含来源载荷的机器审计摘要。
+
+    例：research build-config --reference ref.duckdb --output config.json --as-of
+    2026-10-03T12:00:00Z，随后将config.json传入research run的--config选项。
+    """
+    try:
+        summary = write_research_config(
+            reference,
+            output,
+            as_of,
+            audit_path=audit,
+            limits=BuildLimits(
+                batch_size=batch_size,
+                maximum_source_rows=maximum_source_rows,
+                maximum_total_rows=maximum_total_rows,
+                maximum_entities=maximum_entities,
+            ),
+        )
+    except (ValueError, OSError, duckdb.Error, TypeError, KeyError) as error:
+        typer.echo(
+            encode(
+                {
+                    "status": "failed",
+                    "reason_codes": ["research_build_config_failed"],
+                    "detail_code": build_failure_code(error),
+                }
+            )
+        )
+        raise typer.Exit(1) from None
+    typer.echo(encode(summary))
 
 
 def print_progress(event: dict[str, Any]) -> None:

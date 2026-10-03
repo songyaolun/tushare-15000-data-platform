@@ -25,6 +25,7 @@ class TimeMapping(Model):
     version: Identifier = "time-mapping/v1"
     data_field: Identifier | None = None
     public_fields: tuple[Identifier, ...] = ()
+    optional_public_fields: tuple[Identifier, ...] = ()
     market_timezone: str | None = None
     report_period_field: Identifier | None = None
     effective_from_field: Identifier | None = None

@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable, Iterator
 from datetime import date, datetime
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import duckdb
 
@@ -87,17 +88,23 @@ def map_availability(
     """
     data_field = mapping.data_field if mapping else contract.policy.date_field
     data_value = row.get(data_field) if data_field else None
+    if isinstance(data_value, str) and ("T" in data_value or " " in data_value):
+        data_value = datetime.fromisoformat(normalize_timestamp(data_value))
     if isinstance(data_value, datetime):
+        if mapping and mapping.market_timezone:
+            data_value = data_value.astimezone(ZoneInfo(mapping.market_timezone))
         data_value = data_value.date()
     data_as_of = normalize_period(data_value) if isinstance(data_value, (str, int, date)) else None
     public_times = []
     effective_from = effective_to = report_period = None
     timezone = mapping.market_timezone if mapping else None
     if mapping:
-        for field in mapping.public_fields:
+        for field in mapping.public_fields + mapping.optional_public_fields:
             parsed = _time_value(row.get(field), timezone, public=True)
             if parsed is None:
-                raise ValueError("public_time_missing")
+                if field in mapping.public_fields:
+                    raise ValueError("public_time_missing")
+                continue
             public_times.append(parsed)
         effective_from = _time_value(
             row.get(mapping.effective_from_field or ""), timezone, public=False

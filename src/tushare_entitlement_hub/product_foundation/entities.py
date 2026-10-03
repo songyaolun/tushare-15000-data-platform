@@ -15,6 +15,7 @@ class EntityKind(StrEnum):
     """证券与公司、基金份额及衍生品合约分别标识，不能只凭代码跨类型连接。"""
 
     SECURITY = "security"
+    CONVERTIBLE_BOND = "convertible_bond"
     COMPANY = "company"
     ETF_SHARE = "etf_share"
     INDEX = "index"

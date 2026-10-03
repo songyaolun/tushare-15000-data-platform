@@ -15,6 +15,7 @@ from ..reference_storage import file_checksum
 from ..standard import normalize_timestamp
 from ..store import encode
 from .adapter import load_inputs
+from .binding_builder import binding_summary, verify_binding_audit
 from .candidates import build_candidates
 from .common import gate, make_result
 from .consumption import attach_consumption, count_consumption, summarize_consumption
@@ -75,6 +76,7 @@ def run_research(
     validate_consumption_registry()
     requested, products = select_products(selection)
     reference_hash = file_checksum(reference_path)
+    verify_binding_audit(configured, reference_hash, cutoff)
     run_id = run_identity(reference_hash, cutoff, configured, requested)
     if progress is not None:
         progress({"stage": "start", "run_id": run_id, "products": list(products)})
@@ -162,6 +164,8 @@ def run_research(
             "consumption": summarize_consumption(consumption_counts, list(products)),
             "result_count": len(all_results),
         }
+        if configured.binding_audit:
+            summary["bindings"] = binding_summary(configured, summary["consumption"])
         connection.execute("BEGIN TRANSACTION")
         try:
             summary["counts"] = save_results(

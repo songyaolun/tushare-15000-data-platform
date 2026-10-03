@@ -27,6 +27,7 @@ from ..product_foundation.registry import ConsumerSpec, load_registry
 from ..product_foundation.temporal import availability_gate
 from ..reference_contract import ReferenceContract, load_reference_contracts
 from ..store import digest
+from .binding_rules import period_visible
 from .consumption_registry import (
     EVENT_APIS,
     TWO_PERIOD_APIS,
@@ -146,7 +147,8 @@ def adapt_row(
     if mapping is None:
         raise ValueError("time_mapping_missing")
     if any(
-        raw.get(field) is not None and field not in mapping.public_fields
+        raw.get(field) is not None
+        and field not in mapping.public_fields + mapping.optional_public_fields
         for field in (
             "ann_date",
             "f_ann_date",
@@ -163,8 +165,7 @@ def adapt_row(
     if (
         api not in EVENT_APIS
         and availability.data_as_of is not None
-        and len(availability.data_as_of) == 10
-        and availability.data_as_of > cutoff[:10]
+        and not period_visible(availability.data_as_of, cutoff, mapping.market_timezone or "UTC")
     ):
         raise ValueError("future_business_date")
     entity_mapping = next(
@@ -177,7 +178,9 @@ def adapt_row(
             raise ValueError("entity_business_time_unknown")
         if business_time is not None:
             entity_id = resolve_alias(
-                config.foundation.aliases,
+                config.aliases_by_key.get(
+                    (entity_mapping.namespace, str(raw.get(entity_mapping.key_field, ""))), ()
+                ),
                 entity_mapping.namespace,
                 str(raw.get(entity_mapping.key_field, "")),
                 cutoff,

@@ -261,6 +261,9 @@ def verify_run(
     read_size = min(batch_size, READ_BATCH_SIZE)
     validate_consumption_registry()
     config = ResearchConfig.from_dict(metadata["config"])
+    from .binding_builder import binding_summary, verify_binding_audit
+
+    verify_binding_audit(config, metadata["reference_sha256"], metadata["analysis_as_of"])
     run_id = metadata["run_id"]
     selection = metadata["selection"]
     required_products = set(selection)
@@ -362,6 +365,8 @@ def verify_run(
         )
         else "complete",
     }
+    if config.binding_audit:
+        reconstructed["bindings"] = binding_summary(config, reconstructed["consumption"])
     processing = summary["processing"]
     if (
         set(product_states) != required_products
