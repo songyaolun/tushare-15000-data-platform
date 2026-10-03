@@ -16,6 +16,7 @@ from ..product_foundation.contracts import (
 )
 from ..product_foundation.temporal import availability_gate
 from ..store import encode
+from .bond_aggregation import MAXIMUM_DETAILED_BOND_ROWS, aggregate_bonds
 from .common import gate, make_result, unique_evidence
 from .consumption_registry import (
     CONSUMPTION_VERSION,
@@ -237,8 +238,14 @@ def execute_consumption(
         and row.raw.get("is_quarantined") is not True
         and availability_gate(row.availability, inputs.analysis_as_of).passed
     )
-    outcome = resolve_consumer(registration.handler)(
-        inputs, spec.product, spec.api, rows, entity_id
+    consumer = resolve_consumer(registration.handler)
+    outcome = (
+        aggregate_bonds(inputs, registration, rows, consumer, retained_rows=candidates)
+        if spec.product == "P06"
+        and entity_id == MARKET_ENTITY
+        and registration.entity_scope == "bond"
+        and len(candidates) > MAXIMUM_DETAILED_BOND_ROWS
+        else consumer(inputs, spec.product, spec.api, rows, entity_id)
     )
     status = outcome["status"]
     if type(status) is not str or status not in CONSUMPTION_STATUSES:
@@ -426,6 +433,11 @@ def attach_consumption(
             period = inputs.record_periods.get((reference.source_api, reference.source_record_id))
             if period is not None:
                 periods[reference.source_api] = max(period, periods.get(reference.source_api, ""))
+        for record in records:
+            for api, period in (
+                record["facts"].get("aggregation", {}).get("source_as_of", {}).items()
+            ):
+                periods[api] = max(period, periods.get(api, ""))
         incomplete = has_stock_gaps and result.envelope.state not in {
             ProductState.BLOCKED,
             ProductState.UNSUPPORTED,
