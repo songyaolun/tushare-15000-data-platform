@@ -401,6 +401,9 @@ def rank_scores(
     """按时点、范围、模型版本及真实缺失档位隔离排名，不混排完整与降级档。
 
     输入两个同档合法评分和一个缺失档评分，最小样本 2 时后者名次为空。
+    重复result_id先拒绝，再按完整组键为达到样本门槛的组各计算一次降序平均秩。
+    例：同组5911个评分只排序一次；缺分数或有原因的记录仍不排名，但保留同组有效分母。
+    组索引仅属于当前调用，空组和不足样本组不排序，后续每个结果按键取名次。
     """
     if len({item.result_id for item in results}) != len(results):
         raise ValueError("duplicate_score_result")
@@ -410,14 +413,18 @@ def rank_scores(
             groups[(item.analysis_as_of, item.scope_id, item.model_version, item.feature_profile)][
                 item.result_id
             ] = item.score
+    group_ranks = {
+        key: _average_ranks(group, descending=True)
+        for key, group in groups.items()
+        if len(group) >= policy.minimum_peer_count
+    }
     ranked = {}
     for item in results:
-        group = groups[
-            (item.analysis_as_of, item.scope_id, item.model_version, item.feature_profile)
-        ]
+        key = (item.analysis_as_of, item.scope_id, item.model_version, item.feature_profile)
+        group = groups[key]
         eligible = item.result_id in group and len(group) >= policy.minimum_peer_count
         ranked[item.result_id] = RankedScore(
-            rank=_average_ranks(group, descending=True)[item.result_id] if eligible else None,
+            rank=group_ranks[key][item.result_id] if eligible else None,
             peer_count=len(group),
             reason_codes=() if eligible else ("insufficient_rank_sample",),
         )
