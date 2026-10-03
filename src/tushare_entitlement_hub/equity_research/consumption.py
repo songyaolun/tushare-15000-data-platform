@@ -208,14 +208,26 @@ def execute_consumption(
     inputs: ResearchInputs,
     registration: ConsumptionRegistration,
     entity_id: str,
+    *,
+    stock_owner_result_id: str | None = None,
 ) -> tuple[dict[str, Any], tuple[EvidenceRef, ...], tuple[QualityGateResult, ...]]:
     """执行真实处理器并叠加扫描缺口，引用和门禁均进入统一信封。
 
     输入缺实体绑定的API，输出executed=true但status=unknown及绑定原因；
     处理器返回非有限数值或无引用却声称已观测时拒绝伪造状态。
+    例：stock_owner_result_id='owner'表示由另一结果承接stock行，本次用空行执行处理器，
+    输出unknown、retained_row_count=0及承载者ID，不读取或复制该实体的来源行。
     """
     spec = registration.spec
-    candidates = consumption_rows(inputs, registration, entity_id)
+    if stock_owner_result_id is not None and (
+        registration.entity_scope != "stock"
+        or type(stock_owner_result_id) is not str
+        or not stock_owner_result_id
+    ):
+        raise ValueError("research_consumption_scope_mismatch")
+    candidates = (
+        consumption_rows(inputs, registration, entity_id) if stock_owner_result_id is None else ()
+    )
     rows = tuple(
         row
         for row in candidates
@@ -257,6 +269,8 @@ def execute_consumption(
     reasons = set(consumption_reasons(outcome["reason_codes"], "observed")) | set(
         inputs.reasons(spec.api, entity_id)
     )
+    if stock_owner_result_id is not None:
+        reasons.add("stock_consumption_owned_by_other_result")
     if entity_id == MARKET_ENTITY:
         if registration.entity_scope == "stock":
             reasons.add("stock_scope_requires_entity")
@@ -304,6 +318,8 @@ def execute_consumption(
         "gates": [check.to_dict() for check in checks],
         "historical_pit_certified": False,
     }
+    if stock_owner_result_id is not None:
+        record["stock_consumption_owner_result_id"] = stock_owner_result_id
     encode(record)
     return record, references, checks
 
@@ -349,21 +365,20 @@ def attach_consumption(
     输入只有未关联转债的P06，输出保留债券引用的市场范围结果；
     原股票分数、排名与贡献保持原值，新增旁证门禁不提升研究资格。
     无对应实体结果的stock行只在市场结果保存缺口计数，不重新消费或任意分配给股票。
+    同实体多条事件按result_id字典序选唯一stock承载者，与事件输入顺序无关；
+    例：同实体结果ID为'b'、'a'时仅'a'消费stock行，'b'记录零行及指向'a'的原因。
     """
     registrations = tuple(
         item
         for item in load_consumption_registry()
         if PRODUCT_ALIASES[item.spec.product] == product
     )
-    gaps = stock_scope_gaps(
-        inputs,
-        registrations,
-        {
-            result.envelope.entity_id
-            for result in results
-            if result.envelope.entity_id != MARKET_ENTITY
-        },
-    )
+    stock_owners: dict[str, str] = {}
+    for result in results:
+        entity_id, result_id = result.envelope.entity_id, result.envelope.result_id
+        if entity_id != MARKET_ENTITY:
+            stock_owners[entity_id] = min(result_id, stock_owners.get(entity_id, result_id))
+    gaps = stock_scope_gaps(inputs, registrations, set(stock_owners))
     if not any(result.envelope.entity_id == MARKET_ENTITY for result in results) and (
         gaps
         or any(
@@ -384,12 +399,20 @@ def attach_consumption(
         )
     attached = []
     for result in results:
+        owner = stock_owners.get(result.envelope.entity_id)
         has_stock_gaps = result.envelope.entity_id == MARKET_ENTITY and bool(gaps)
         records: list[dict[str, Any]] = []
         references: list[EvidenceRef] = []
         checks: list[QualityGateResult] = []
         for item in registrations:
-            record, evidence, gates = execute_consumption(inputs, item, result.envelope.entity_id)
+            record, evidence, gates = execute_consumption(
+                inputs,
+                item,
+                result.envelope.entity_id,
+                stock_owner_result_id=owner
+                if item.entity_scope == "stock" and owner != result.envelope.result_id
+                else None,
+            )
             records.append(record)
             references.extend(evidence)
             checks.extend(gates)
@@ -476,6 +499,19 @@ def validate_result_consumption(result: ResearchResult) -> None:
             raise ValueError("research_consumption_field_quality_invalid")
         if result.envelope.entity_id == MARKET_ENTITY and item.entity_scope == "stock" and count:
             raise ValueError("research_consumption_scope_mismatch")
+        if "stock_consumption_owner_result_id" in record:
+            owner = record["stock_consumption_owner_result_id"]
+            if (
+                item.entity_scope != "stock"
+                or type(owner) is not str
+                or not owner
+                or owner == result.envelope.result_id
+                or count
+                or record["status"] != "unknown"
+                or record["evidence_refs"]
+                or "stock_consumption_owned_by_other_result" not in record["reason_codes"]
+            ):
+                raise ValueError("research_consumption_scope_mismatch")
         for values in quality.values():
             if (
                 set(values) != {"present_rows", "missing_rows", "certified_rows", "nonfinite_rows"}

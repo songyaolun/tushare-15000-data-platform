@@ -11,7 +11,7 @@ from ..product_foundation.registry import ConsumerSpec, load_registry
 from ..store import digest
 from .models import PRODUCT_IDS, ResearchInputs, ResearchRow
 
-CONSUMPTION_VERSION = "equity-consumption/v9"
+CONSUMPTION_VERSION = "equity-consumption/v10"
 PRODUCT_ALIASES = dict(zip(("P01", "P04", "P06", "P07", "P03", "P13"), PRODUCT_IDS, strict=True))
 CONTEXT_APIS = frozenset(
     {
