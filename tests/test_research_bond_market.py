@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import replace
 
 import duckdb
+import pytest
 from test_research_disclosure_consumers import source
 from test_research_governance import DAY, A, inputs, relation
 
@@ -114,22 +115,79 @@ def bond_market_inputs(counts=None):
     return inputs(*rows, stock, entities=(A,), relations=relations)
 
 
-def test_formal_scale_bond_market_result_is_bounded_and_rebuildable(tmp_path):
-    """九来源超过正式规模时完整市场结果小于1MiB，每行计入审计；512MB下保存重建且顺序无关。"""
-    context = bond_market_inputs()
+@pytest.mark.parametrize(
+    ("source_counts", "unverified_quotes"),
+    [
+        pytest.param(COUNTS, False, id="all_certified_above_formal_counts"),
+        pytest.param(
+            {
+                "cb_basic": 1171,
+                "cb_call": 22,
+                "cb_daily": 316,
+                "cb_factor_pro": 316,
+                "cb_issue": 9,
+                "cb_rate": 5,
+                "cb_rating": 5,
+                "cb_share": 224,
+                "top10_cb_holders": 40,
+            },
+            True,
+            id="formal_counts_with_unverified_quotes",
+        ),
+    ],
+)
+def test_formal_scale_bond_market_result_is_bounded_and_rebuildable(
+    tmp_path, source_counts, unverified_quotes
+):
+    """九来源全认证或同正式行数且两源报价未认证时均小于1MiB，全量计数及真实状态可重建。
+
+    未认证场景的cb_basic仍observed，两组316行报价保持unknown；五行来源保留精确观察。
+    两场景均验证全部保留行指纹、样本回查、逆序字节一致和512MB下保存重建。
+    """
+    context = bond_market_inputs(source_counts)
+    quote_apis = {"cb_daily", "cb_factor_pro"}
+    if unverified_quotes:
+        context = replace(
+            context,
+            rows_by_api={
+                api: tuple(replace(row, numeric={}) for row in rows)
+                if api in quote_apis
+                else rows
+                for api, rows in context.rows_by_api.items()
+            },
+        )
     result = attach_consumption(context, PRODUCT_ALIASES["P06"], ())[0]
     payload_bytes = len(result.to_json().encode())
     assert payload_bytes < 1024 * 1024
     assert result.envelope.entity_id == MARKET_ENTITY
     records = {item["api"]: item for item in result.details["consumption"]}
-    for api, count in COUNTS.items():
+    for api, count in source_counts.items():
         record = records[api]
-        assert record["status"] == "observed"
+        expected_status = "unknown" if unverified_quotes and api in quote_apis else "observed"
+        assert record["status"] == expected_status
         assert record["retained_row_count"] == count
+        assert len(encode(record).encode()) < 128 * 1024
+        if expected_status == "unknown":
+            assert "bond_quote_peer_date_or_unit_unverified" in record["reason_codes"]
+            assert all(
+                quality
+                == {
+                    "present_rows": count,
+                    "missing_rows": 0,
+                    "certified_rows": 0,
+                    "nonfinite_rows": 0,
+                }
+                for quality in record["field_quality"].values()
+            )
+        if count <= 8:
+            assert "aggregation" not in record["facts"]
+            assert len(record["facts"]["observations"]) == count
+            continue
         summary = record["facts"]["aggregation"]
         assert summary["total_rows"] == count
         assert summary["group_count"] == (count // 10 if api == "top10_cb_holders" else count)
         assert sum(summary["rows_by_group_status"].values()) == count
+        assert summary["status_counts"] == {expected_status: summary["group_count"]}
         assert len(record["evidence_refs"]) <= 10 and len(record["gates"]) == 2
         assert summary["sample_count"] == len(record["evidence_refs"])
         assert summary["truncated"] is True
@@ -140,7 +198,6 @@ def test_formal_scale_bond_market_result_is_bounded_and_rebuildable(tmp_path):
         assert summary["rows_fingerprint"] == complete.hexdigest()
         assert summary["usable_rows"] == count and summary["rejected_rows"] == 0
         assert all(value["present_rows"] == count for value in record["field_quality"].values())
-        assert len(encode(record).encode()) < 128 * 1024
         assert summary["sampling_policy"]["per_stratum_limit"] == 1
         for evidence in record["evidence_refs"]:
             reference = EvidenceRef.from_dict(evidence)
@@ -154,14 +211,17 @@ def test_formal_scale_bond_market_result_is_bounded_and_rebuildable(tmp_path):
         records["top10_cb_holders"]["facts"]["aggregation"]["business_statistics"][
             "distinct_bond_period_holder_pairs"
         ]
-        == 60
+        == source_counts["top10_cb_holders"]
     )
     validate_result_consumption(result)
     counts = {}
     count_consumption(counts, result)
     consumption = summarize_consumption(counts, [PRODUCT_ALIASES["P06"]])
-    assert consumption["observed_apis"] == len(COUNTS)
+    assert consumption["observed_apis"] == len(source_counts) - (2 if unverified_quotes else 0)
     assert consumption["executed_apis"] == consumption["assigned_apis"]
+    assert sum(records[api]["retained_row_count"] for api in source_counts) == sum(
+        source_counts.values()
+    )
     reversed_context = replace(
         context,
         rows_by_api={
@@ -183,5 +243,5 @@ def test_formal_scale_bond_market_result_is_bounded_and_rebuildable(tmp_path):
     assert restored.to_json() == result.to_json()
     validate_result_consumption(restored)
     print(
-        f"P06市场债券：{sum(COUNTS.values())}行，最大结果{payload_bytes}字节，信封引用{len(result.envelope.evidence_refs)}，门禁{len(result.envelope.quality_gates)}"
+        f"P06市场债券：{sum(source_counts.values())}行，最大结果{payload_bytes}字节，信封引用{len(result.envelope.evidence_refs)}，门禁{len(result.envelope.quality_gates)}"
     )
