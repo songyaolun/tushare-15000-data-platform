@@ -7,6 +7,7 @@ from math import isclose, isfinite
 from typing import Any, cast
 
 from ..product_foundation.contracts import EvidenceRef, Truth
+from ..product_foundation.entities import EntityRelation
 from ..product_foundation.numeric import price_gate
 from ..product_foundation.temporal import availability_gate
 from ..standard import normalize_date
@@ -127,17 +128,36 @@ def _current(rows: tuple[ResearchRow, ...], field: str) -> ResearchRow | None:
 
 
 def _other_rows(inputs: ResearchInputs, api: str, source: ResearchRow) -> tuple[ResearchRow, ...]:
-    """仅以相同认证实体或同来源证券代码查旁证；例：两只未映射债券仍按ts_code分开核价。"""
+    """按实体索引或无实体时的代码索引取旁证，再逐候选重验原可见性门禁。
+
+    例：5000条日线中只有2条属于证券A，仅检查这2条；未映射债券仍按ts_code分开核价。
+    有实体时不按同代码回退，缺实体且缺代码时返回空；候选顺序及版本歧义原样保留。
+    """
+    if source.entity_id is not None:
+        candidates = inputs.rows(api, source.entity_id)
+    else:
+        code = source.text("ts_code")
+        candidates = inputs.code_rows.get((api, code), ()) if code is not None else ()
+    return tuple(row for row in candidates if _visible(inputs, row))
+
+
+def _underlying_relations(
+    inputs: ResearchInputs, source: ResearchRow
+) -> tuple[EntityRelation, ...]:
+    """按债券实体索引转股关系，再保留已确认且在当前截止时点可用的全部候选。
+
+    例：千条关系中债券A有两条冲突关系，仍返回这两条供下游判歧义；无实体返回空。
+    不缓存时点判定、不去重或任选目标，保持关系证据的原始顺序。
+    """
+    candidates = (
+        inputs.config.relations_by_source.get((source.entity_id, "cb_underlying"), ())
+        if source.entity_id is not None
+        else ()
+    )
     return tuple(
-        row
-        for row in inputs.rows(api)
-        if _visible(inputs, row)
-        and (
-            row.entity_id == source.entity_id
-            if source.entity_id is not None
-            else source.text("ts_code") is not None
-            and row.text("ts_code") == source.text("ts_code")
-        )
+        relation
+        for relation in candidates
+        if relation.confirmed and relation.usable_at(inputs.analysis_as_of)
     )
 
 
@@ -766,14 +786,7 @@ def _conversion_value(
 
     例：CB面值100元、转股价10元和同日正股价12元得到120元；EB、区间外或关系未知返回None。
     """
-    relations = tuple(
-        relation
-        for relation in inputs.config.confirmed_relations
-        if relation.from_entity_id == source.entity_id
-        and relation.relation_type == "cb_underlying"
-        and relation.confirmed
-        and relation.usable_at(inputs.analysis_as_of)
-    )
+    relations = _underlying_relations(inputs, source)
     targets = {relation.to_entity_id for relation in relations}
     refs = tuple(ref for relation in relations for ref in relation.evidence_refs)
     if len(targets) != 1:
@@ -969,14 +982,7 @@ def consume_disclosure(
             "source_security_code": source.text("ts_code"),
         }
         if api in BOND_APIS:
-            relations = tuple(
-                relation
-                for relation in inputs.config.confirmed_relations
-                if relation.from_entity_id == source.entity_id
-                and relation.relation_type == "cb_underlying"
-                and relation.confirmed
-                and relation.usable_at(inputs.analysis_as_of)
-            )
+            relations = _underlying_relations(inputs, source)
             targets = {relation.to_entity_id for relation in relations}
             related = len(targets) == 1 and (entity_id == MARKET_ENTITY or entity_id in targets)
             if not related:

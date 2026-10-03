@@ -80,6 +80,20 @@ class ResearchConfig(Model):
             grouped.setdefault((alias.namespace, alias.alias), []).append(alias)
         return {key: tuple(values) for key, values in grouped.items()}
 
+    @cached_property
+    def relations_by_source(self) -> dict[tuple[str, str], tuple[EntityRelation, ...]]:
+        """按来源实体和关系类型一次索引声明关系，保留原顺序、重复及未确认条目。
+
+        例如(A, 'cb_underlying')只返回A的转股关系候选；确认与有效期仍由调用方逐条校验。
+        索引只持有原对象引用，不进入配置序列化或改变运行指纹。
+        """
+        grouped: dict[tuple[str, str], list[EntityRelation]] = {}
+        for relation in self.confirmed_relations:
+            grouped.setdefault((relation.from_entity_id, relation.relation_type), []).append(
+                relation
+            )
+        return {key: tuple(values) for key, values in grouped.items()}
+
     @property
     def binding_audit(self) -> dict[str, Any]:
         """返回生成配置的独立审计对象；例：默认配置返回{}，不自动信任来源。
@@ -179,6 +193,21 @@ class ResearchInputs:
             for row in rows:
                 if row.entity_id is not None:
                     indexed.setdefault((api, row.entity_id), []).append(row)
+        return {key: tuple(rows) for key, rows in indexed.items()}
+
+    @cached_property
+    def code_rows(self) -> dict[tuple[str, str], tuple[ResearchRow, ...]]:
+        """按接口和text('ts_code')的原有口径一次索引来源行，供无实体旁证精确查询。
+
+        例如('cb_basic', 'CB1')只返回该代码的行，缺代码不入索引；不合并不同接口。
+        保留行顺序、重复、已绑定及未绑定行，不复制载荷，也不预先过滤时间、质量或隔离。
+        """
+        indexed: dict[tuple[str, str], list[ResearchRow]] = {}
+        for api, rows in self.rows_by_api.items():
+            for row in rows:
+                code = row.text("ts_code")
+                if code is not None:
+                    indexed.setdefault((api, code), []).append(row)
         return {key: tuple(rows) for key, rows in indexed.items()}
 
     @property
