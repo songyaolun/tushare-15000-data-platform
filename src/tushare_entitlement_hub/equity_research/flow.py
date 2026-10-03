@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from ..pit import time_boundary
 from ..product_foundation.contracts import EvidenceRef, QualityGateResult, Truth
+from ..product_foundation.temporal import availability_gate
 from .common import gate, latest, make_result, metric, percentiles
 from .flow_consumers import auxiliary_observation
 from .governance import _ambiguous, _number
@@ -252,19 +253,32 @@ def _freshness(inputs: ResearchInputs, daily: ResearchRow | None) -> Truth:
 
 
 def _shock(inputs: ResearchInputs, entity_id: str) -> Truth:
-    """严重异动记录不按文本period猜结束日；例：已发生且无确认终点的监管记录阻断。"""
+    """仅可见、合格且已生效的严重异动记录阻断，不按文本period猜测生效区间。
+
+    例：未来生效或隔离记录返回UNKNOWN；合格已生效且无终点记录返回FALSE。
+    仅有合格已结束记录、来源完整且无拒绝原因时返回TRUE。
+    """
     rows = inputs.rows("stk_high_shock", entity_id)
-    active = tuple(
-        row
-        for row in rows
-        if row.availability.effective_to is None
-        or time_boundary(row.availability.effective_to) > time_boundary(inputs.analysis_as_of)
-    )
+    active = False
+    rejected = bool(inputs.reasons("stk_high_shock", entity_id))
+    for row in rows:
+        visibility = availability_gate(
+            row.availability, inputs.analysis_as_of, require_effective=True
+        )
+        if (
+            row.raw.get("quality_tier") not in {"verified", "usable_with_annotation"}
+            or row.raw.get("is_quarantined") is True
+        ):
+            rejected = True
+        elif visibility.passed:
+            active = True
+        elif visibility.reason_codes != ("no_longer_effective",):
+            rejected = True
+    if rejected:
+        return Truth.UNKNOWN
     if active:
         return Truth.FALSE
-    if "stk_high_shock" in inputs.config.complete_scopes and not inputs.reasons(
-        "stk_high_shock", entity_id
-    ):
+    if "stk_high_shock" in inputs.config.complete_scopes:
         return Truth.TRUE
     return Truth.UNKNOWN
 

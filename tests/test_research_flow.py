@@ -270,13 +270,25 @@ def test_freshness_requires_expected_business_day_and_recent_observation():
 
 def test_severe_shock_period_text_never_implies_end_date():
     """场景：严重异动有文本期间但没有认证解除时点；预期：持续阻断，认证结束后才可通过。"""
-    active = row("stk_high_shock", raw={"period": "2026年9月期间"})
+    active = row(
+        "stk_high_shock",
+        raw={"period": "2026年9月期间", "quality_tier": "verified"},
+        effective_from="2026-09-01T00:00:00Z",
+    )
     assert _shock(inputs(active), A) is Truth.FALSE
     later = row(
-        "stk_high_shock", effective_from="2026-10-01T00:00:00Z", effective_to="2026-10-04T00:00:00Z"
+        "stk_high_shock",
+        raw={"quality_tier": "verified"},
+        effective_from="2026-10-01T00:00:00Z",
+        effective_to="2026-10-04T00:00:00Z",
     )
     assert _shock(inputs(later), A) is Truth.FALSE
-    ended = row("stk_high_shock", effective_from="2026-10-01T00:00:00Z", effective_to=NOW)
+    ended = row(
+        "stk_high_shock",
+        raw={"quality_tier": "verified"},
+        effective_from="2026-10-01T00:00:00Z",
+        effective_to=NOW,
+    )
     assert _shock(inputs(ended, complete=COMPLETE), A) is Truth.TRUE
     assert _shock(inputs(ended), A) is Truth.UNKNOWN
     assert (

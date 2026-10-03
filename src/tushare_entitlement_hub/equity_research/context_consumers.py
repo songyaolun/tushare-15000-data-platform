@@ -1096,6 +1096,8 @@ def consume_context(
 
     每组采用唯一最新版本，跨因子、频率、市场、事件分别保留。返回软门禁、真实血缘和
     当前状态，技术/组合来源的independent_evidence始终False，core_score_contribution恒为0。
+    冲突优先，其次未知和历史受限；observed与not_applicable混合仅在无未决组时为observed。
+    例：SSE已观测而SZSE未知，接口整体仍为unknown。
     """
     if api not in CONTEXT_FIELDS or product not in {"P01", "P03"}:
         raise ValueError("unsupported_context_consumer")
@@ -1161,15 +1163,15 @@ def consume_context(
     status = (
         "conflict"
         if "conflict" in states
+        else "unknown"
+        if "unknown" in states
+        else "not_enabled_due_to_history"
+        if "not_enabled_due_to_history" in states
         else "observed"
         if "observed" in states
-        else (
-            "not_enabled_due_to_history"
-            if "not_enabled_due_to_history" in states
-            else "not_applicable"
-            if states == {"not_applicable"}
-            else "unknown"
-        )
+        else "not_applicable"
+        if states == {"not_applicable"}
+        else "unknown"
     )
     reasons = {reason for item in observations for reason in item["reason_codes"]}
     if not observations:

@@ -9,6 +9,7 @@ from typing import Any
 import duckdb
 
 from ..catalog import load_policies
+from ..pit import time_boundary
 from ..product_foundation.config import READ_BATCH_SIZE, validate_batch_size
 from ..product_foundation.contracts import EvidenceRef
 from ..product_foundation.numeric import source_evidence
@@ -31,6 +32,8 @@ def verify_source_evidence(
 
     例：把证据source_record_id改成不存在的记录，即使产品内子表同步修改也拒绝。
     仅校验当前参考指纹对应批次；其他历史批次仍校验其内部模型及完整血缘。
+    配置中的reference:accepted引用也必须回查；仅assertion:和synthetic:允许作为
+    独立配置断言，仍要求内容精确匹配且在研究截止时点可见，不冒充参考库来源认证。
     """
     validate_batch_size(batch_size)
     read_size = min(batch_size, READ_BATCH_SIZE)
@@ -50,8 +53,18 @@ def verify_source_evidence(
             grouped: dict[str, list[EvidenceRef]] = defaultdict(list)
             for (payload,) in batch:
                 reference = EvidenceRef.from_json(payload)
-                if reference.to_json() not in assertions:
-                    grouped[reference.source_api].append(reference)
+                if (
+                    reference.locator.startswith(("assertion:", "synthetic:"))
+                    and reference.to_json() in assertions
+                ):
+                    if analysis_as_of is not None and any(
+                        time_boundary(moment) > time_boundary(analysis_as_of)
+                        for moment in (reference.observed_at, reference.public_available_at)
+                        if moment is not None
+                    ):
+                        raise ValueError("research_assertion_not_yet_available")
+                    continue
+                grouped[reference.source_api].append(reference)
             for api, references in grouped.items():
                 if api not in contracts or api not in mappings:
                     raise ValueError("research_evidence_source_unknown")

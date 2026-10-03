@@ -153,12 +153,22 @@ def _suspension(
 
     例：日线有成交但同日S记录仍输出TRUE；日内时段单列，不把日内停牌当全天无成交。
     变体或未知类型只输出UNKNOWN，昨日记录不推演成今日状态。
+    同日行被质量或时间门禁拒绝时保留UNKNOWN；无记录仅在来源完整认证后才返回FALSE。
     """
     rows = tuple(
         row
         for row in inputs.rows("suspend_d", identity)
         if trade_day is not None and _day(row) == trade_day
     )
+    accepted = tuple(
+        row
+        for row in rows
+        if row.raw.get("quality_tier") in {"verified", "usable_with_annotation"}
+        and row.raw.get("is_quarantined") is not True
+        and availability_gate(row.availability, inputs.analysis_as_of).passed
+    )
+    rejected = len(accepted) != len(rows)
+    rows = accepted
     observations = []
     for row in rows:
         timing = row.text("suspend_timing")
@@ -184,9 +194,14 @@ def _suspension(
         row.text("suspend_type") == "S" and not row.raw.get("business_variant_key") for row in rows
     ):
         return Truth.TRUE, rows, observations
-    uncertain = any(
-        row.text("suspend_type") not in {"S", "R"} or row.raw.get("business_variant_key")
-        for row in rows
+    uncertain = (
+        rejected
+        or bool(inputs.reasons("suspend_d", identity))
+        or any(
+            row.text("suspend_type") not in {"S", "R"} or row.raw.get("business_variant_key")
+            for row in rows
+        )
+        or (not rows and (trade_day is None or "suspend_d" not in inputs.config.complete_scopes))
     )
     return Truth.UNKNOWN if uncertain else Truth.FALSE, rows, observations
 
@@ -199,7 +214,9 @@ def build_market(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
     无成交、未知价格、停牌和旧日记录分别记录，空输入也返回带缺口的单一结果。
     """
     visible = {
-        api: tuple(
+        api: rows
+        if api == "suspend_d"
+        else tuple(
             row for row in rows if availability_gate(row.availability, inputs.analysis_as_of).passed
         )
         for api, rows in inputs.rows_by_api.items()

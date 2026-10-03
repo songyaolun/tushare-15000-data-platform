@@ -18,8 +18,8 @@ from tushare_entitlement_hub.product_foundation.temporal import AvailabilityFact
 NOW = "2026-10-02T12:00:00Z"
 
 
-def market_inputs(count=2, rows=()):
-    """创建显式证券范围；例：count=2得到两只独立绑定证券，数据默认缺失。"""
+def market_inputs(count=2, rows=(), *, complete=("suspend_d",)):
+    """创建显式证券和合成停牌完整范围；例：complete=()可测试未认证的来源缺口。"""
     entities = tuple(
         Entity(
             identity=EntityIdentity(
@@ -32,7 +32,9 @@ def market_inputs(count=2, rows=()):
     return ResearchInputs(
         analysis_as_of=NOW,
         run_id="market-fixture",
-        config=ResearchConfig(foundation=FoundationBindings(entities=entities)),
+        config=ResearchConfig(
+            foundation=FoundationBindings(entities=entities), complete_scopes=complete
+        ),
         rows_by_api={
             api: tuple(row for row in rows if row.source_api == api)
             for api in {row.source_api for row in rows}
@@ -415,7 +417,8 @@ def test_suspension_join_requires_same_visible_security_and_trade_date(kind):
         public="2026-10-03T00:00:00Z" if kind == "future" else "2026-09-30T16:00:00Z",
     )
     (result,) = build_market(market_inputs(1, (row(), suspended)))
-    assert result.details["denominator_count"] == 1
+    assert result.details["denominator_count"] == (0 if kind == "future" else 1)
+    assert result.details["excluded_suspension_unknown_count"] == (1 if kind == "future" else 0)
     assert result.details["excluded_suspended_count"] == 0
 
 

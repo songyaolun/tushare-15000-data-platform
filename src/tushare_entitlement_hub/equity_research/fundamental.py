@@ -332,15 +332,23 @@ def _dossier(inputs: ResearchInputs, identity: str) -> ResearchResult:
         and row.availability.report_period <= period
     )
     audit, audit_reason = _version(
-        tuple(
-            row
-            for row in audit_rows
-            if row.availability.report_period
-            == max(
-                (cast(str, item.availability.report_period) for item in audit_rows), default=None
-            )
-        )
+        tuple(row for row in audit_rows if row.availability.report_period == period)
     )
+    historical_audits = []
+    for row in audit_rows:
+        if row.availability.report_period == period:
+            continue
+        historical_refs = row.evidence("audit_result", "end_date", "ann_date")
+        references.extend(historical_refs)
+        historical_audits.append(
+            {
+                "report_period": row.availability.report_period,
+                "audit_opinion": row.text("audit_result"),
+                "source_record_id": row.availability.source_record_id,
+                "evidence_refs": [reference.to_dict() for reference in historical_refs],
+                "applies_to_current_report": False,
+            }
+        )
     opinion = None if audit is None else audit.text("audit_result")
     audit_refs = () if audit is None else audit.evidence("audit_result", "end_date", "ann_date")
     standard = opinion == "标准无保留意见"
@@ -393,6 +401,7 @@ def _dossier(inputs: ResearchInputs, identity: str) -> ResearchResult:
             "source_comparisons": comparisons,
             "audit_flags": [] if standard else [opinion or "audit_unknown"],
             "audit_period": None if audit is None else audit.availability.report_period,
+            "historical_audits": historical_audits,
             "valuation_basis": valuation_details,
             "problem_research_flags": problem_research_flags,
             "source_reason_codes": missing_reasons,
@@ -408,6 +417,7 @@ def build_fundamental(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
     例：同组三个现金比率及低杠杆方向分位都为0.5，则quality_score与Q0均为50；
     缺同行路径或样本不足时保留原始比率且两项分数为空。审计异常不被高分抵消。
     未来记录不作为证据；空实体集合返回空元组，处理过程中不访问网络。
+    审计意见仅约束同报告期；例：仅有去年标准意见时，今年审计门禁为UNKNOWN，旧意见单列。
     """
     inputs = replace(
         inputs,
