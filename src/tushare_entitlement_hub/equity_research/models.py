@@ -210,11 +210,12 @@ class ResearchInputs:
                     indexed.setdefault((api, code), []).append(row)
         return {key: tuple(rows) for key, rows in indexed.items()}
 
-    @property
+    @cached_property
     def entity_ids(self) -> tuple[str, ...]:
-        """返回显式登记的股票实体；例：一个security和一个series得到一个股票身份。
+        """一次缓存输入快照中显式登记的股票实体；例：一个security和一个series得到一个股票身份。
 
-        不从新闻标题或跨接口业务哈希推断证券身份。
+        不从新闻标题或跨接口业务哈希推断证券身份。逐结果读取不重复遍历和排序证券集；
+        数据变化须以replace创建新ResearchInputs，与entity_rows等既有索引一起重新计算。
         """
         from .consumption_registry import BOND_APIS, INDEX_APIS
 

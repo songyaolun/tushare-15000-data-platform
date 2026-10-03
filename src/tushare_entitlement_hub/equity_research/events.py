@@ -13,6 +13,7 @@ from ..product_foundation.signals import evaluate
 from ..standard import normalize_date
 from ..store import digest, encode
 from .common import gate, make_result, metric, unique_evidence
+from .event_parents import ParentBundle, index_parents
 from .models import MARKET_ENTITY, RULE_VERSION, ResearchInputs, ResearchResult, ResearchRow
 
 EVENT_APIS = ("major_news", "disclosure_date", "cn_schedule", "idx_anns", "namechange")
@@ -48,7 +49,7 @@ class _Event:
     source_api: str
     deadline: str | None
     row: ResearchRow | None
-    parent: ResearchResult | None = None
+    entity_id: str | None = None
 
 
 def _day(value: Any) -> str | None:
@@ -115,8 +116,13 @@ def _entities(
     例如新闻标题匹配两家公司的有效别名，返回 confirmed=None 和两项候选；
     单一候选也需人工确认。人工关系以 event_id→entity_id 的 event_entity 表示。
     """
-    if event.parent is not None:
-        return event.parent.envelope.entity_id, (), (), None
+    if event.entity_id is not None:
+        return (
+            event.entity_id,
+            (),
+            (),
+            "upstream_market_scope_not_security" if event.entity_id == MARKET_ENTITY else None,
+        )
     row = event.row
     assert row is not None
     if event.source_api == "cn_schedule":
@@ -260,26 +266,25 @@ def _upstream_hard_checks(parents: tuple[ResearchResult, ...]) -> tuple[QualityG
 
 
 def _review(
-    inputs: ResearchInputs, event: _Event, upstream: tuple[ResearchResult, ...]
+    inputs: ResearchInputs, event: _Event, upstream: dict[str, ParentBundle]
 ) -> ResearchResult:
     """生成单事件的默认论点、反证、父血缘与排序键，保持持仓权重未知。
 
     例如现金覆盖=1.2、解禁=.01 得到 true；解禁缺失得到 unknown。硬风险越高
     越先复核，同风险先按已知期限排序，再按来源等级，最后按事件身份打破平局。
+    父结果已按实体及截止索引；一次查询只取得当前实体的全部版本，不扫描其他实体。
     """
     identity, candidates, mapping_refs, conflict = _entities(inputs, event)
-    parents = tuple(
-        parent
-        for parent in upstream
-        if parent.envelope.entity_id == identity
-        and parent.envelope.analysis_as_of == inputs.analysis_as_of
-    )
+    bundle = upstream.get(identity) if identity is not None else None
+    parents = bundle.parents if bundle else ()
     values, feature_refs = _parent_metrics(parents)
     results = {
         predicate.predicate_id: evaluate(predicate, values)
         for predicate in THESIS.children + (THESIS,)
     }
-    results["entity_confirmation"] = Truth.TRUE if identity is not None else Truth.UNKNOWN
+    results["entity_confirmation"] = (
+        Truth.TRUE if identity is not None and conflict is None else Truth.UNKNOWN
+    )
     row = event.row
     references = unique_evidence(
         mapping_refs
@@ -288,6 +293,10 @@ def _review(
         + (row.evidence(*tuple(row.raw)) if row else ())
     )
     hard_checks = _upstream_hard_checks(parents)
+    if bundle and bundle.ambiguous_products:
+        hard_checks += (
+            gate("upstream_product_versions", Truth.UNKNOWN, "upstream_product_versions_ambiguous"),
+        )
     hard_risk = (
         2
         if any(check.result is Truth.FALSE for check in hard_checks)
@@ -353,6 +362,9 @@ def _review(
             if results[predicate.predicate_id] is Truth.FALSE
         ],
         "review_owner": None,
+        "upstream_parent_count": len(parents),
+        "upstream_fingerprint": bundle.fingerprint if bundle else None,
+        "upstream_ambiguous_products": list(bundle.ambiguous_products) if bundle else [],
     }
     result = make_result(
         inputs,
@@ -397,26 +409,23 @@ def build_events(
     """整理直接来源及 P04/P06/P07 父证据事件，输出确定性的人工复核队列。
 
     例如同一新闻重复输入两次只产生一条来源事件；两条不同事件各有唯一 scope_id。
+    同实体的P04/P06/P07形成一个upstream_bundle，全部父ID绑定事件身份；
+    完整父内容由流式摘要覆盖，版本歧义、硬门禁和反证仍保留，不抽样父证据。
     空输入返回明确缺来源的观察结果，绝不用一个空列表表示所有检查通过。
     """
-    upstream = tuple({parent.to_json(): parent for parent in upstream}.values())
+    indexed = index_parents(inputs, upstream)
     events = list(_source_events(inputs))
-    seen = set()
-    for parent in upstream:
-        if (
-            parent.envelope.result_id in seen
-            or parent.envelope.analysis_as_of != inputs.analysis_as_of
-        ):
-            continue
-        seen.add(parent.envelope.result_id)
+    for identity, bundle in indexed.items():
         events.append(
             _Event(
-                "research:event:" + digest([parent.envelope.result_id]) + ":v1",
-                "upstream_review",
-                parent.envelope.product_id,
+                "research:event:"
+                + digest(["upstream_bundle", identity, bundle.result_ids])
+                + ":v1",
+                "upstream_bundle",
+                "upstream_products",
                 None,
                 None,
-                parent,
+                identity,
             )
         )
     if not events:
@@ -433,7 +442,7 @@ def build_events(
                 },
             ),
         )
-    reviews = [_review(inputs, event, upstream) for event in events]
+    reviews = [_review(inputs, event, indexed) for event in events]
     reviews.sort(
         key=lambda result: (
             -result.details["hard_risk_level"],

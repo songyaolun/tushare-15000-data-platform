@@ -103,7 +103,7 @@ def test_empty_reference_and_missing_bindings_remain_incomplete(tmp_path):
     reference, _ = write_reference(tmp_path, 0)
     output = tmp_path / "empty-products.duckdb"
     summary = run_research(reference, output, AS_OF)
-    assert summary["status"] == "incomplete" and summary["result_count"] == 8
+    assert summary["status"] == "incomplete" and summary["result_count"] == 6
     assert summary["processing"]["scanned_rows"] == 0
     assert validate_research(reference, output)["valid"]
     assert not summary["historical_pit_certified"]
@@ -461,7 +461,7 @@ def test_verify_database_count_result_missing_is_rejected(libraries, query_fragm
 
 
 def test_unknown_thesis_signal_cannot_be_rewritten_as_false(tmp_path):
-    """场景：缺输入产生unknown论点后篡改为false；预期：原值保留，完整性校验拒绝篡改。"""
+    """场景：空库的市场bundle产生unknown论点及证券确认；预期：只存一组信号且拒绝篡改。"""
     reference, _ = write_reference(tmp_path, 0)
     output = tmp_path / "signals.duckdb"
     run_research(reference, output, AS_OF, selection=("P13",))
@@ -478,8 +478,9 @@ def test_unknown_thesis_signal_cannot_be_rewritten_as_false(tmp_path):
             "cash_support_and_supply",
         }
         assert all(item["result"] == "unknown" for item in thesis)
+        assert len(signals) == 4
         assert all(
-            item["result"] == "true"
+            item["result"] == "unknown"
             for item in signals
             if item["predicate_id"] == "entity_confirmation"
         )

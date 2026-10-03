@@ -132,7 +132,8 @@ def test_default_thesis_uses_three_valued_inputs(cash, unlock, expected):
     inputs = research_inputs(1)
     parents = thesis_parents(inputs, cash, unlock)
     results = build_events(inputs, parents)
-    assert len(results) == 3
+    assert len(results) == 1
+    assert results[0].details["event_type"] == "upstream_bundle"
     for result in results:
         assert result.predicate_results[THESIS.predicate_id] is expected
         assert result.details["predicate"]["children"][1]["threshold"] == 0.05
@@ -283,7 +284,7 @@ def test_review_priority_is_hard_risk_then_deadline_then_source(risk, level):
         )
         for result in results
     )
-    assert [result.details["review_priority"] for result in results] == list(range(1, 6))
+    assert [result.details["review_priority"] for result in results] == list(range(1, 4))
     assert results == build_events(inputs, tuple(reversed(parents)))
 
 
