@@ -13,7 +13,7 @@ from ..product_foundation.contracts import EvidenceRef, Truth
 from ..product_foundation.numeric import price_gate
 from ..product_foundation.temporal import availability_gate
 from ..standard import normalize_date
-from ..store import digest
+from ..store import digest, encode
 from .common import gate, latest, unique_evidence
 from .context_aggregation import MAXIMUM_DETAILED_ROWS, ContextAggregate, context_status
 from .models import ResearchInputs, ResearchRow
@@ -1099,6 +1099,7 @@ def consume_context(
     例：SSE已观测而SZSE未知，接口整体仍为unknown。
     超过64条输入时逐组处理全部记录，只输出聚合统计、全量指纹及显式分层证据样本。
     小规模多组门禁按组键附加稳定摘要，例如SSE与SZSE不会写入相同的gate主键。
+    小规模观察和门禁共用规范组键顺序，例如反转两个交易所的输入不改变完整结果JSON。
     """
     if api not in CONTEXT_FIELDS or product not in {"P01", "P03"}:
         raise ValueError("unsupported_context_consumer")
@@ -1123,7 +1124,9 @@ def consume_context(
         if len(rows) > MAXIMUM_DETAILED_ROWS
         else None
     )
-    for key, group in groups.items():
+    ordered_keys = sorted(groups, key=encode) if aggregate is None else groups
+    for key in ordered_keys:
+        group = groups[key]
         candidates = tuple(group)
         if api in {"stk_weekly_monthly", "stk_week_month_adj"}:
             end_dates = [_day(row, "end_date", aligned=False) for row in group]
@@ -1213,7 +1216,7 @@ def consume_context(
         if aggregated
         else tuple(
             replace(check, gate_id=f"{check.gate_id}/{digest(key)}") if len(groups) > 1 else check
-            for key, item in zip(groups, observations, strict=True)
+            for key, item in zip(ordered_keys, observations, strict=True)
             for check in item["gates"]
         ),
     }

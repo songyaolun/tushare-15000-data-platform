@@ -20,6 +20,7 @@ from tushare_entitlement_hub.equity_research.storage import (
     save_results,
     stored_rows,
 )
+from tushare_entitlement_hub.store import encode
 
 
 @pytest.mark.parametrize("api", ["index_basic", "trade_cal"])
@@ -27,7 +28,7 @@ from tushare_entitlement_hub.equity_research.storage import (
 def test_small_market_groups_have_unique_stable_gates_and_can_be_saved(api, ambiguous):
     """两个指数或交易所组低于聚合阈值，仍可完整持久化；歧义组保留unknown且门禁不冲突。
 
-    输入顺序反转后门禁身份集合保持一致；保存后每张派生表均与结果反向重建一致。
+    输入逆序或循环移位后完整result JSON字节一致；保存后每张派生表均与结果反向重建一致。
     """
     rows = tuple(
         context_row(
@@ -70,13 +71,15 @@ def test_small_market_groups_have_unique_stable_gates_and_can_be_saved(api, ambi
     validate_result_consumption(result)
     gates = result.envelope.quality_gates
     assert len(gates) == len({gate.gate_id for gate in gates})
-    reversed_inputs = replace(inputs, rows_by_api={api: tuple(reversed(rows))})
-    repeated = attach_consumption(
-        reversed_inputs, product, (make_result(reversed_inputs, product, MARKET_ENTITY),)
-    )[0]
-    assert {gate.gate_id for gate in gates} == {
-        gate.gate_id for gate in repeated.envelope.quality_gates
-    }
+    for reordered in (tuple(reversed(rows)), rows[1:] + rows[:1]):
+        reordered_inputs = replace(inputs, rows_by_api={api: reordered})
+        repeated = attach_consumption(
+            reordered_inputs, product, (make_result(reordered_inputs, product, MARKET_ENTITY),)
+        )[0]
+        assert {gate.gate_id for gate in gates} == {
+            gate.gate_id for gate in repeated.envelope.quality_gates
+        }
+        assert encode(result.to_dict()) == encode(repeated.to_dict())
     with duckdb.connect(":memory:", config={"threads": 1, "memory_limit": "512MB"}) as connection:
         initialize_tables(connection)
         save_results(connection, (result,), 128)
