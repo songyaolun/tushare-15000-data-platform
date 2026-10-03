@@ -153,7 +153,11 @@ class ResearchInputs:
 
         不从新闻标题或跨接口业务哈希推断证券身份。
         """
-        bond_ids = {row.entity_id for row in self.rows_by_api.get("cb_basic", ())}
+        from .consumption_registry import BOND_APIS, INDEX_APIS
+
+        bond_ids = {
+            row.entity_id for api in BOND_APIS | INDEX_APIS for row in self.rows_by_api.get(api, ())
+        }
         bond_ids.update(
             relation.from_entity_id
             for relation in self.config.confirmed_relations

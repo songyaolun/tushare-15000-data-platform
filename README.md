@@ -30,4 +30,4 @@ uv run pytest --cov=tushare_entitlement_hub --cov-report=term-missing --cov-fail
 
 通用本地数据层支持正式采集、标准化、逐行验收以及 JSONL、Parquet、DuckDB 导出。后续产品可直接复用数据，不受既有产品分类限制。运行方式和质量边界见[本地数据参考](docs/本地数据参考.md)。
 
-共享产品基础层通过 `product-foundation initialize/validate` 离线消费只读参考库，写入独立产品库，提供实体、时间、单位、特征评分、三值信号及血缘。206 接口登记按附带矩阵逐项校验。新增 `research initialize/run/validate` 实现 P01/P03/P04/P06/P07/P13 股票研究闭环，保存可复算特征、门禁、排名、事件与证据。历史 PIT 仍未认证，缺字段或缺认证时明确降级；其余七个产品尚未实现。
+共享产品基础层通过 `product-foundation initialize/validate` 离线消费只读参考库，写入独立产品库，提供实体、时间、单位、特征评分、三值信号及血缘。206 接口登记按附带矩阵逐项校验。`research initialize/run/validate` 实现 P01/P03/P04/P06/P07/P13 股票研究闭环，六产品分配的 99 个接口均绑定实际消费者，保存可复算特征、门禁、排名、事件与证据，并逐接口区分已执行、已观测、未知和历史受限状态。历史 PIT 仍未认证，缺字段或缺认证时明确降级；其余七个产品尚未实现。

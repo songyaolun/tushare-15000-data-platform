@@ -17,6 +17,12 @@ from ..store import encode
 from .adapter import load_inputs
 from .candidates import build_candidates
 from .common import gate, make_result
+from .consumption import attach_consumption, count_consumption, summarize_consumption
+from .consumption_registry import (
+    CONSUMPTION_VERSION,
+    registry_fingerprint,
+    validate_consumption_registry,
+)
 from .events import build_events
 from .flow import build_flow
 from .fundamental import build_fundamental
@@ -66,6 +72,7 @@ def run_research(
         raise ValueError("input_output_path_collision")
     cutoff = normalize_timestamp(analysis_as_of)
     configured = config or ResearchConfig()
+    validate_consumption_registry()
     requested, products = select_products(selection)
     reference_hash = file_checksum(reference_path)
     run_id = run_identity(reference_hash, cutoff, configured, requested)
@@ -120,6 +127,7 @@ def run_research(
                         details={"mode": "observed_research", "reason": "empty_input"},
                     ),
                 )
+            results = attach_consumption(inputs, product, results)
             produced[product] = results
             if progress is not None:
                 progress(
@@ -128,6 +136,9 @@ def run_research(
         if file_checksum(reference_path) != reference_hash:
             raise ValueError("reference_changed_during_read")
         all_results = tuple(result for name in products for result in produced[name])
+        consumption_counts: dict[str, Counter[str]] = {}
+        for result in all_results:
+            count_consumption(consumption_counts, result)
         product_states = {
             name: dict(sorted(Counter(result.envelope.state.value for result in results).items()))
             for name, results in produced.items()
@@ -148,6 +159,7 @@ def run_research(
             "products": list(products),
             "product_states": product_states,
             "processing": processing,
+            "consumption": summarize_consumption(consumption_counts, list(products)),
             "result_count": len(all_results),
         }
         connection.execute("BEGIN TRANSACTION")
@@ -158,6 +170,8 @@ def run_research(
             metadata = {
                 "run_id": run_id,
                 "rule_version": RULE_VERSION,
+                "consumption_version": CONSUMPTION_VERSION,
+                "consumption_registry_fingerprint": registry_fingerprint(),
                 "reference_sha256": reference_hash,
                 "analysis_as_of": cutoff,
                 "config": configured.to_dict(),

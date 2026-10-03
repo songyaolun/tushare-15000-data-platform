@@ -14,6 +14,7 @@ from ..product_foundation.contracts import EvidenceRef
 from ..product_foundation.numeric import source_evidence
 from ..product_foundation.reference_scan import map_availability
 from ..reference_contract import load_reference_contracts
+from .adapter import adapt_row
 from .models import ResearchConfig
 
 
@@ -24,6 +25,7 @@ def verify_source_evidence(
     config: ResearchConfig,
     *,
     batch_size: int = 512,
+    analysis_as_of: str | None = None,
 ) -> None:
     """逐批核对已用与反证引用，拒绝来源不存在、隔离、契约或字段身份漂移。
 
@@ -84,7 +86,11 @@ def verify_source_evidence(
                         or row.get("source_api") != api
                     ):
                         raise ValueError("research_evidence_contract_mismatch")
-                    availability = map_availability(row, contracts[api], mappings[api])
+                    availability = (
+                        adapt_row(row, contracts[api], config, analysis_as_of).availability
+                        if analysis_as_of is not None
+                        else map_availability(row, contracts[api], mappings[api])
+                    )
                     expected = replace(
                         source_evidence(row, reference.fields[0], availability),
                         fields=reference.fields,

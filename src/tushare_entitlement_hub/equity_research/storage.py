@@ -14,10 +14,18 @@ from ..product_foundation.config import READ_BATCH_SIZE, validate_batch_size
 from ..product_foundation.contracts import EvidenceRef
 from ..reference_storage import file_checksum
 from ..store import digest, encode
+from .consumption import count_consumption, summarize_consumption, validate_result_consumption
+from .consumption_registry import (
+    CONSUMPTION_VERSION,
+    registry_fingerprint,
+    validate_consumption_registry,
+)
 from .models import PRODUCT_IDS, RULE_VERSION, ResearchConfig, ResearchResult
 from .source_validation import verify_source_evidence
 
 RESEARCH_TABLES = ("result", "feature", "contribution", "evidence", "gate", "signal", "lineage")
+MAXIMUM_INSERT_ROWS = 128
+MAXIMUM_INSERT_JSON_BYTES = 512 * 1024
 
 
 def run_identity(
@@ -27,7 +35,17 @@ def run_identity(
 
     例：相同输入重跑得到同一个64位摘要；阈值改变得到新批次。
     """
-    return digest([RULE_VERSION, reference_hash, cutoff, config.to_dict(), sorted(selection)])
+    return digest(
+        [
+            RULE_VERSION,
+            CONSUMPTION_VERSION,
+            registry_fingerprint(),
+            reference_hash,
+            cutoff,
+            config.to_dict(),
+            sorted(selection),
+        ]
+    )
 
 
 def record_rows(result: ResearchResult) -> Iterator[tuple[str, dict[str, Any]]]:
@@ -120,6 +138,7 @@ def initialize_tables(connection: duckdb.DuckDBPyConnection) -> None:
 
     所有子表持有显式result_id和run_id，完整校验执行反向引用检查。
     """
+    connection.execute("SET preserve_insertion_order=false")
     connection.execute("CREATE SCHEMA IF NOT EXISTS research")
     connection.execute(
         "CREATE TABLE IF NOT EXISTS research.run "
@@ -140,18 +159,42 @@ def initialize_tables(connection: duckdb.DuckDBPyConnection) -> None:
 def insert_rows(
     connection: duckdb.DuckDBPyConnection, table: str, rows: list[dict[str, Any]]
 ) -> None:
-    """一次集合式插入一个有限批次；例：512条记录只执行一次INSERT SELECT。
+    """按行数和JSON字节双重限批，以参数列写入，避免整批json_each反复解析。
 
-    表名受固定白名单控制，全部行内容使用参数绑定，冲突拒绝而非覆盖。
+    例：512条小记录至少分4次写入；两条各400KiB的JSON分别写入，单条超限记录独占
+    一批且不截断。表名受白名单控制，主键与载荷参数分离，冲突拒绝而非覆盖。
     """
     if table not in RESEARCH_TABLES:
         raise ValueError("unknown_research_table")
-    connection.execute(
-        f'INSERT INTO research."{table}" '
-        "SELECT value->>'record_id', value->>'run_id', value->>'result_id', "
-        "value->'payload' FROM json_each(?)",
-        [encode(rows)],
-    )
+    columns: list[list[str]] = [[], [], [], []]
+    pending_bytes = 0
+
+    def flush() -> None:
+        """写入一个有界参数批并立即释放缓冲；例：两行对应四个等长参数列。"""
+        connection.execute(
+            f'INSERT INTO research."{table}" '
+            "SELECT unnest(?::VARCHAR[]), unnest(?::VARCHAR[]), "
+            "unnest(?::VARCHAR[]), CAST(unnest(?::VARCHAR[]) AS JSON)",
+            columns,
+        )
+        for values in columns:
+            values.clear()
+
+    for row in rows:
+        payload = encode(row["payload"])
+        payload_bytes = len(payload.encode("utf-8"))
+        if columns[0] and (
+            len(columns[0]) >= MAXIMUM_INSERT_ROWS
+            or pending_bytes + payload_bytes > MAXIMUM_INSERT_JSON_BYTES
+        ):
+            flush()
+            pending_bytes = 0
+        for values, field in zip(columns[:3], ("record_id", "run_id", "result_id"), strict=True):
+            values.append(row[field])
+        columns[3].append(payload)
+        pending_bytes += payload_bytes
+    if columns[0]:
+        flush()
 
 
 def save_results(
@@ -159,7 +202,8 @@ def save_results(
 ) -> dict[str, int]:
     """将业务结果逐批拆表写入并计数；例：重复主键会失败并由上层事务回滚。
 
-    每张表缓冲最多batch_size行，不构造全库JSON数组。
+    结果载荷按单条写入，其他表最多缓冲min(batch_size,128)行；实际JSON插入另有
+    512KiB字节预算。完整消费与血缘全部保留，不构造全库JSON数组。
     """
     validate_batch_size(batch_size)
     pending: dict[str, list[dict[str, Any]]] = {table: [] for table in RESEARCH_TABLES}
@@ -168,7 +212,8 @@ def save_results(
         for table, row in record_rows(result):
             pending[table].append(row)
             counts[table] += 1
-            if len(pending[table]) >= batch_size:
+            write_size = 1 if table == "result" else min(batch_size, MAXIMUM_INSERT_ROWS)
+            if len(pending[table]) >= write_size:
                 insert_rows(connection, table, pending[table])
                 pending[table].clear()
     for table, rows in pending.items():
@@ -214,6 +259,7 @@ def verify_run(
     """
     validate_batch_size(batch_size)
     read_size = min(batch_size, READ_BATCH_SIZE)
+    validate_consumption_registry()
     config = ResearchConfig.from_dict(metadata["config"])
     run_id = metadata["run_id"]
     selection = metadata["selection"]
@@ -227,7 +273,11 @@ def verify_run(
         or metadata["products"] != [name for name in PRODUCT_IDS if name in required_products]
     ):
         raise ValueError("research_product_selection_invalid")
-    if metadata["rule_version"] != RULE_VERSION or run_id != run_identity(
+    if (
+        metadata.get("consumption_version") != CONSUMPTION_VERSION
+        or metadata.get("consumption_registry_fingerprint") != registry_fingerprint()
+        or metadata["rule_version"] != RULE_VERSION
+    ) or run_id != run_identity(
         metadata["reference_sha256"],
         metadata["analysis_as_of"],
         config,
@@ -261,6 +311,7 @@ def verify_run(
         raise ValueError("research_parent_reference_missing")
 
     product_states: dict[str, Counter[str]] = {}
+    consumption_counts: dict[str, Counter[str]] = {}
 
     def rebuilt_rows() -> Iterator[tuple[str, dict[str, Any]]]:
         """按有限批次反序列化结果并产生规范派生行；例：非法100分范围在此拒绝。
@@ -271,6 +322,8 @@ def verify_run(
         while batch := cursor.fetchmany(read_size):
             for (payload,) in batch:
                 result = ResearchResult.from_json(payload)
+                validate_result_consumption(result)
+                count_consumption(consumption_counts, result)
                 envelope = result.envelope
                 if (
                     envelope.run_id != run_id
@@ -301,6 +354,7 @@ def verify_run(
         "product_states": {
             name: dict(sorted(states.items())) for name, states in product_states.items()
         },
+        "consumption": summarize_consumption(consumption_counts, metadata["products"]),
         "status": "incomplete"
         if any(
             set(states) & {"blocked", "incomplete", "unsupported"}
@@ -357,6 +411,7 @@ def validate_research(reference_path: Path, product_path: Path) -> dict[str, Any
                         connection,
                         run_id,
                         ResearchConfig.from_dict(metadata["config"]),
+                        analysis_as_of=metadata["analysis_as_of"],
                     )
             for table in RESEARCH_TABLES:
                 orphan = connection.execute(

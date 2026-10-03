@@ -10,6 +10,7 @@ from typing import Any, cast
 from ..pit import time_boundary
 from ..product_foundation.contracts import EvidenceRef, QualityGateResult, Truth
 from .common import gate, latest, make_result, metric, percentiles
+from .flow_consumers import auxiliary_observation
 from .governance import _ambiguous, _number
 from .models import Metric, ResearchInputs, ResearchResult, ResearchRow
 
@@ -19,22 +20,30 @@ FLOW_FIELDS = {
     "moneyflow_ths": ("net_amount",),
 }
 AUXILIARY_FIELDS = {
-    "top_inst": ("exalter", "buy", "sell", "net_buy"),
-    "top_list": ("name", "reason"),
-    "hm_detail": ("hm_name", "buy_amount", "sell_amount"),
-    "hm_list": ("name", "desc"),
-    "hsgt_top10": ("name", "rank", "net_amount"),
-    "stock_hsgt": ("type",),
+    "top_inst": ("exalter", "side", "buy", "sell", "net_buy", "reason"),
+    "top_list": ("name", "reason", "l_buy", "l_sell", "net_amount"),
+    "hm_detail": ("hm_name", "hm_orgs", "buy_amount", "sell_amount", "net_amount"),
+    "hm_list": ("name", "desc", "orgs"),
+    "hsgt_top10": ("name", "rank", "market_type", "net_amount", "amount"),
+    "stock_hsgt": ("type", "type_name"),
     "margin_secs": ("exchange",),
-    "slb_sec": ("rqye",),
-    "slb_sec_detail": ("rate", "term"),
-    "limit_list_d": ("limit", "open_times"),
-    "limit_list_ths": ("tag", "status"),
+    "slb_sec": ("lent_qnt", "end_bal"),
+    "slb_sec_detail": ("tenor", "fee_rate", "lent_qnt"),
+    "limit_list_d": ("limit", "open_times", "fd_amount", "amount", "limit_times"),
+    "limit_list_ths": ("limit_type", "open_num", "lu_desc"),
     "limit_step": ("nums",),
     "stk_shock": ("reason", "period"),
-    "cyq_perf": ("winner_rate",),
-    "rt_min": ("time", "trade_time", "freq"),
+    "cyq_perf": ("cost_5pct", "cost_50pct", "cost_95pct", "weight_avg", "winner_rate"),
+    "rt_min": ("time", "trade_time", "freq", "close", "vol", "amount"),
 }
+
+
+def _auxiliary_rows(inputs: ResearchInputs, api: str, entity_id: str) -> tuple[ResearchRow, ...]:
+    """字典只随本证券实际席位标签进入局部证据；例：A的甲标签不会带入B的乙字典。"""
+    if api == "hm_list":
+        names = {row.text("hm_name") for row in inputs.rows("hm_detail", entity_id)} - {None}
+        return tuple(row for row in inputs.rows(api) if row.text("name") in names)
+    return inputs.rows(api, entity_id)
 
 
 def _aligned(row: ResearchRow | None, daily: ResearchRow | None) -> bool:
@@ -421,19 +430,14 @@ def build_flow(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
         daily = daily_rows[entity_id]
         gates, distance, activity = _gates(inputs, entity_id, daily)
         auxiliary = [
-            {
-                "source_api": api,
-                "source_record_id": row.raw["source_record_id"],
-                "business_variant_key": row.raw.get("business_variant_key"),
-                "source_fields": {field: row.raw[field] for field in fields if field in row.raw},
-            }
+            auxiliary_observation(inputs, row, entity_id, fields)
             for api, fields in AUXILIARY_FIELDS.items()
-            for row in inputs.rows(api, entity_id)
+            for row in _auxiliary_rows(inputs, api, entity_id)
         ]
         references = tuple(
             ref
             for api, fields in AUXILIARY_FIELDS.items()
-            for row in inputs.rows(api, entity_id)
+            for row in _auxiliary_rows(inputs, api, entity_id)
             for ref in row.evidence(*fields)
         )
         references += tuple(

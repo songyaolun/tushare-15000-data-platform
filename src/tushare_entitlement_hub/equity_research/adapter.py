@@ -23,88 +23,33 @@ from ..product_foundation.numeric import (
 from ..product_foundation.progress import ProgressCallback
 from ..product_foundation.reference import _inspect_source
 from ..product_foundation.reference_scan import map_availability, reference_rows
-from ..product_foundation.registry import load_registry
+from ..product_foundation.registry import ConsumerSpec, load_registry
 from ..product_foundation.temporal import availability_gate
 from ..reference_contract import ReferenceContract, load_reference_contracts
 from ..store import digest
+from .consumption_registry import (
+    EVENT_APIS,
+    TWO_PERIOD_APIS,
+    load_consumption_registry,
+)
 from .models import ResearchConfig, ResearchInputs, ResearchRow
 
-SOURCE_APIS = frozenset(
-    {
-        "stock_basic",
-        "daily",
-        "daily_basic",
-        "stk_limit",
-        "suspend_d",
-        "stk_shock",
-        "stk_high_shock",
-        "limit_list_d",
-        "limit_list_ths",
-        "moneyflow",
-        "moneyflow_dc",
-        "moneyflow_ths",
-        "margin_detail",
-        "cyq_chips",
-        "block_trade",
-        "top_inst",
-        "rt_min",
-        "income",
-        "income_vip",
-        "balancesheet",
-        "balancesheet_vip",
-        "cashflow",
-        "cashflow_vip",
-        "fina_audit",
-        "share_float",
-        "stk_seasoned",
-        "pledge_stat",
-        "pledge_detail",
-        "st",
-        "stock_st",
-        "stk_alert",
-        "cb_basic",
-        "cb_share",
-        "cb_call",
-        "repurchase",
-        "dividend",
-        "stk_holdertrade",
-        "cn_pmi",
-        "cn_ppi",
-        "cn_m",
-        "cn_cpi",
-        "cn_gdp",
-        "sf_month",
-        "major_news",
-        "disclosure_date",
-        "cn_schedule",
-        "idx_anns",
-        "namechange",
-    }
+SOURCE_APIS = frozenset(item.spec.api for item in load_consumption_registry())
+UNRESOLVED_APIS = frozenset(
+    item.spec.api
+    for item in load_consumption_registry()
+    if item.entity_scope in {"market", "bond", "dictionary", "event"}
 )
-EVENT_APIS = frozenset(
-    {
-        "share_float",
-        "stk_seasoned",
-        "pledge_detail",
-        "cb_basic",
-        "cb_call",
-        "repurchase",
-        "dividend",
-        "stk_holdertrade",
-        "major_news",
-        "disclosure_date",
-        "cn_schedule",
-        "idx_anns",
-        "namechange",
-        "stk_alert",
-        "st",
-        "stock_st",
-        "cyq_chips",
-    }
-)
-UNRESOLVED_APIS = frozenset({"major_news", "idx_anns", "cn_schedule"})
+
 QUOTE_FIELDS = {
-    "cb_basic": {"conv_price"},
+    "cb_basic": {"conv_price", "par"},
+    "cb_share": {"convert_price"},
+    "cb_daily": {"cb_value"},
+    "new_share": {"price"},
+    "cyq_perf": {"cost_5pct", "cost_50pct", "cost_95pct", "weight_avg"},
+    "stk_factor": {"close_qfq"},
+    "stk_factor_pro": {"close_qfq"},
+    "stk_week_month_adj": {"close_qfq", "close_hfq"},
     "cyq_chips": {"price"},
     "stk_limit": {"up_limit", "down_limit"},
     "block_trade": {"price"},
@@ -202,7 +147,14 @@ def adapt_row(
         raise ValueError("time_mapping_missing")
     if any(
         raw.get(field) is not None and field not in mapping.public_fields
-        for field in ("ann_date", "f_ann_date", "pub_date")
+        for field in (
+            "ann_date",
+            "f_ann_date",
+            "pub_date",
+            "publish_date",
+            "pub_time",
+            "res_ann_date",
+        )
     ):
         raise ValueError("public_field_mapping_missing")
     availability = map_availability(raw, contract, mapping)
@@ -221,16 +173,17 @@ def adapt_row(
     entity_id = None
     if entity_mapping is not None:
         business_time = availability.data_as_of or availability.effective_from
-        if business_time is None:
+        if business_time is None and api not in UNRESOLVED_APIS:
             raise ValueError("entity_business_time_unknown")
-        entity_id = resolve_alias(
-            config.foundation.aliases,
-            entity_mapping.namespace,
-            str(raw.get(entity_mapping.key_field, "")),
-            cutoff,
-            effective_at=business_time,
-            market_timezone=mapping.market_timezone,
-        )
+        if business_time is not None:
+            entity_id = resolve_alias(
+                config.foundation.aliases,
+                entity_mapping.namespace,
+                str(raw.get(entity_mapping.key_field, "")),
+                cutoff,
+                effective_at=business_time,
+                market_timezone=mapping.market_timezone,
+            )
     if entity_id is None and api not in UNRESOLVED_APIS:
         raise ValueError("entity_unresolved")
     return ResearchRow(entity_id=entity_id, source_api=api, raw=raw, availability=availability)
@@ -248,27 +201,104 @@ def retain_current(
     例：daily旧日后遇新日，旧行释放；share_float事件全部保留，超过容量整组拒绝。
     财务按报表口径分别保留最新期，未在内存物化完整历史。
     """
-    key = (
-        row.entity_id or "unresolved",
-        row.text("report_type") or "",
-        row.text("comp_type") or "",
-    )
+    dimensions = (row.text("report_type") or "", row.text("comp_type") or "")
+    if row.source_api == "cb_rating":
+        dimensions = (row.text("rating_com_name") or "", "")
+    elif row.source_api in {"stk_weekly_monthly", "stk_week_month_adj", "stk_nineturn"}:
+        dimensions = (row.text("freq") or "", "")
+    elif row.source_api in {"factor_list", "factor_value"}:
+        dimensions = (row.text("factor_name") or "", row.text("asset_type") or "")
+    # 无实体债券与市场分项仍按来源代码分组，不把多个证券的当前期间相互淘汰。
+    key = (retention_identity(row), *dimensions)
     candidates = groups.setdefault(key, [])
     previous_count = len(candidates)
     candidates.append(row)
     if row.source_api not in EVENT_APIS:
-        periods = sorted({item.availability.data_as_of or "" for item in candidates}, reverse=True)
-        width = 2 if row.source_api.startswith("cn_") or row.source_api == "sf_month" else 1
+        periods = sorted({retention_period(item) for item in candidates}, reverse=True)
+        width = 2 if row.source_api in TWO_PERIOD_APIS else 1
         chosen = set(periods[:width])
-        candidates[:] = [
-            item for item in candidates if (item.availability.data_as_of or "") in chosen
-        ]
+        candidates[:] = [item for item in candidates if retention_period(item) in chosen]
     if entity_counts is None:
         retained_count = sum(len(values) for group, values in groups.items() if group[0] == key[0])
     else:
         retained_count = entity_counts.get(key[0], 0) + len(candidates) - previous_count
         entity_counts[key[0]] = retained_count
     return retained_count > config.maximum_rows_per_entity_source
+
+
+def retention_period(row: ResearchRow) -> str:
+    """使用统计终点而非供应商周月标签日期，评级按公告期保留相邻状态。
+
+    输入标签2026-10-05、end_date=2026-10-02的周线，输出2026-10-02。
+    其他来源返回已经通过时间映射认证的业务期间，不推断缺失日期。
+    """
+    from ..standard import normalize_period
+
+    field = (
+        "end_date"
+        if row.source_api in {"stk_weekly_monthly", "stk_week_month_adj"}
+        else ("ann_date" if row.source_api == "cb_rating" else None)
+    )
+    value = row.text(field) if field is not None else None
+    if value is not None:
+        try:
+            return normalize_period(value)
+        except ValueError:
+            return ""
+    return row.availability.data_as_of or ""
+
+
+def retention_identity(row: ResearchRow) -> str:
+    """为未解析来源保存局部容量分组，使用来源内代码但不构造股票身份。
+
+    输入无实体cb_daily代码B，输出unresolved/B；无代码新闻仍输出unresolved。
+    """
+    if row.entity_id is not None:
+        return row.entity_id
+    code = next(
+        (
+            row.text(field)
+            for field in ("ts_code", "exchange", "name", "o_code")
+            if row.text(field) is not None
+        ),
+        None,
+    )
+    return "unresolved" if code is None else "unresolved/" + code
+
+
+def inspect_research_source(
+    connection: duckdb.DuckDBPyConnection,
+    entry: ConsumerSpec,
+    contract: ReferenceContract,
+    manifest: dict[str, Any] | None,
+    tables: set[tuple[str, str]],
+    cutoff: str,
+    config: ResearchConfig,
+) -> tuple[set[str], bool]:
+    """允许局部业务字段缺失的来源做质量观察，主键、元数据和账本仍严格检查。
+
+    输入有amount但缺close的daily，输出字段缺口并读取已有字段；缺source_record_id
+    仍拒绝整表。未出现的字段不会被补齐成零或伪造引用。
+    """
+    available = None
+    if ("accepted", entry.api) in tables:
+        available = {
+            row[0] for row in connection.execute(f'DESCRIBE accepted."{entry.api}"').fetchall()
+        }
+    selected = (
+        entry
+        if available is None
+        else replace(
+            entry,
+            selected_fields=tuple(field for field in entry.selected_fields if field in available),
+        )
+    )
+    reasons, readable = _inspect_source(
+        connection, selected, contract, manifest, tables, cutoff, config.thresholds
+    )
+    if available is not None and not set(entry.selected_fields) <= available:
+        reasons.add("consumption_fields_missing")
+    return reasons, readable
 
 
 def load_inputs(
@@ -327,14 +357,14 @@ def load_inputs(
             if entry is None:
                 source_reasons[api] = ("source_not_registered",)
                 continue
-            reasons, readable = _inspect_source(
+            reasons, readable = inspect_research_source(
                 connection,
                 entry,
                 contracts[api],
                 manifests.get(api),
                 tables,
                 cutoff,
-                config.thresholds,
+                config,
             )
             entity_bound = any(item.source_api == api for item in config.foundation.entity_mappings)
             time_bound = any(item.source_api == api for item in config.foundation.time_mappings)
@@ -361,7 +391,7 @@ def load_inputs(
                         counts["excluded_rows"] += 1
                         reasons.add("rows_excluded_by_adapter")
                         continue
-                    identity = row.entity_id or "unresolved"
+                    identity = retention_identity(row)
                     if overflow_source or identity in overflow_entities:
                         continue
                     if retain_current(groups, row, config, entity_counts=entity_counts):
