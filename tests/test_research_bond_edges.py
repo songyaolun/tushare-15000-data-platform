@@ -378,3 +378,36 @@ def test_unsampled_latest_source_date_is_preserved_in_market_envelope():
     assert rows[index].availability.source_record_id not in {
         ref.source_record_id for ref in result.envelope.evidence_refs
     }
+
+
+def test_unsampled_supporting_period_changes_full_bond_fingerprint():
+    """仅改变未抽样cb_basic旁证的业务期间，引用与报价判断不变，全量指纹仍须识别溯源变化。"""
+    context = bond_market_inputs(dict.fromkeys(COUNTS, 9))
+    terms = [
+        replace(row, availability=replace(row.availability, data_as_of="2026-10-01"))
+        for row in context.rows("cb_basic")
+    ]
+    context = replace_rows(context, "cb_basic", terms)
+    first = record_for(context, "cb_daily")
+    selected = {
+        ref["source_record_id"]
+        for ref in first["evidence_refs"]
+        if ref["source_api"] == "cb_basic"
+    }
+    index = next(
+        index
+        for index, row in enumerate(terms)
+        if row.availability.source_record_id not in selected
+    )
+    terms[index] = replace(
+        terms[index], availability=replace(terms[index].availability, data_as_of=DAY)
+    )
+    second = record_for(replace_rows(context, "cb_basic", terms), "cb_daily")
+    before, after = first["facts"]["aggregation"], second["facts"]["aggregation"]
+    assert first["status"] == second["status"] == "observed"
+    assert first["evidence_refs"] == second["evidence_refs"]
+    assert before["source_as_of"]["cb_basic"] == "2026-10-01"
+    assert after["source_as_of"]["cb_basic"] == DAY
+    for name in ("rows_fingerprint", "groups_fingerprint", "evidence_fingerprint"):
+        assert before[name] == after[name]
+    assert before["full_fingerprint"] != after["full_fingerprint"]

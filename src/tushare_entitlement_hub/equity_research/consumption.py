@@ -17,6 +17,7 @@ from ..product_foundation.contracts import (
 from ..product_foundation.temporal import availability_gate
 from ..store import encode
 from .bond_aggregation import MAXIMUM_DETAILED_BOND_ROWS, aggregate_bonds
+from .bond_validation import validate_bond_aggregation
 from .common import gate, make_result, unique_evidence
 from .consumption_registry import (
     CONSUMPTION_VERSION,
@@ -538,6 +539,12 @@ def validate_result_consumption(result: ResearchResult) -> None:
             for check in record["gates"]
         ):
             raise ValueError("research_consumption_reference_missing")
+        if (
+            item.spec.product == "P06"
+            and result.envelope.entity_id == MARKET_ENTITY
+            and item.entity_scope == "bond"
+        ):
+            validate_bond_aggregation(record, item, result.envelope, refs)
         if record["status"] in {"observed", "not_enabled_due_to_history"} and (
             not count
             or not any(

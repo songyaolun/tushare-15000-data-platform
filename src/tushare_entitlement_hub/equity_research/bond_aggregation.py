@@ -15,7 +15,7 @@ from .context_digest import DiskKeySet, MultisetDigest
 from .disclosure_consumers import _date, _underlying_relations
 from .models import MARKET_ENTITY, ResearchInputs, ResearchRow
 
-BOND_AGGREGATION_VERSION = "bond-market-aggregate/v1"
+BOND_AGGREGATION_VERSION = "bond-market-aggregate/v2"
 MAXIMUM_DETAILED_BOND_ROWS = 8
 MAXIMUM_GROUP_ROWS = 512
 MAXIMUM_DIMENSION_VALUES = 8
@@ -54,6 +54,33 @@ AUDIT_FIELDS = (
     "publish_date",
     "rating_type",
 )
+
+
+def bond_full_fingerprint(api: str, analysis_as_of: str, summary: dict[str, Any]) -> str:
+    """绑定全量行、分组、证据及规范旁证来源期间，供生成与重建使用同一指纹算法。
+
+    例：cb_daily原值与引用不变，仅未抽样cb_basic使source_as_of变化时，返回不同的64位摘要。
+    """
+    return digest(
+        [
+            BOND_AGGREGATION_VERSION,
+            api,
+            analysis_as_of,
+            summary["rows_fingerprint"],
+            summary["groups_fingerprint"],
+            summary["evidence_fingerprint"],
+            summary["source_as_of"],
+        ]
+    )
+
+
+def bond_audit_fingerprint(summary: dict[str, Any]) -> str:
+    """校验整个持久化审计对象，包含计数、统计、抽样声明及全量指纹，不包含自身。
+
+    例：只改usable_rows或sample_strata，输出摘要也改变；JSON键顺序不影响结果。
+    该摘要用于完整性检查，不是签名，也不能替代对参考库的来源验证。
+    """
+    return digest({key: value for key, value in summary.items() if key != "audit_fingerprint"})
 
 
 def _group_key(row: ResearchRow) -> tuple[str, str]:
@@ -321,16 +348,8 @@ def aggregate_bonds(
             {"status": status, "source_role": role, "reference_fingerprint": next(iter(sample))[0]}
             for (status, role), sample in sorted(aggregate.samples.items())
         ]
-        summary["full_fingerprint"] = digest(
-            [
-                BOND_AGGREGATION_VERSION,
-                api,
-                inputs.analysis_as_of,
-                summary["rows_fingerprint"],
-                summary["groups_fingerprint"],
-                summary["evidence_fingerprint"],
-            ]
-        )
+        summary["full_fingerprint"] = bond_full_fingerprint(api, inputs.analysis_as_of, summary)
+        summary["audit_fingerprint"] = bond_audit_fingerprint(summary)
         if registration.handler == "core":
             # 保持原core公开字段可观察即observed的口径，不因单位或其他债券缺字段伪装unknown。
             current = max((row.availability.data_as_of or "" for row in rows), default="")
