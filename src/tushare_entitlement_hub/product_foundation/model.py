@@ -25,6 +25,88 @@ Fraction = Annotated[float, "fraction"]
 Positive = Annotated[float, "positive"]
 Count = Annotated[int, "count"]
 
+_IMMUTABLE_SEAL = "_model_immutable_validation"
+_VALIDATED = object()
+
+
+@cache
+def _model_fields(model: type[Model]) -> tuple[str, ...]:
+    """缓存声明字段名，不包含实例缓存或验证凭据；例：Coverage得到四个契约字段名。"""
+    return tuple(field.name for field in fields(model))
+
+
+def _current_immutable(value: Any) -> bool:
+    """检查已验证不可变状态仍与凭据一致，递归检查子模型，拒绝任何可变容器。
+
+    例：已验证EvidenceRef返回True；其字段或嵌套子模型被绕过frozen强改后返回False。
+    凭据保存在实例上而非全局对象缓存，且不属于dataclass字段，不进入JSON或持久化。
+    """
+    if type(value) in {str, int, bool, type(None)} or isinstance(value, StrEnum):
+        return True
+    if type(value) is float:
+        return isfinite(value)
+    if type(value) is tuple:
+        return all(_current_immutable(child) for child in value)
+    if not isinstance(value, Model):
+        return False
+    names = _model_fields(cast(Hashable, type(value)))
+    state = value.__dict__
+    seal = state.get(_IMMUTABLE_SEAL)
+    if (
+        type(seal) is not tuple
+        or len(seal) != 3
+        or seal[0] is not _VALIDATED
+        or seal[1] is not type(value)
+        or type(seal[2]) is not tuple
+        or len(seal[2]) != len(names)
+        or len(state) != len(names) + 1
+    ):
+        return False
+    return all(
+        name in state and state[name] is previous and _current_immutable(previous)
+        for name, previous in zip(names, seal[2], strict=True)
+    )
+
+
+def _certify_immutable(value: Any, validated: Any) -> bool:
+    """仅在完整构造校验已成功后，证明原值与规范值类型和值相同且递归不可变。
+
+    例：冻结EvidenceRef可登记供后续复用；含dict的DecisionEnvelope始终返回False。
+    int与float、正负零、非dataclass子类或带额外实例状态的对象不视作等价可复用值。
+    验证失败的构造不会走到本函数，因此子类的领域约束不会被基类提前认证。
+    """
+    if type(value) is not type(validated):
+        return False
+    if type(value) in {str, int, bool, type(None)} or isinstance(value, StrEnum):
+        return bool(value == validated)
+    if type(value) is float:
+        return isfinite(value) and value.hex() == validated.hex()
+    if type(value) is tuple:
+        return len(value) == len(validated) and all(
+            _certify_immutable(left, right) for left, right in zip(value, validated, strict=True)
+        )
+    if not isinstance(value, Model):
+        return False
+    parameters = type(value).__dict__.get("__dataclass_params__")
+    names = _model_fields(cast(Hashable, type(value)))
+    if (
+        parameters is None
+        or not parameters.frozen
+        or _IMMUTABLE_SEAL in names
+        or value.__dict__.keys() - set(names) - {_IMMUTABLE_SEAL}
+        or validated.__dict__.keys() - set(names) - {_IMMUTABLE_SEAL}
+        or not all(
+            _certify_immutable(getattr(value, name), getattr(validated, name)) for name in names
+        )
+    ):
+        return False
+    object.__setattr__(
+        value,
+        _IMMUTABLE_SEAL,
+        (_VALIDATED, type(value), tuple(getattr(value, name) for name in names)),
+    )
+    return True
+
 
 @cache
 def _model_hints(model: type[Model]) -> dict[str, Any]:
@@ -91,7 +173,21 @@ def _typed(value: Any, annotation: Any) -> Any:
             _typed(key, arguments[0]): _typed(child, arguments[1]) for key, child in value.items()
         }
     if isinstance(annotation, type) and issubclass(annotation, Model):
-        return annotation.from_dict(asdict(value) if isinstance(value, annotation) else value)
+        if isinstance(value, Model):
+            if type(value) is not annotation:
+                raise ValueError("invalid_model_type")
+            if _current_immutable(value):
+                return value
+            # 只投影当前字段，容器仍由递归类型校验复制；避免asdict先破坏子模型身份。
+            converted = annotation.from_dict(
+                {name: getattr(value, name) for name in _model_fields(cast(Hashable, annotation))}
+            )
+            if _certify_immutable(value, converted):
+                return value
+            return converted
+        converted = annotation.from_dict(value)
+        _certify_immutable(converted, converted)
+        return converted
     if isinstance(annotation, type) and issubclass(annotation, StrEnum):
         try:
             return annotation(value)
