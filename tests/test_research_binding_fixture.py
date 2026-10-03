@@ -9,6 +9,7 @@ from typing import Any
 import duckdb
 
 from tushare_entitlement_hub.catalog import load_policies
+from tushare_entitlement_hub.equity_research.consumption_registry import load_consumption_registry
 from tushare_entitlement_hub.reference_contract import (
     load_reference_contracts,
     normalize_reference_row,
@@ -92,7 +93,8 @@ def write_reference(
     """创建正式列类型、规范化单位和来源证据齐全的临时 accepted DuckDB。
 
     rows_by_api按API替换或添加默认数据；例如{'daily': []}生成空行情表，
-    仍保留两只stock_basic。返回directory/reference.duckdb；不接触网络或正式缓存。
+    仍保留两只stock_basic。目录包含99个必需manifest，无数据来源不创建accepted表。
+    返回directory/reference.duckdb；不接触网络或正式缓存。
     """
     directory.mkdir(parents=True, exist_ok=True)
     reference = directory / "reference.duckdb"
@@ -152,6 +154,21 @@ def write_reference(
                 "quality": {
                     "source_rows": len(rows),
                     "accepted_rows": len(rows),
+                    "quarantined_rows": 0,
+                    "exact_duplicate_rows": 0,
+                },
+            }
+            connection.execute(
+                "INSERT INTO catalog VALUES (?, ?)", [api, json.dumps(manifest, sort_keys=True)]
+            )
+        for api in sorted({item.spec.api for item in load_consumption_registry()} - sources.keys()):
+            manifest = {
+                "contract_hash": contracts[api].fingerprint,
+                "observed_at": AS_OF,
+                "collection_status": "complete_declared_request",
+                "quality": {
+                    "source_rows": 0,
+                    "accepted_rows": 0,
                     "quarantined_rows": 0,
                     "exact_duplicate_rows": 0,
                 },

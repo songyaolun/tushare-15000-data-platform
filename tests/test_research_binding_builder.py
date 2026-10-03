@@ -562,28 +562,43 @@ def test_scan_future_event_keeps_observation_without_freshness_claim():
     assert expected is None
 
 
-def test_catalog_capacity_rejects_excess_entries_before_loading_manifests(tmp_path):
-    """目录记录数量大于正式契约数时立即拒绝，避免把无界清单载入内存。
+def test_catalog_accepts_all_contracts_plus_derived_calendar(tmp_path):
+    """250个真实合同来源加1个合法派生日历可构建，仅99个研究来源参与校验。
 
-    输入len(contracts)+1条目录行，抛binding_catalog_capacity_exceeded且不写配置。
+    输入251条catalog记录，输出99项配置、4个可读来源和8条扫描记录；派生日历不入审计。
     """
     from test_research_binding_fixture import AS_OF, write_reference
 
     from tushare_entitlement_hub.catalog import load_policies
-    from tushare_entitlement_hub.equity_research.binding_builder import write_research_config
+    from tushare_entitlement_hub.equity_research.binding_builder import build_research_config
     from tushare_entitlement_hub.reference_contract import load_reference_contracts
 
     reference = write_reference(tmp_path)
-    count = len(load_reference_contracts(load_policies())) + 1
+    contracts = load_reference_contracts(load_policies())
+    assert len(contracts) == 250
     with duckdb.connect(str(reference), config=DATABASE_CONFIG) as connection:
-        connection.execute("DELETE FROM catalog")
-        connection.execute(
-            "INSERT INTO catalog SELECT 'synthetic-' || range, '{}' FROM range(?)", [count]
+        present = {row[0] for row in connection.execute("SELECT api_name FROM catalog").fetchall()}
+        connection.executemany(
+            "INSERT INTO catalog VALUES (?, ?)",
+            [
+                (api, json.dumps({"contract_hash": contract.fingerprint, "observed_at": AS_OF}))
+                for api, contract in sorted(contracts.items())
+                if api not in present
+            ],
         )
-    output = tmp_path / "unwritten/config.json"
-    with pytest.raises(ValueError, match="binding_catalog_capacity_exceeded"):
-        write_research_config(reference, output, AS_OF)
-    assert not output.parent.exists()
+        connection.execute(
+            "INSERT INTO catalog VALUES (?, ?)",
+            [
+                "derived.cn_equity_trade_calendar",
+                json.dumps({"source_apis": ["trade_cal", "daily"], "observed_at": AS_OF}),
+            ],
+        )
+        assert connection.execute("SELECT count(*) FROM catalog").fetchone()[0] == 251
+    result = build_research_config(reference, AS_OF)
+    assert result.audit["summary"]["configured_apis"] == 99
+    assert result.audit["summary"]["readable_apis"] == 4
+    assert result.audit["summary"]["scanned_rows"] == 8
+    assert "derived.cn_equity_trade_calendar" not in result.audit["sources"]
 
 
 @pytest.mark.parametrize("failure", ["write", "replace"])

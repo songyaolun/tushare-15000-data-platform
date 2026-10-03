@@ -281,7 +281,8 @@ def build_research_config(
     """从只读正式reference结构构建确定性研究配置，不访问缓存、网络或凭据。
 
     输入合成stock_basic及daily，输出实体、时间、可认证单位和完整99源缺口报告。
-    文件SHA256在扫描前后比对；超容量、缺catalog或缺stock_basic均不产出配置。
+    文件SHA256在扫描前后比对；99项必需manifest缺失、重复或契约不符均拒绝。
+    目录仅查询这99项，额外派生日历等目录项不参与绑定或数量限制。
     """
     check_paths(reference_path)
     cutoff = normalize_timestamp(analysis_as_of)
@@ -308,8 +309,16 @@ def build_research_config(
             raise ValueError("reference_catalog_missing")
         if ("accepted", "stock_basic") not in tables:
             raise ValueError("binding_stock_basic_missing")
-        if source.execute("SELECT count(*) FROM catalog").fetchall()[0][0] > len(contracts):
-            raise ValueError("binding_catalog_capacity_exceeded")
+        required_apis = sorted(entries)
+        catalog_counts = source.execute(
+            "SELECT api_name,count(*) FROM catalog "
+            "WHERE api_name IN (SELECT unnest(?)) GROUP BY api_name",
+            [required_apis],
+        ).fetchall()
+        if any(count != 1 for _, count in catalog_counts):
+            raise ValueError("reference_catalog_duplicate")
+        if {api for api, _ in catalog_counts} != set(required_apis):
+            raise ValueError("reference_manifest_missing")
         manifests = {}
         # 只读消费所需的清单字段，不把请求参数或其他大对象载入Python。
         manifest_query = """SELECT api_name, json_object(
@@ -321,11 +330,12 @@ def build_research_config(
                 'accepted_rows', manifest::JSON->'quality'->'accepted_rows',
                 'quarantined_rows', manifest::JSON->'quality'->'quarantined_rows',
                 'exact_duplicate_rows', manifest::JSON->'quality'->'exact_duplicate_rows'))
-            FROM catalog"""
-        for api, payload in source.execute(manifest_query).fetchall():
-            if api in manifests:
-                raise ValueError("reference_catalog_duplicate")
-            manifests[api] = json.loads(payload)
+            FROM catalog WHERE api_name IN (SELECT unnest(?))"""
+        for api, payload in source.execute(manifest_query, [required_apis]).fetchall():
+            manifest = json.loads(payload)
+            if manifest["contract_hash"] != contracts[api].fingerprint:
+                raise ValueError("source_contract_mismatch")
+            manifests[api] = manifest
         for mapping in mappings:
             api = mapping.source_api
             reasons, readable = inspect_research_source(
@@ -538,9 +548,10 @@ def build_failure_code(error: Exception) -> str:
         "binding_row_capacity_exceeded",
         "binding_entity_capacity_exceeded",
         "binding_scan_capacity_exceeded",
-        "binding_catalog_capacity_exceeded",
         "reference_catalog_missing",
         "reference_catalog_duplicate",
+        "reference_manifest_missing",
+        "source_contract_mismatch",
         "binding_stock_basic_missing",
         "reference_changed_during_read",
         "public_field_mapping_missing",
