@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from math import fsum, isclose, isfinite
@@ -1125,98 +1126,101 @@ def consume_context(
         else None
     )
     ordered_keys = sorted(groups, key=encode) if aggregate is None else groups
-    for key in ordered_keys:
-        group = groups[key]
-        candidates = tuple(group)
-        if api in {"stk_weekly_monthly", "stk_week_month_adj"}:
-            end_dates = [_day(row, "end_date", aligned=False) for row in group]
-            newest_end = max((day for day in end_dates if day is not None), default=None)
-            candidates = tuple(
-                row for row in group if _day(row, "end_date", aligned=False) == newest_end
-            )
-        selected = latest(candidates)
-        if selected is None:
-            observation = _result(
-                "unknown",
-                {"version_status": "ambiguous"},
-                tuple(ref for row in group for ref in _refs(row, *CONTEXT_FIELDS[api])),
-                "context_current_version_ambiguous",
-            )
+    with aggregate if aggregate is not None else nullcontext():
+        for key in ordered_keys:
+            group = groups[key]
+            candidates = tuple(group)
+            if api in {"stk_weekly_monthly", "stk_week_month_adj"}:
+                end_dates = [_day(row, "end_date", aligned=False) for row in group]
+                newest_end = max((day for day in end_dates if day is not None), default=None)
+                candidates = tuple(
+                    row for row in group if _day(row, "end_date", aligned=False) == newest_end
+                )
+            selected = latest(candidates)
+            if selected is None:
+                observation = _result(
+                    "unknown",
+                    {"version_status": "ambiguous"},
+                    tuple(ref for row in group for ref in _refs(row, *CONTEXT_FIELDS[api])),
+                    "context_current_version_ambiguous",
+                )
+                if aggregate is not None:
+                    aggregate.add(key, len(group), observation)
+                else:
+                    observations.append(observation)
+                continue
+            if api in PERIOD_APIS:
+                observation = _period(inputs, selected)
+            elif api in {"index_basic", "index_daily", "index_dailybasic"}:
+                observation = _index(inputs, selected)
+            elif api in {"daily_info", "sz_daily_info"}:
+                observation = _summary(inputs, selected)
+            elif api in {"shibor_lpr", "eco_cal", "stk_account", "moneyflow_mkt_dc"}:
+                observation = _macro_context(inputs, selected)
+            elif api == "trade_cal":
+                observation = _calendar(inputs, selected)
+            elif api == "bse_mapping":
+                observation = _mapping(inputs, selected, entity_id)
+            elif api == "factor_list":
+                observation = _factor_dictionary(inputs, selected)
+            elif api == "factor_value":
+                observation = _factor_value(inputs, selected)
+            elif api == "adj_factor":
+                observation = _adjustment(inputs, selected)
+            elif api in {"bak_daily", "pro_bar", "idx_factor_pro"}:
+                observation = _quote_check(inputs, selected)
+            else:
+                observation = _technical(inputs, selected)
             if aggregate is not None:
                 aggregate.add(key, len(group), observation)
             else:
                 observations.append(observation)
-            continue
-        if api in PERIOD_APIS:
-            observation = _period(inputs, selected)
-        elif api in {"index_basic", "index_daily", "index_dailybasic"}:
-            observation = _index(inputs, selected)
-        elif api in {"daily_info", "sz_daily_info"}:
-            observation = _summary(inputs, selected)
-        elif api in {"shibor_lpr", "eco_cal", "stk_account", "moneyflow_mkt_dc"}:
-            observation = _macro_context(inputs, selected)
-        elif api == "trade_cal":
-            observation = _calendar(inputs, selected)
-        elif api == "bse_mapping":
-            observation = _mapping(inputs, selected, entity_id)
-        elif api == "factor_list":
-            observation = _factor_dictionary(inputs, selected)
-        elif api == "factor_value":
-            observation = _factor_value(inputs, selected)
-        elif api == "adj_factor":
-            observation = _adjustment(inputs, selected)
-        elif api in {"bak_daily", "pro_bar", "idx_factor_pro"}:
-            observation = _quote_check(inputs, selected)
-        else:
-            observation = _technical(inputs, selected)
-        if aggregate is not None:
-            aggregate.add(key, len(group), observation)
-        else:
-            observations.append(observation)
-    aggregated = aggregate.finish() if aggregate is not None else None
-    status = (
-        aggregated["status"]
-        if aggregated
-        else context_status({item["status"] for item in observations})
-    )
-    reasons = (
-        set(aggregated["reason_codes"])
-        if aggregated
-        else {reason for item in observations for reason in item["reason_codes"]}
-    )
-    if not groups:
-        reasons.add("context_accepted_rows_unavailable")
-    if len(usable) != len(rows):
-        reasons.add("context_rows_rejected_by_quality_or_time")
-    return {
-        "status": status,
-        "reason_codes": tuple(sorted(reasons)),
-        "facts": {
-            "independent_evidence": False,
-            "independent_evidence_count": 0,
-            "core_score_contribution": 0,
-            "calculation_scope": "current_observation",
-            "historical_pit_certified": False,
-            **(
-                aggregated["facts"]
-                if aggregated
-                else {
-                    "observations": [
-                        item["facts"]
-                        | {"status": item["status"], "reason_codes": list(item["reason_codes"])}
-                        for item in observations
-                    ]
-                }
+        aggregated = aggregate.finish() if aggregate is not None else None
+        status = (
+            aggregated["status"]
+            if aggregated
+            else context_status({item["status"] for item in observations})
+        )
+        reasons = (
+            set(aggregated["reason_codes"])
+            if aggregated
+            else {reason for item in observations for reason in item["reason_codes"]}
+        )
+        if not groups:
+            reasons.add("context_accepted_rows_unavailable")
+        if len(usable) != len(rows):
+            reasons.add("context_rows_rejected_by_quality_or_time")
+        return {
+            "status": status,
+            "reason_codes": tuple(sorted(reasons)),
+            "facts": {
+                "independent_evidence": False,
+                "independent_evidence_count": 0,
+                "core_score_contribution": 0,
+                "calculation_scope": "current_observation",
+                "historical_pit_certified": False,
+                **(
+                    aggregated["facts"]
+                    if aggregated
+                    else {
+                        "observations": [
+                            item["facts"]
+                            | {"status": item["status"], "reason_codes": list(item["reason_codes"])}
+                            for item in observations
+                        ]
+                    }
+                ),
+            },
+            "evidence_refs": aggregated["evidence_refs"]
+            if aggregated
+            else unique_evidence(ref for item in observations for ref in item["evidence_refs"]),
+            "gates": aggregated["gates"]
+            if aggregated
+            else tuple(
+                replace(check, gate_id=f"{check.gate_id}/{digest(key)}")
+                if len(groups) > 1
+                else check
+                for key, item in zip(ordered_keys, observations, strict=True)
+                for check in item["gates"]
             ),
-        },
-        "evidence_refs": aggregated["evidence_refs"]
-        if aggregated
-        else unique_evidence(ref for item in observations for ref in item["evidence_refs"]),
-        "gates": aggregated["gates"]
-        if aggregated
-        else tuple(
-            replace(check, gate_id=f"{check.gate_id}/{digest(key)}") if len(groups) > 1 else check
-            for key, item in zip(ordered_keys, observations, strict=True)
-            for check in item["gates"]
-        ),
-    }
+        }

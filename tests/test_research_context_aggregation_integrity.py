@@ -36,12 +36,12 @@ def test_row_fingerprint_covers_price_and_unit_semantics(field):
 
 def aggregate_observations(rows, observations):
     """使用真实聚合器累加合成领域判断；例如两组冲突与未知保留两个原因码及全量摘要。"""
-    aggregate = ContextAggregate(
+    with ContextAggregate(
         "index_basic", rows, rows, ("ts_code",), rows[0].availability.observed_at
-    )
-    for index, observation in enumerate(observations):
-        aggregate.add((index,), 1, observation)
-    return aggregate.finish()
+    ) as aggregate:
+        for index, observation in enumerate(observations):
+            aggregate.add((index,), 1, observation)
+        return aggregate.finish()
 
 
 def test_full_fingerprint_covers_unsampled_comparison_references():

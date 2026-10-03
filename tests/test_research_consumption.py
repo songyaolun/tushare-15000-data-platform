@@ -98,7 +98,9 @@ def test_missing_or_duplicate_registration_is_rejected(monkeypatch):
     load_consumption_registry.cache_clear()
 
 
-@pytest.mark.parametrize("previous_version", ["equity-consumption/v2", "equity-consumption/v3"])
+@pytest.mark.parametrize(
+    "previous_version", ["equity-consumption/v2", "equity-consumption/v3", "equity-consumption/v4"]
+)
 def test_registry_rule_version_prevents_reusing_original_v1_run_key(previous_version):
     """场景：同参考指纹和v1产品配置；预期：有界聚合不复用旧消费运行键，产品ID仍为v1。"""
     config = ResearchConfig()
@@ -116,7 +118,7 @@ def test_registry_rule_version_prevents_reusing_original_v1_run_key(previous_ver
             sorted(selection),
         ]
     )
-    assert CONSUMPTION_VERSION == "equity-consumption/v4"
+    assert CONSUMPTION_VERSION == "equity-consumption/v5"
     assert run_identity("synthetic", NOW, config, selection) != previous_gate_key
     assert all(name.endswith("/v1") for name in PRODUCT_ALIASES.values())
 
