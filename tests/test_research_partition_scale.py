@@ -1,4 +1,4 @@
-"""生产分段写入器的2.5百万行/宽JSON合成压力验证，逐行全量指纹对账。"""
+"""生产分段写入器的5百万行/交错宽JSON合成压力验证，逐行全量指纹对账。"""
 
 import json
 from hashlib import md5, sha256
@@ -11,25 +11,26 @@ from tushare_entitlement_hub.equity_research.persistence_runtime import Persiste
 from tushare_entitlement_hub.equity_research.projection import EncodedRecord, accumulate_records
 
 layout = {
-    "result": (100, 32768),
-    "feature": (10000, 4),
-    "contribution": (2500, 4),
-    "evidence": (10000, 8),
-    "gate": (10000, 16),
-    "signal": (2500, 2),
-    "lineage": (15000, 2),
+    "result": (1, 32768),
+    "feature": (100, 4),
+    "contribution": (25, 4),
+    "evidence": (100, 8),
+    "gate": (100, 16),
+    "signal": (25, 2),
+    "lineage": (150, 2),
 }
 
 
 def test_millions_of_wide_projections_keep_full_fingerprints_in_512mb(
     tmp_path, prepared_path=None
 ):
-    """250.5万投影及约6GB JSON使用真实分段写入器，完整核对七表SHA256、多重集计数和跨段键。
+    """501万投影及超过11GB JSON使用真实分段写入器，完整核对七表SHA256、多重集计数和跨段键。
 
     不用墙钟阈值；数据同时包含1MiB宽结果及大量窄引用，连接始终512MB，关闭重开后逐段重建。
     prepared_path仅供显式复核本测试已写完的合成库；仍重新生成全部期望行/字节/摘要，不能跳过校验。
     """
     start = perf_counter()
+    run_id = sha256(b"synthetic-run").hexdigest()
     path = prepared_path if prepared_path is not None else tmp_path / "stage.duckdb"
     connection = duckdb.connect(
         str(path), read_only=prepared_path is not None,
@@ -50,26 +51,26 @@ def test_millions_of_wide_projections_keep_full_fingerprints_in_512mb(
     expected = {table: [0, 0] for table in layout}
     total_bytes = 0
     try:
-        for cycle in range(50):
+        for cycle in range(10000):
             for table, (count, width) in layout.items():
                 for index in range(offsets[table], offsets[table] + count):
                     identity = sha256((table + str(index)).encode()).hexdigest()
                     parent = (
                         identity
                         if table == "result"
-                        else sha256(("result" + str(index % 5000)).encode()).hexdigest()
+                        else sha256(("result" + str(cycle)).encode()).hexdigest()
                     )
                     payload = json.dumps(
                         {"synthetic": md5(str(index).encode()).hexdigest() * width, "value": index},
                         separators=(",", ":"),
                     )
-                    row = EncodedRecord(table, identity, "run", parent, payload)
+                    row = EncodedRecord(table, identity, run_id, parent, payload)
                     accumulate_records((row,), expected)
                     total_bytes += len(payload)
                     if prepared_path is None:
                         buffers[table].add(row)
                 offsets[table] += count
-            if cycle % 10 == 0:
+            if cycle % 500 == 0:
                 print(
                     "write" if prepared_path is None else "regenerate_expected",
                     cycle,
@@ -83,16 +84,18 @@ def test_millions_of_wide_projections_keep_full_fingerprints_in_512mb(
         if prepared_path is None:
             connection.execute("COMMIT")
             connection.execute("CHECKPOINT")
+        if prepared_path is None:
+            writer.close()
         connection.close()
         connection = duckdb.connect(
             str(path), read_only=True, config={"threads": 1, "memory_limit": "512MB"}
         )
-        storage._verify_keys(connection, "run", PersistenceProgress("verify", None, None))
+        storage._verify_keys(connection, run_id, PersistenceProgress("verify", None, None))
         print("keys_complete", round(perf_counter() - start, 3), flush=True)
-        actual = accumulate_records(storage._stored_records(connection, "run", tuple(layout)))
+        actual = accumulate_records(storage._stored_records(connection, run_id, tuple(layout)))
         assert expected == actual
-        assert sum(offsets.values()) == 2505000
-        assert total_bytes > 4800000000
+        assert sum(offsets.values()) == 5010000
+        assert total_bytes > 9660000000
         print(
             "COMPLETE",
             sum(offsets.values()),
@@ -103,4 +106,6 @@ def test_millions_of_wide_projections_keep_full_fingerprints_in_512mb(
             flush=True,
         )
     finally:
+        if prepared_path is None:
+            writer.close()
         connection.close()

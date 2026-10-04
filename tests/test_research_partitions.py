@@ -153,8 +153,13 @@ def test_partition_limits_and_missing_counts_fail_closed(segmented, monkeypatch)
             return None
 
     probe = MissingCount()
+    missing_writer = partitions.PartitionWriter(connection)
+    missing_writer.connection = probe
     with pytest.raises(ValueError, match="research_partition_layout_invalid"):
-        partitions.PartitionWriter(probe).insert("feature", [["id"], ["run"], ["id"], ["{}"]], 2)
+        missing_writer.insert("feature", [["id"], ["run"], ["id"], ["{}"]], 2)
+    missing_writer.close()
+    with pytest.raises(ValueError, match="research_partition_keys_invalid"):
+        partitions.PartitionWriter(probe)
     with pytest.raises(ValueError, match="research_partition_keys_invalid"):
         partitions.verify_partition_keys(probe, "result", "run")
 
@@ -209,25 +214,25 @@ def test_balanced_view_builder_retains_odd_tail_and_empty_contract():
     )
 
 
-def test_key_join_missing_count_is_rejected(segmented):
-    """键数量相等但后续一一对应查询没有返回计数时仍失败，不能把缺失统计当作零。"""
+def test_key_physical_read_missing_rows_is_rejected(segmented):
+    """键数量相等但驱动漏读全部物理元数据时仍失败，不能把空读取当作完整对账。"""
     connection, _ = segmented
 
-    class MissingJoin:
-        """仅丢弃FULL JOIN的返回值，其余查询使用真实库。"""
+    class MissingRows:
+        """仅丢弃物理元数据读取，其余查询和流式COPY仍使用真实库。"""
 
         def execute(self, query, parameters=None):
-            """FULL JOIN模拟无结果；例：前置数量核对通过后仍必须检查关系计数。"""
-            if " FULL JOIN " in query:
+            """物理段模拟空游标；例：前置数量核对通过后仍必须完整核销登记。"""
+            if query.startswith('SELECT record_id,run_id,result_id FROM research."_part_'):
                 return self
             return connection.execute(query, parameters)
 
-        def fetchone(self):
-            """返回缺失统计；例：预期固定partition_keys_invalid。"""
-            return None
+        def fetchmany(self, size):
+            """返回缺失物理行；例：磁盘登记无法全部核销，预期固定partition_keys_invalid。"""
+            return []
 
     with pytest.raises(ValueError, match="research_partition_keys_invalid"):
-        partitions.verify_partition_keys(MissingJoin(), "result", "run")
+        partitions.verify_partition_keys(MissingRows(), "result", "run")
 
 
 def test_missing_view_definition_fails_closed(segmented):

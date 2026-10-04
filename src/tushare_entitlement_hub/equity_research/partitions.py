@@ -3,15 +3,29 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import duckdb
 
+from .key_index import DiskKeyIndex, DiskKeyMatcher
 from .projection import RESEARCH_TABLES
 
 MAXIMUM_PARTITION_BYTES = 16 * 1024 * 1024
 MAXIMUM_PARTITIONS = 4096
+MAXIMUM_PARTITION_ROWS = 16384
 ROW_PAYLOAD_BOUND = 8 * 1024 * 1024
 _COLUMNS = "record_id,run_id,result_id,payload"
+_KEY_LAYOUT = '"disk_btree_v1"'
+
+
+def _disk_key_layout(connection: duckdb.DuckDBPyConnection) -> bool:
+    """读取物理键存储版本，只接受缺省旧ART或明确磁盘唯一性协议；例：未知版本固定拒绝。"""
+    row = connection.execute(
+        "SELECT payload FROM research.metadata WHERE key='partition_keys'", []
+    ).fetchone()
+    if row is not None and row[0] != _KEY_LAYOUT:
+        raise ValueError("research_partition_layout_invalid")
+    return row is not None
 
 
 def partition_name(table: str, number: int) -> str:
@@ -83,23 +97,67 @@ def _view_parts(sql: str) -> tuple[str, ...]:
 
 
 class PartitionWriter:
-    """事务内按实际JSON字节滚动分段，已有段封存；键另存窄表防止跨段重复。"""
+    """事务内按字节和行数滚动分段，精确磁盘索引拒绝跨段/跨run重复，窄表不再使用全局ART。"""
 
     def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
-        """加载段目录，不扫描历史JSON；旧表按每行8MiB上界保守计预算，例：旧大表在首次追加前封存。"""
+        """验证历史键并迁移旧ART，分批登记磁盘索引；例：新增run仍拒绝历史record_id，旧JSON不重写。"""
         self.connection = connection
         self.parts = {
             table: list(names) for table, names in validate_partition_layout(connection).items()
         }
         self.targets: dict[str, str] = {}
         self.sizes: dict[str, int] = {}
+        self.rows: dict[str, int] = {}
+        self.index = DiskKeyIndex()
+        try:
+            for table in RESEARCH_TABLES:
+                if table in self.parts:
+                    verify_partition_keys(connection, table, None)
+                source = "_keys_" + table if table in self.parts else table
+                cursor = connection.execute(f'SELECT record_id FROM research."{source}"')
+                while batch := cursor.fetchmany(1024):
+                    self.index.add(table, (row[0] for row in batch))
+            if not _disk_key_layout(connection):
+                for table in self.parts:
+                    replacement = "_migrate_keys_" + table
+                    connection.execute(
+                        f'CREATE TABLE research."{replacement}" (record_id VARCHAR NOT NULL,'
+                        "run_id VARCHAR NOT NULL,result_id VARCHAR NOT NULL)"
+                    )
+                    connection.execute(
+                        f'INSERT INTO research."{replacement}" SELECT record_id,run_id,result_id '
+                        f'FROM research."_keys_{table}"'
+                    )
+                    connection.execute(f'DROP TABLE research."_keys_{table}"')
+                    connection.execute(
+                        f'ALTER TABLE research."{replacement}" RENAME TO "_keys_{table}"'
+                    )
+                connection.execute(
+                    "INSERT INTO research.metadata VALUES ('partition_keys',?)", [_KEY_LAYOUT]
+                )
+        except BaseException:
+            self.index.close()
+            raise
 
-    def _target(self, table: str, size: int) -> str:
-        """在超预算前封存旧表/段并创建下一段，旧行不复制、不重写；例：16MiB段不会再接收下一行。"""
+    def close(self) -> None:
+        """释放私有磁盘索引，主库只保留可独立重建的窄键行；例：保存失败后不留下SQLite侧车。"""
+        self.index.close()
+
+    def __enter__(self) -> PartitionWriter:
+        """限定索引生命周期；例：with PartitionWriter(connection) as writer退出即清理。"""
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        """保留原异常并清理私有索引；例：重复键抛错后调用者仍可回滚DuckDB事务。"""
+        self.close()
+
+    def _target(self, table: str, size: int, rows: int) -> str:
+        """按字节和行数双界限封存旧表/段；例：达到16MiB或16384行后另开段，旧值不重写。"""
         if table not in self.targets:
             if table in self.parts:
                 self.targets[table] = ""
                 self.sizes[table] = MAXIMUM_PARTITION_BYTES
+                self.rows[table] = MAXIMUM_PARTITION_ROWS
             else:
                 counted = self.connection.execute(
                     f'SELECT count(*) FROM research."{table}"'
@@ -109,14 +167,18 @@ class PartitionWriter:
                 count = counted[0]
                 self.targets[table] = table
                 self.sizes[table] = count * ROW_PAYLOAD_BOUND
-        if self.sizes[table] + size <= MAXIMUM_PARTITION_BYTES:
+                self.rows[table] = count
+        if (
+            self.sizes[table] + size <= MAXIMUM_PARTITION_BYTES
+            and self.rows[table] + rows <= MAXIMUM_PARTITION_ROWS
+        ):
             return self.targets[table]
         if table not in self.parts:
             first = partition_name(table, 0)
             self.connection.execute(f'ALTER TABLE research."{table}" RENAME TO "{first}"')
             self.connection.execute(
                 f'CREATE TABLE research."_keys_{table}" '
-                "(record_id VARCHAR PRIMARY KEY,run_id VARCHAR NOT NULL,result_id VARCHAR NOT NULL)"
+                "(record_id VARCHAR NOT NULL,run_id VARCHAR NOT NULL,result_id VARCHAR NOT NULL)"
             )
             self.connection.execute(
                 f'INSERT INTO research."_keys_{table}" SELECT record_id,run_id,result_id '
@@ -133,6 +195,7 @@ class PartitionWriter:
             f'CREATE OR REPLACE VIEW research."{table}" AS {view_select(self.parts[table])}'
         )
         self.targets[table], self.sizes[table] = name, 0
+        self.rows[table] = 0
         return name
 
     def insert(self, table: str, columns: list[list[str]], payload_bytes: int) -> None:
@@ -144,7 +207,10 @@ class PartitionWriter:
             raise ValueError("unknown_research_table")
         if payload_bytes > MAXIMUM_PARTITION_BYTES:
             raise ValueError("research_partition_payload_capacity_exceeded")
-        target = self._target(table, payload_bytes)
+        if len(columns[0]) > MAXIMUM_PARTITION_ROWS:
+            raise ValueError("research_partition_row_capacity_exceeded")
+        target = self._target(table, payload_bytes, len(columns[0]))
+        self.index.add(table, columns[0])
         if table in self.parts:
             self.connection.execute(
                 f'INSERT INTO research."_keys_{table}" SELECT unnest(?::VARCHAR[]),'
@@ -157,6 +223,7 @@ class PartitionWriter:
             columns,
         )
         self.sizes[table] += payload_bytes
+        self.rows[table] += len(columns[0])
 
 
 def validate_partition_layout(
@@ -168,6 +235,7 @@ def validate_partition_layout(
     普通旧版基础表没有分段，不需要迁移或额外元数据。
     """
     parts = partition_catalog(connection)
+    disk_keys = _disk_key_layout(connection)
     rows = connection.execute(
         "SELECT table_name,table_type FROM information_schema.tables "
         "WHERE table_catalog=current_database() AND table_schema='research'",
@@ -187,13 +255,30 @@ def validate_partition_layout(
         ).fetchall()
         if columns == ["record_id"]
     }
+    indexed = {
+        row[0] for row in connection.execute(
+            "SELECT table_name FROM duckdb_indexes() WHERE database_name=current_database() "
+            "AND schema_name='research' UNION SELECT table_name FROM duckdb_constraints() "
+            "WHERE database_name=current_database() AND schema_name='research' "
+            "AND constraint_type IN ('PRIMARY KEY','UNIQUE','FOREIGN KEY')", []
+        ).fetchall()
+    }
     for table, names in parts.items():
         if (
             kinds.get(table) != "VIEW"
-            or "_keys_" + table not in constraints
+            or kinds.get("_keys_" + table) != "BASE TABLE"
+            or (("_keys_" + table in constraints) == disk_keys)
+            or (disk_keys and "_keys_" + table in indexed)
             or names != tuple(partition_name(table, number) for number in range(len(names)))
             or any(kinds[name] != "BASE TABLE" for name in names)
         ):
+            raise ValueError("research_partition_layout_invalid")
+        columns = connection.execute(
+            "SELECT column_name,data_type,is_nullable FROM information_schema.columns "
+            "WHERE table_catalog=current_database() AND table_schema='research' "
+            "AND table_name=? ORDER BY ordinal_position", ["_keys_" + table],
+        ).fetchall()
+        if columns != [(name, "VARCHAR", "NO") for name in ("record_id", "run_id", "result_id")]:
             raise ValueError("research_partition_layout_invalid")
         definitions = connection.execute(
             "SELECT sql FROM duckdb_views() WHERE database_name=current_database() "
@@ -205,23 +290,40 @@ def validate_partition_layout(
     return parts
 
 
-def verify_partition_keys(connection: duckdb.DuckDBPyConnection, table: str, run_id: str) -> None:
-    """用窄元数据核对物理行与全局主键的一一对应，不扫描大payload；例：多行共用一个键或键缺行均拒绝。"""
+def verify_partition_keys(
+    connection: duckdb.DuckDBPyConnection, table: str, run_id: str | None
+) -> None:
+    """先全局精确去重，再核对物理行与窄键一一对应；例：跨run重复、键缺行或元数据变化均拒绝。
+
+    仅三列元数据流式COPY到私有CSV，再以磁盘B-tree逐段精确核销；run_id=None覆盖全部历史行。
+    """
+    duplicate = connection.execute(
+        f'SELECT record_id FROM research."_keys_{table}" '
+        "GROUP BY record_id HAVING count(*)>1 LIMIT 1", []
+    ).fetchone()
+    if duplicate is not None:
+        raise ValueError("research_primary_key_invalid")
     row = connection.execute(
-        f'SELECT (SELECT count(*) FROM research."{table}" WHERE run_id=?) - '
-        f'(SELECT count(*) FROM research."_keys_{table}" WHERE run_id=?)',
-        [run_id, run_id],
+        f'SELECT (SELECT count(*) FROM research."{table}" WHERE (? IS NULL OR run_id=?)) - '
+        f'(SELECT count(*) FROM research."_keys_{table}" WHERE (? IS NULL OR run_id=?))',
+        [run_id, run_id, run_id, run_id],
     ).fetchone()
     if row is None or row[0]:
         raise ValueError("research_partition_keys_invalid")
-    row = connection.execute(
-        "SELECT count(*) FROM "
-        f'(SELECT record_id,run_id,result_id FROM research."{table}" WHERE run_id=?) data '
-        "FULL JOIN "
-        f'(SELECT record_id,run_id,result_id FROM research."_keys_{table}" WHERE run_id=?) keys '
-        "USING(record_id,run_id,result_id) "
-        "WHERE data.record_id IS NULL OR keys.record_id IS NULL",
-        [run_id, run_id],
-    ).fetchone()
-    if row is None or row[0]:
-        raise ValueError("research_partition_keys_invalid")
+    with DiskKeyMatcher() as matcher:
+        path = Path(matcher.temporary.name) / "metadata.csv"
+        connection.execute(
+            f'COPY (SELECT record_id,run_id,result_id FROM research."_keys_{table}" '
+            "WHERE ($run IS NULL OR run_id=$run)) TO $destination "
+            "(FORMAT CSV, HEADER FALSE, FORCE_QUOTE *)",
+            {"run": run_id, "destination": str(path)},
+        )
+        matcher.load_csv(path)
+        for physical in partition_catalog(connection)[table]:
+            cursor = connection.execute(
+                f'SELECT record_id,run_id,result_id FROM research."{physical}" '
+                "WHERE (? IS NULL OR run_id=?)", [run_id, run_id],
+            )
+            while batch := cursor.fetchmany(1024):
+                matcher.match(batch)
+        matcher.finish()

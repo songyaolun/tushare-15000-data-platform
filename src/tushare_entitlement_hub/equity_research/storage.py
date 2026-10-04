@@ -253,6 +253,7 @@ def save_results(
     """
     validate_batch_size(batch_size)
     trace = PersistenceProgress("save", progress, run_id)
+    partitions = None
     try:
         trace.emit("start-save")
         trace.operation = "write"
@@ -283,6 +284,9 @@ def save_results(
         # 独立调用方仍可按DuckDB约束异常处理；阶段信息通过进度提供。
         trace.failure(error)
         raise
+    finally:
+        if partitions is not None:
+            partitions.close()
 
 
 def stored_rows(

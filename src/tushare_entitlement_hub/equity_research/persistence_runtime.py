@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from typing import Any
 
 import duckdb
@@ -22,6 +23,7 @@ SAFE_VALIDATION_CODES = frozenset(
     "research_consumption_scope_mismatch research_projection_payload_capacity_exceeded "
     "invalid_batch_size input_output_path_collision reference_changed_during_read "
     "reference_catalog_missing research_partition_capacity_exceeded "
+    "research_partition_row_capacity_exceeded "
     "research_partition_payload_capacity_exceeded research_partition_layout_invalid "
     "research_partition_keys_invalid "
     "research_output_path_unsafe research_output_busy research_output_changed "
@@ -47,11 +49,18 @@ class ResultPayloadCapacityError(ValueError):
 
 
 def database_error_code(error: Exception) -> str | None:
-    """把DuckDB类型及已复现的Fatal包装映射为固定码，不输出异常消息、SQL或路径。
+    """把DuckDB固定错误前缀与SQLite原生数值码映射为固定诊断，不输出消息、SQL或路径。
 
     例：COMMIT内存失败后自动回滚再次失败得到fatal_rollback_memory；任意其他Fatal得到fatal。
     只匹配引擎固定开头，不能因载荷内偶然出现memory字样改变分类。
     """
+    if isinstance(error, sqlite3.Error):
+        return {
+            sqlite3.SQLITE_FULL: "sqlite_full",
+            sqlite3.SQLITE_IOERR: "sqlite_io",
+            sqlite3.SQLITE_CANTOPEN: "sqlite_io",
+            sqlite3.SQLITE_NOMEM: "sqlite_memory",
+        }.get(getattr(error, "sqlite_errorcode", 0) & 255, "sqlite_error")
     if isinstance(error, duckdb.FatalException):
         text = str(error)
         if text.startswith(
@@ -67,6 +76,21 @@ def database_error_code(error: Exception) -> str | None:
         return "fatal"
     if isinstance(error, duckdb.InternalException):
         return "internal"
+    if isinstance(error, duckdb.TransactionException):
+        prefix = "TransactionContext Error: Failed to commit: "
+        message = str(error)
+        if not message.startswith(prefix):
+            return "transaction_other"
+        cause = message[len(prefix) :]
+        if cause.startswith((
+            "failed to pin block of size ",
+            "could not allocate block of size ",
+            "failed to allocate data of size ",
+        )):
+            return "transaction_commit_memory"
+        if cause.startswith("PRIMARY KEY or UNIQUE constraint violation: "):
+            return "transaction_commit_constraint"
+        return "transaction_commit_other"
     if isinstance(error, duckdb.Error):
         return "duckdb_error"
     return None
@@ -74,8 +98,16 @@ def database_error_code(error: Exception) -> str | None:
 
 def error_category(error: Exception) -> str:
     """按异常类型及引擎固定错误前缀分类，不回显原文；例：DuckDB内存错误得到memory。"""
-    if database_error_code(error) in {"fatal_rollback_memory", "fatal_checkpoint_memory"}:
+    code = database_error_code(error)
+    if code in {
+        "fatal_rollback_memory", "fatal_checkpoint_memory", "transaction_commit_memory",
+        "sqlite_memory",
+    }:
         return "memory"
+    if code in {"sqlite_full", "sqlite_io"}:
+        return "io"
+    if code == "transaction_commit_constraint":
+        return "constraint"
     for types, category in (
         ((ResultPayloadCapacityError,), "capacity"),
         ((MemoryError, duckdb.OutOfMemoryException), "memory"),
@@ -83,7 +115,7 @@ def error_category(error: Exception) -> str:
         ((duckdb.ConstraintException,), "constraint"),
         ((duckdb.ConversionException,), "conversion"),
         ((duckdb.TransactionException,), "transaction"),
-        ((duckdb.Error,), "database"),
+        ((duckdb.Error, sqlite3.Error), "database"),
         ((ValueError, TypeError, KeyError), "validation"),
     ):
         if isinstance(error, types):
