@@ -19,6 +19,9 @@ uv run --no-project bash scripts/demo.sh
 - [接口目录与权益维护](docs/接口目录与权益维护.md)
 - [产品加工基础层](docs/产品加工基础层.md)
 - [股票研究闭环](docs/股票研究闭环.md)
+- [全产品离线研究](docs/全产品离线研究.md)
+- [主题预期与基金研究](docs/主题预期与基金研究.md)
+- [跨市场与融资研究](docs/跨市场与融资研究.md)
 
 ```bash
 uv run ruff check .
@@ -30,4 +33,6 @@ uv run pytest --cov=tushare_entitlement_hub --cov-report=term-missing --cov-fail
 
 通用本地数据层支持正式采集、标准化、逐行验收以及 JSONL、Parquet、DuckDB 导出。后续产品可直接复用数据，不受既有产品分类限制。运行方式和质量边界见[本地数据参考](docs/本地数据参考.md)。
 
-共享产品基础层通过 `product-foundation initialize/validate` 离线消费只读参考库，写入独立产品库，提供实体、时间、单位、特征评分、三值信号及血缘。206 接口登记按附带矩阵逐项校验。`research initialize/run/validate` 实现 P01/P03/P04/P06/P07/P13 股票研究闭环，六产品分配的 99 个接口均绑定实际消费者，保存可复算特征、门禁、排名、事件与证据，并逐接口区分已执行、已观测、未知和历史受限状态。历史 PIT 仍未认证，缺字段或缺认证时明确降级；其余七个产品尚未实现。
+共享产品基础层通过 `product-foundation initialize/validate` 离线读取参考库，提供实体、时间、单位和覆盖审计。`research initialize/run/validate` 保留原六产品的 99 个真实消费者。
+
+`research-all build-config/run/validate` 增加 P02、P05、P08、P09、P10、P11、P12 的 107 个消费者，统一运行十三产品。结果保留业务指标、证据、门禁和血缘，逐接口区分注册、分配、执行、可读取、已配置、已观测与未解析。缺失证据继续降级，历史 PIT 不自动认证。正式数据的 observed 数量须以本地全量运行和缺口审计为准；命令与容量边界见[全产品离线研究](docs/全产品离线研究.md)。

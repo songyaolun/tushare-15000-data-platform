@@ -52,6 +52,8 @@ UNIT_CONVERSIONS: dict[str, tuple[str, Decimal]] = {
     "万股": ("股", Decimal(10000)),
     "亿股": ("股", Decimal(100000000)),
     "张": ("张", Decimal(1)),
+    "份": ("份", Decimal(1)),
+    "万份": ("份", Decimal(10000)),
     "%": ("比例", Decimal("0.01")),
     "百分比": ("比例", Decimal("0.01")),
     "比例": ("比例", Decimal(1)),
@@ -180,6 +182,54 @@ def _convert_unit(value: Any, unit: str, policy: Policy) -> tuple[Any, str]:
     except (InvalidOperation, ValueError, TypeError, OverflowError):
         raise ValueError("invalid_unit_value") from None
     return result, target_unit
+
+
+def is_standard_numeric_field(field: str, documented_kind: str, policy: Policy) -> bool:
+    """按字段类型与已声明单位判断标准层数值语义，不以当前Python值类型猜测。
+
+    例如fut_trade_param.price_limit文档为str但单位为%，返回True；无单位业务文本返回False。
+    已声明数值类型的未知单位字段仍是数值语义，后续必须继续通过独立单位认证。
+    """
+    unit = policy.units.get(field)
+    return documented_kind.lower() in {"int", "float", "double"} or unit in UNIT_CONVERSIONS or (
+        unit == "手" and policy.api_name in EQUITY_LOT_APIS
+    )
+
+
+def restore_standard_numeric_text(
+    row: dict[str, Any], documented_kinds: dict[str, str], policy: Policy,
+) -> dict[str, Any]:
+    """恢复旧参考库中已标准化却按VARCHAR保存的数值，保留原文本且不重复缩放。
+
+    输入price_limit='0.1'、来源单位%及标准单位比例，输出price_limit=0.1；
+    单位缺失、冲突、未知或数值无效时保留原文本，后续数值门禁继续失败关闭。
+    """
+    source_units, standard_units = row.get("source_units", {}), row.get("standard_units", {})
+    if not isinstance(source_units, dict) or not isinstance(standard_units, dict):
+        return row
+    restored = dict(row)
+    original_text = {}
+    for field, value in row.items():
+        declared = policy.units.get(field)
+        if not isinstance(value, str) or not is_standard_numeric_field(
+            field, documented_kinds.get(field, ""), policy
+        ) or not isinstance(declared, str) or declared not in UNIT_CONVERSIONS:
+            continue
+        if source_units.get(field) != declared:
+            continue
+        _, expected = _convert_unit(1, declared, policy)
+        if standard_units.get(field) != expected:
+            continue
+        try:
+            converted, target = _convert_unit(value, expected, policy)
+        except (ValueError, TypeError, OverflowError):
+            continue
+        if target == expected and type(converted) in {int, float}:
+            restored[field] = converted
+            original_text[field] = value
+    if original_text:
+        restored["source_numeric_text"] = original_text
+    return restored
 
 
 def _effective_time(row: dict[str, Any], policy: Policy) -> str | None:

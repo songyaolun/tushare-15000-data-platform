@@ -33,10 +33,13 @@ def _inspect_source(
     tables: set[tuple[str, str]],
     analysis_as_of: str,
     policy: FoundationPolicy,
+    *,
+    count_rows: bool = True,
 ) -> tuple[set[str], bool]:
     """核查实际表、契约、行数账本及采集新鲜度，返回原因和是否允许逐行适配。
 
     输入无 accepted.daily 的参考库 → missing_table 与 False；不伪造零条覆盖。
+    count_rows=False只核对目录、列及清单；例如未绑定来源不触发行数扫描。
     """
     reasons = set()
     if manifest is None or ("accepted", entry.api) not in tables:
@@ -63,15 +66,18 @@ def _inspect_source(
     ]
     if any(type(value) is not int or value < 0 for value in counts) or counts[0] != sum(counts[1:]):
         return {"source_accounting_invalid"}, False
-    accepted = connection.execute(f'SELECT count(*) FROM accepted."{entry.api}"').fetchall()[0][0]
-    quarantined = (
-        connection.execute(f'SELECT count(*) FROM quarantine."{entry.api}"').fetchall()[0][0]
-        if ("quarantine", entry.api) in tables
-        else 0
-    )
-    if accepted != counts[1] or quarantined != counts[2]:
-        return {"source_accounting_mismatch"}, False
-    if quarantined:
+    if count_rows:
+        accepted = connection.execute(f'SELECT count(*) FROM accepted."{entry.api}"').fetchall()[0][
+            0
+        ]
+        quarantined = (
+            connection.execute(f'SELECT count(*) FROM quarantine."{entry.api}"').fetchall()[0][0]
+            if ("quarantine", entry.api) in tables
+            else 0
+        )
+        if accepted != counts[1] or quarantined != counts[2]:
+            return {"source_accounting_mismatch"}, False
+    if counts[2]:
         reasons.add("quarantined_rows_excluded")
     if not str(manifest.get("collection_status", "")).startswith("complete"):
         reasons.add("collection_incomplete")

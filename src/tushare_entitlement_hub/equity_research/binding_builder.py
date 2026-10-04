@@ -82,11 +82,14 @@ def binding_availability(
     contract: ReferenceContract,
     mapping: TimeMapping,
     cutoff: str,
+    *,
+    event_apis: frozenset[str] = EVENT_APIS,
 ) -> AvailabilityFact:
     """对来源身份、变体和全部公开时间做失败关闭校验，再映射各类时间。
 
     输入旧报告期与未来公告抛binding_future_public_time；缺公开字段仍只从观察时点可用。
     已知未来事件允许保留生效日，但不得作为expected_data_as_of的新鲜度基准。
+    例如显式event_apis含forecast时，已公告的未来报告期仍可作为预期证据。
     """
     if any(
         row.get(name) is not None
@@ -116,7 +119,7 @@ def binding_availability(
     if (
         fact.data_as_of is not None
         and not period_visible(fact.data_as_of, cutoff, mapping.market_timezone or "Asia/Shanghai")
-        and contract.policy.api_name not in EVENT_APIS
+        and contract.policy.api_name not in event_apis
     ):
         raise ValueError("future_business_date")
     return fact

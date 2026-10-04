@@ -27,7 +27,9 @@ SAFE_VALIDATION_CODES = frozenset(
     "research_partition_payload_capacity_exceeded research_partition_layout_invalid "
     "research_partition_keys_invalid "
     "research_output_path_unsafe research_output_busy research_output_changed "
-    "research_output_recovery_required research_output_lock_lost".split()
+    "research_output_recovery_required research_output_lock_lost "
+    "all_products_result_capacity_exceeded all_products_output_capacity_exceeded "
+    "portfolio_parent_capacity_exceeded portfolio_input_capacity_exceeded".split()
 )
 
 

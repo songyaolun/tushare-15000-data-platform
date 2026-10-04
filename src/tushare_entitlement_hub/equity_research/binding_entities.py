@@ -50,6 +50,11 @@ class EntityBuild:
     relations: list[EntityRelation] = field(default_factory=list)
     peers: dict[str, tuple[str, ...]] = field(default_factory=dict)
     reasons: dict[str, Counter[str]] = field(default_factory=dict)
+    extra_namespaces: dict[str, str] = field(default_factory=dict)
+    extra_kinds: dict[str, EntityKind] = field(default_factory=dict)
+    extra_key_fields: dict[str, str] = field(default_factory=dict)
+    observation_only: frozenset[str] = frozenset()
+    directory_identity_fields: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def gap(self, api: str, reason: str) -> None:
         """按来源累计实体缺口而不保存来源载荷；例：缺行业增加industry_unclassified计数。"""
@@ -59,14 +64,34 @@ class EntityBuild:
         """接收已通过来源及时间校验的主数据，重复或变体代码不参与后续身份推断。
 
         输入一条stock_basic得到一个待构建对象；同代码第二条记录将整组标记冲突。
+        显式observation_only目录仅保存最新完整业务期，例如DC旧日期不会淘汰当前目录。
         """
         api = availability.source_api
-        code = row.get("o_code" if api == "bse_mapping" else "ts_code")
-        pattern = STOCK_CODE if api in {"stock_basic", "bse_mapping"} else SECURITY_CODE
+        code = row.get(
+            self.extra_key_fields.get(api, "o_code" if api == "bse_mapping" else "ts_code")
+        )
+        pattern = (
+            re.compile(r"[A-Za-z0-9_.-]+")
+            if api in self.extra_namespaces
+            else STOCK_CODE
+            if api in {"stock_basic", "bse_mapping"}
+            else SECURITY_CODE
+        )
         if not isinstance(code, str) or not pattern.fullmatch(code):
             self.gap(api, "entity_code_unrecognized")
             return
         key = (api, code)
+        if api in self.directory_identity_fields:
+            self.add_directory(row, availability, key)
+            return
+        if api in self.observation_only and key in self.rows:
+            previous = self.rows[key][1].data_as_of or ""
+            current = availability.data_as_of or ""
+            if current < previous:
+                return
+            if current > previous:
+                self.rows.pop(key)
+                self.conflicts.discard(key)
         if key in self.rows:
             self.conflicts.add(key)
             self.gap(api, "entity_duplicate_conflict")
@@ -74,15 +99,47 @@ class EntityBuild:
         if len(self.rows) > self.maximum_entities:
             raise ValueError("binding_entity_capacity_exceeded")
 
+    def add_directory(
+        self,
+        row: dict[str, Any],
+        availability: AvailabilityFact,
+        key: tuple[str, str],
+    ) -> None:
+        """聚合同一来源显式提供的目录代码和名称，检查所有成员行的一致性。
+
+        例如CI两成员均声明l3_code=CI1且l3_name=行业甲时保留一份当前目录依据；
+        任一名称缺失或冲突即拒绝整个代码。代表证据按观察时间和来源ID确定，顺序无关。
+        """
+        fields = self.directory_identity_fields[availability.source_api]
+        previous = self.rows.get(key)
+        if any(not isinstance(row.get(name), str) or not row[name].strip() for name in fields):
+            self.conflicts.add(key)
+            self.gap(availability.source_api, "directory_identity_incomplete")
+        elif previous is not None and any(row[name] != previous[0].get(name) for name in fields):
+            self.conflicts.add(key)
+            self.gap(availability.source_api, "directory_identity_conflict")
+        if previous is None or (availability.observed_at, availability.source_record_id) > (
+            previous[1].observed_at,
+            previous[1].source_record_id,
+        ):
+            self.rows[key] = (row, availability)
+        if len(self.rows) > self.maximum_entities:
+            raise ValueError("binding_entity_capacity_exceeded")
+
     def materialize(self) -> None:
         """按代码排序创建主身份，再构建BSE别名和转债关系，输出与行顺序无关。
 
         输入两条无冲突股票得到两个实体及别名；缺行业股票保留身份并报告未分类。
+        显式当前目录使用series身份和observed_at作为断言起点，不伪造历史上市日期。
         """
         for (api, code), (row, availability) in sorted(self.rows.items()):
             if (api, code) in self.conflicts or api == "bse_mapping":
                 continue
-            if availability.effective_from is None:
+            observed_directory = api in self.observation_only
+            effective_from = (
+                availability.observed_at if observed_directory else availability.effective_from
+            )
+            if effective_from is None:
                 self.gap(api, "entity_lifecycle_missing")
                 continue
             if api == "stock_basic" and (
@@ -93,32 +150,36 @@ class EntityBuild:
                 self.gap(api, "entity_lifecycle_conflict")
                 continue
             identity = EntityIdentity(
-                namespace=NAMESPACES[api],
-                kind=KINDS[api],
+                namespace=(self.extra_namespaces | NAMESPACES)[api],
+                kind=(self.extra_kinds | KINDS)[api],
                 local_id=code,
-                lifecycle_id=availability.effective_from[:10],
+                lifecycle_id=("observed_" + digest(availability.observed_at))
+                if observed_directory
+                else effective_from[:10],
             )
             self.entities.append(Entity(identity=identity, name=code))
-            evidence = source_evidence(row, "ts_code", availability)
+            key_field = self.extra_key_fields.get(api, "ts_code")
+            evidence = source_evidence(row, key_field, availability)
             evidence = replace(
                 evidence,
                 fields=tuple(
                     sorted(
-                        {"ts_code", "list_date"}
+                        ({key_field} if observed_directory else {key_field, "list_date"})
+                        | set(self.directory_identity_fields.get(api, ()))
                         | ({"delist_date", "curr_type", "industry"} & row.keys())
                     )
                 ),
             )
             self.aliases.append(
                 EntityAlias(
-                    namespace=NAMESPACES[api],
+                    namespace=(self.extra_namespaces | NAMESPACES)[api],
                     alias=code,
                     entity_id=identity.entity_id,
-                    effective_from=availability.effective_from,
-                    effective_to=availability.effective_to,
+                    effective_from=effective_from,
+                    effective_to=None if observed_directory else availability.effective_to,
                     observed_at=availability.observed_at,
                     source=api,
-                    version=BINDING_VERSION,
+                    version="research-directory/v1" if observed_directory else BINDING_VERSION,
                     confidence=100,
                     evidence_refs=(evidence,),
                 )

@@ -11,6 +11,7 @@ import duckdb
 from research_fixture import AS_OF, DATABASE_CONFIG, DAY, REPORT_PERIOD, fixture_values
 
 from tushare_entitlement_hub.catalog import load_policies
+from tushare_entitlement_hub.equity_research.binding_rules import PUBLIC_FIELDS
 from tushare_entitlement_hub.equity_research.consumption_registry import (
     BOND_APIS,
     INDEX_APIS,
@@ -542,16 +543,7 @@ def write_consumption_reference(directory: Path) -> tuple[Path, ResearchConfig]:
                 None,
             )
             public = tuple(
-                field
-                for field in (
-                    "ann_date",
-                    "f_ann_date",
-                    "pub_date",
-                    "publish_date",
-                    "pub_time",
-                    "res_ann_date",
-                )
-                if record.get(field) is not None
+                field for field in sorted(PUBLIC_FIELDS) if record.get(field) is not None
             )
             time_mappings.append(
                 TimeMapping(

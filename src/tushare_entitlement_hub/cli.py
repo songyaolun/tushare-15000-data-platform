@@ -19,6 +19,7 @@ from .catalog import fetch_documentation, sync_catalog
 from .client import Client, FakeTransport, HttpTransport, ProviderError
 from .coverage import coverage_report
 from .credentials import configured_credential
+from .cross_asset_research.cli import all_products_app
 from .equity_research.cli import research_app
 from .ingest import plan_tasks, probe, run_task
 from .models import CatalogEntry
@@ -50,6 +51,7 @@ for command_name, application in (
     ("reference", reference_app),
     ("product-foundation", foundation_app),
     ("research", research_app),
+    ("research-all", all_products_app),
 ):
     app.add_typer(application, name=command_name)
 

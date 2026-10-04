@@ -27,7 +27,7 @@ from ..product_foundation.registry import ConsumerSpec, load_registry
 from ..product_foundation.temporal import availability_gate
 from ..reference_contract import ReferenceContract, load_reference_contracts
 from ..store import digest
-from .binding_rules import period_visible
+from .binding_rules import PUBLIC_FIELDS, period_visible
 from .consumption_registry import (
     EVENT_APIS,
     TWO_PERIOD_APIS,
@@ -104,13 +104,19 @@ def quoted_numeric(row: ResearchRow, name: str, certificate: UnitCertification) 
     )
 
 
-def prepare_numeric(row: ResearchRow, config: ResearchConfig) -> ResearchRow:
+def prepare_numeric(
+    row: ResearchRow,
+    config: ResearchConfig,
+    *,
+    certificates: tuple[UnitCertification, ...] | None = None,
+) -> ResearchRow:
     """仅适配调用方认证过且实际存在的字段；例：缺revenue证书不生成财务值。
 
     认证证据晚于研究时点时由扫描层先剔除对应证书，原始字段不改写。
+    certificates可显式传入已过滤的来源证书，例如批处理daily时不遍历其他205个来源。
     """
     numeric = {}
-    for certificate in config.foundation.certifications:
+    for certificate in config.foundation.certifications if certificates is None else certificates:
         if certificate.source_api != row.source_api or certificate.field not in row.raw:
             continue
         name = certificate.field
@@ -129,10 +135,14 @@ def adapt_row(
     contract: ReferenceContract,
     config: ResearchConfig,
     cutoff: str,
+    *,
+    unresolved_apis: frozenset[str] = UNRESOLVED_APIS,
+    event_apis: frozenset[str] = EVENT_APIS,
 ) -> ResearchRow:
     """在数值计算前核验来源、时点、实体及质量；例：隔离行或未来公告直接拒绝。
 
     文本事件允许entity_id=None，后续只能生成候选；其他接口必须有唯一有效别名。
+    显式unresolved_apis允许新来源保留未解析证据，例如汇率不被解释为股票。
     """
     api = contract.policy.api_name
     if raw.get("source_api") != api or raw.get("contract_hash") != contract.fingerprint:
@@ -149,21 +159,14 @@ def adapt_row(
     if any(
         raw.get(field) is not None
         and field not in mapping.public_fields + mapping.optional_public_fields
-        for field in (
-            "ann_date",
-            "f_ann_date",
-            "pub_date",
-            "publish_date",
-            "pub_time",
-            "res_ann_date",
-        )
+        for field in PUBLIC_FIELDS
     ):
         raise ValueError("public_field_mapping_missing")
     availability = map_availability(raw, contract, mapping)
     if not availability_gate(availability, cutoff).passed:
         raise ValueError("row_unavailable")
     if (
-        api not in EVENT_APIS
+        api not in event_apis
         and availability.data_as_of is not None
         and not period_visible(availability.data_as_of, cutoff, mapping.market_timezone or "UTC")
     ):
@@ -174,7 +177,7 @@ def adapt_row(
     entity_id = None
     if entity_mapping is not None:
         business_time = availability.data_as_of or availability.effective_from
-        if business_time is None and api not in UNRESOLVED_APIS:
+        if business_time is None and api not in unresolved_apis:
             raise ValueError("entity_business_time_unknown")
         if business_time is not None:
             entity_id = resolve_alias(
@@ -187,9 +190,37 @@ def adapt_row(
                 effective_at=business_time,
                 market_timezone=mapping.market_timezone,
             )
-    if entity_id is None and api not in UNRESOLVED_APIS:
+    if entity_id is None and api not in unresolved_apis:
         raise ValueError("entity_unresolved")
     return ResearchRow(entity_id=entity_id, source_api=api, raw=raw, availability=availability)
+
+
+def adapter_reason(error: Exception) -> str:
+    """将行失败映射为有限原因码，禁止第三方异常或来源正文进入审计。
+
+    例如ValueError('entity_unresolved')保留原码，未知异常返回row_adaptation_failed。
+    """
+    allowed = {
+        "source_contract_mismatch",
+        "quarantined_or_unknown_quality",
+        "time_mapping_missing",
+        "public_field_mapping_missing",
+        "row_unavailable",
+        "future_business_date",
+        "entity_business_time_unknown",
+        "entity_unresolved",
+        "ambiguous_entity_alias",
+        "source_pit_state_unverified",
+        "public_time_missing",
+        "market_timezone_required",
+        "invalid_timestamp_or_timezone",
+        "invalid_period",
+        "invalid_effective_interval",
+        "source_local_key_missing",
+        "source_local_key_invalid",
+        "business_variant_unresolved",
+    }
+    return str(error) if str(error) in allowed else "row_adaptation_failed"
 
 
 def retain_current(
@@ -277,11 +308,14 @@ def inspect_research_source(
     tables: set[tuple[str, str]],
     cutoff: str,
     config: ResearchConfig,
+    *,
+    count_rows: bool = True,
 ) -> tuple[set[str], bool]:
     """允许局部业务字段缺失的来源做质量观察，主键、元数据和账本仍严格检查。
 
     输入有amount但缺close的daily，输出字段缺口并读取已有字段；缺source_record_id
     仍拒绝整表。未出现的字段不会被补齐成零或伪造引用。
+    count_rows=False用于无绑定的快速审计，例如空配置只读目录和字段描述。
     """
     available = None
     if ("accepted", entry.api) in tables:
@@ -297,11 +331,71 @@ def inspect_research_source(
         )
     )
     reasons, readable = _inspect_source(
-        connection, selected, contract, manifest, tables, cutoff, config.thresholds
+        connection,
+        selected,
+        contract,
+        manifest,
+        tables,
+        cutoff,
+        config.thresholds,
+        count_rows=count_rows,
     )
     if available is not None and not set(entry.selected_fields) <= available:
         reasons.add("consumption_fields_missing")
     return reasons, readable
+
+
+def source_manifests(
+    connection: duckdb.DuckDBPyConnection,
+    apis: frozenset[str],
+) -> dict[str, dict[str, Any]]:
+    """只投影当前来源的有界清单字段，不读取参数、目录额外项或任意载荷。
+
+    例如目标daily外有重复派生日历，仍只返回daily；目标本身重复则拒绝。
+    """
+    query = """SELECT api_name, json_object(
+        'contract_hash', manifest::JSON->>'contract_hash',
+        'observed_at', manifest::JSON->>'observed_at',
+        'collection_status', manifest::JSON->>'collection_status',
+        'quality', json_object(
+            'source_rows', manifest::JSON->'quality'->'source_rows',
+            'accepted_rows', manifest::JSON->'quality'->'accepted_rows',
+            'quarantined_rows', manifest::JSON->'quality'->'quarantined_rows',
+            'exact_duplicate_rows', manifest::JSON->'quality'->'exact_duplicate_rows'))
+        FROM catalog WHERE api_name IN (SELECT unnest(?))"""
+    counts = connection.execute(
+        "SELECT api_name, count(*) FROM catalog "
+        "WHERE api_name IN (SELECT unnest(?)) GROUP BY api_name",
+        [sorted(apis)],
+    ).fetchall()
+    if any(count != 1 for _, count in counts):
+        raise ValueError("reference_catalog_duplicate")
+    return {
+        api: json.loads(payload)
+        for api, payload in connection.execute(query, [sorted(apis)]).fetchall()
+    }
+
+
+def visible_config(config: ResearchConfig, cutoff: str) -> ResearchConfig:
+    """只保留截止前已观察且已公开的单位证书，不改写调用方配置。
+
+    例如当前行的单位依据明天才公开，返回配置中剔除该证书，原始行仍可审计。
+    """
+    from ..pit import time_boundary
+
+    certificates = tuple(
+        certificate
+        for certificate in config.foundation.certifications
+        if all(
+            time_boundary(ref.observed_at) <= time_boundary(cutoff)
+            and (
+                ref.public_available_at is None
+                or time_boundary(ref.public_available_at) <= time_boundary(cutoff)
+            )
+            for ref in certificate.evidence_refs
+        )
+    )
+    return replace(config, foundation=replace(config.foundation, certifications=certificates))
 
 
 def load_inputs(
@@ -317,23 +411,7 @@ def load_inputs(
     例：无实体/时间绑定时scanned_rows=0；缺表输出原因而非虚构空市场。
     任一来源超过全局容量则整个来源降级，决不使用被截断的精确总量。
     """
-    from ..pit import time_boundary
-
-    visible_certificates = tuple(
-        certificate
-        for certificate in config.foundation.certifications
-        if all(
-            time_boundary(ref.observed_at) <= time_boundary(cutoff)
-            and (
-                ref.public_available_at is None
-                or time_boundary(ref.public_available_at) <= time_boundary(cutoff)
-            )
-            for ref in certificate.evidence_refs
-        )
-    )
-    effective_config = replace(
-        config, foundation=replace(config.foundation, certifications=visible_certificates)
-    )
+    effective_config = visible_config(config, cutoff)
     contracts = load_reference_contracts(load_policies())
     registry = {entry.api: entry for entry in load_registry()}
     rows_by_api: dict[str, tuple[ResearchRow, ...]] = {}
@@ -350,16 +428,15 @@ def load_inputs(
         )
         if ("main", "catalog") not in tables:
             raise ValueError("reference_catalog_missing")
-        manifests = {}
-        for api, payload in connection.execute("SELECT api_name,manifest FROM catalog").fetchall():
-            if api in manifests:
-                raise ValueError("reference_catalog_duplicate")
-            manifests[api] = json.loads(payload)
+        manifests = source_manifests(connection, SOURCE_APIS)
         for api in sorted(SOURCE_APIS):
             entry = registry.get(api)
             if entry is None:
                 source_reasons[api] = ("source_not_registered",)
                 continue
+            entity_bound = any(item.source_api == api for item in config.foundation.entity_mappings)
+            time_bound = any(item.source_api == api for item in config.foundation.time_mappings)
+            configured = time_bound and (entity_bound or api in UNRESOLVED_APIS)
             reasons, readable = inspect_research_source(
                 connection,
                 entry,
@@ -368,10 +445,9 @@ def load_inputs(
                 tables,
                 cutoff,
                 config,
+                count_rows=configured,
             )
-            entity_bound = any(item.source_api == api for item in config.foundation.entity_mappings)
-            time_bound = any(item.source_api == api for item in config.foundation.time_mappings)
-            if not time_bound or (not entity_bound and api not in UNRESOLVED_APIS):
+            if not configured:
                 reasons.add("research_bindings_missing")
                 readable = False
             if not readable:
@@ -393,6 +469,7 @@ def load_inputs(
                     except (ValueError, TypeError, KeyError, OverflowError) as error:
                         counts["excluded_rows"] += 1
                         reasons.add("rows_excluded_by_adapter")
+                        reasons.add(adapter_reason(error))
                         if (
                             api not in UNRESOLVED_APIS
                             and isinstance(error, ValueError)

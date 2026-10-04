@@ -13,6 +13,7 @@ import duckdb
 
 from .reference_contract import ReferenceContract
 from .reference_derived import publish_derived_datasets
+from .standard import is_standard_numeric_field
 from .store import encode
 
 
@@ -64,7 +65,7 @@ def reference_columns(
             target = "VARCHAR"
         elif field.endswith("_date") or field == "date":
             target = "DATE"
-        elif kind in {"float", "double", "int"}:
+        elif is_standard_numeric_field(field, kind, contract.policy):
             target = "BIGINT" if kind == "int" and field not in contract.policy.units else "DOUBLE"
         else:
             target = "VARCHAR"
