@@ -21,11 +21,18 @@ from .consumption_registry import (
     validate_consumption_registry,
 )
 from .models import PRODUCT_IDS, RULE_VERSION, ResearchConfig, ResearchResult
+from .partitions import (
+    PartitionWriter,
+    partition_catalog,
+    validate_partition_layout,
+    verify_partition_keys,
+)
 from .persistence_runtime import (
     RESULT_PAYLOAD_CAPACITY_ERROR as RESULT_PAYLOAD_CAPACITY_ERROR,
 )
 from .persistence_runtime import (
     PersistenceProgress,
+    PersistenceStepError,
     ResultPayloadCapacityError,
 )
 from .projection import RESEARCH_TABLES, EncodedRecord, accumulate_records, project_result
@@ -134,6 +141,7 @@ class _InsertBuffer:
         row_limit: int,
         trace: PersistenceProgress | None = None,
         after_flush: Callable[[int, int], None] | None = None,
+        partitions: PartitionWriter | None = None,
     ) -> None:
         """初始化四列缓冲；例：row_limit=128仍受512KiB约束，大结果独占一批。"""
         self.connection, self.table, self.row_limit, self.trace = (
@@ -143,6 +151,7 @@ class _InsertBuffer:
             trace,
         )
         self.after_flush = after_flush
+        self.partitions = partitions
         self.columns: list[list[str]] = [[], [], [], []]
         self.pending_bytes = 0
 
@@ -170,12 +179,15 @@ class _InsertBuffer:
         """把非空批写入事务后清空，报告实际写入量；例：空缓冲不执行SQL。"""
         if not self.columns[0]:
             return
-        self.connection.execute(
-            f'INSERT INTO research."{self.table}" '
-            "SELECT unnest(?::VARCHAR[]), unnest(?::VARCHAR[]), "
-            "unnest(?::VARCHAR[]), CAST(unnest(?::VARCHAR[]) AS JSON)",
-            self.columns,
-        )
+        if self.partitions is not None:
+            self.partitions.insert(self.table, self.columns, self.pending_bytes)
+        else:
+            self.connection.execute(
+                f'INSERT INTO research."{self.table}" '
+                "SELECT unnest(?::VARCHAR[]), unnest(?::VARCHAR[]), "
+                "unnest(?::VARCHAR[]), CAST(unnest(?::VARCHAR[]) AS JSON)",
+                self.columns,
+            )
         if self.trace is not None:
             self.trace.advance(self.table, len(self.columns[0]), self.pending_bytes)
         if self.after_flush is not None:
@@ -192,6 +204,7 @@ class _StageTransactions:
         """初始化零预算；例：每16MiB载荷或16384条物理记录提交并checkpoint一次。"""
         self.connection, self.trace = connection, trace
         self.rows = self.payload_bytes = 0
+        self.trace.transaction_state = "active"
 
     def advance(self, rows: int, payload_bytes: int) -> None:
         """接收已写批大小，达到任一阈值提交并开启下一事务；例：两批9MiB触发一次分段提交。
@@ -205,10 +218,20 @@ class _StageTransactions:
             self.rows >= MAXIMUM_STAGE_TRANSACTION_ROWS
             or self.payload_bytes >= MAXIMUM_STAGE_TRANSACTION_BYTES
         ):
-            self.trace.step("commit_batch")
-            self.connection.execute("COMMIT")
-            self.connection.execute("CHECKPOINT")
-            self.connection.execute("BEGIN TRANSACTION")
+            for substep, command in (
+                ("commit", "COMMIT"),
+                ("checkpoint", "CHECKPOINT"),
+                ("reopen", "BEGIN TRANSACTION"),
+            ):
+                self.trace.substep = substep
+                self.trace.step("commit_batch")
+                try:
+                    self.connection.execute(command)
+                except Exception as error:
+                    self.trace.transaction_state = "failed"
+                    raise PersistenceStepError(substep, error) from error
+                self.trace.transaction_state = "active" if substep == "reopen" else "inactive"
+            self.trace.substep = None
             self.rows = self.payload_bytes = 0
             self.trace.operation = "write"
 
@@ -224,7 +247,7 @@ def save_results(
 ) -> dict[str, int]:
     """每结果只序列化根一次，七表各自按行数/字节限批，完成表示事务内写入，不代表提交。
 
-    例：128个小结果可合批，超512KiB的合法结果独占一批；失败由外层统一回滚。
+    例：128个小结果可合批，超512KiB的合法结果独占一批；失败撤销事务或删除私有副本。
     不减少任何消费记录、正反证或血缘，不更改物理记录键及载荷。
     staged=True仅供私有副本使用，按字节/行数分段提交，公开直接调用默认仍由外层事务控制。
     """
@@ -234,6 +257,7 @@ def save_results(
         trace.emit("start-save")
         trace.operation = "write"
         transactions = _StageTransactions(connection, trace) if staged else None
+        partitions = PartitionWriter(connection) if staged else None
         buffers = {
             table: _InsertBuffer(
                 connection,
@@ -241,6 +265,7 @@ def save_results(
                 min(batch_size, MAXIMUM_INSERT_ROWS),
                 trace,
                 transactions.advance if transactions is not None else None,
+                partitions,
             )
             for table in RESEARCH_TABLES
         }
@@ -280,18 +305,21 @@ def _stored_records(
     例：读取两个大结果每次fetchmany(1)，不随配置批大小提高在途载荷数。
     SQL表名仅来自本模块固定表集合，输入值仍绑定参数。
     """
+    parts = partition_catalog(connection)
     for table in tables:
-        cursor = connection.execute(
-            f'SELECT record_id,run_id,result_id,payload FROM research."{table}" WHERE run_id=?',
-            [run_id],
-        )
-        while batch := cursor.fetchmany(1):
-            record_id, stored_run, result_id, payload = batch[0]
-            if len(payload.encode("utf-8")) > MAXIMUM_RESULT_JSON_BYTES:
-                raise ValueError("research_projection_payload_capacity_exceeded")
-            yield EncodedRecord(
-                table, record_id, stored_run, result_id, encode(json.loads(payload))
+        for physical in parts.get(table, (table,)):
+            cursor = connection.execute(
+                "SELECT record_id,run_id,result_id,payload "
+                f'FROM research."{physical}" WHERE run_id=?',
+                [run_id],
             )
+            while batch := cursor.fetchmany(1):
+                record_id, stored_run, result_id, payload = batch[0]
+                if len(payload.encode("utf-8")) > MAXIMUM_RESULT_JSON_BYTES:
+                    raise ValueError("research_projection_payload_capacity_exceeded")
+                yield EncodedRecord(
+                    table, record_id, stored_run, result_id, encode(json.loads(payload))
+                )
 
 
 def _verify_keys(
@@ -300,9 +328,11 @@ def _verify_keys(
     """按真实主键约束或完整去重检查验证七表键和反向引用，不跳过缺约束表。
 
     例：正常库不重复建立COUNT DISTINCT哈希表；有人重建无主键表时仍扫描并拒绝重复键。
-    子表与父结果的引用检查保持完整，任何缺失计数也按原固定错误拒绝。
+    分段表先核对行键一一对应，再以窄键连接并逐段检查血缘；缺失计数仍拒绝。
     """
     trace.step("primary_keys")
+    parts = validate_partition_layout(connection)
+    parent_table = "_keys_result" if "result" in parts else "result"
     constrained = {
         table
         for table, columns in connection.execute(
@@ -315,31 +345,36 @@ def _verify_keys(
     }
     for table in RESEARCH_TABLES:
         trace.table = table
-        if table not in constrained:
+        if table in parts:
+            verify_partition_keys(connection, table, run_id)
+        elif table not in constrained:
             duplicate = connection.execute(
                 f'SELECT count(*)-count(DISTINCT record_id) FROM research."{table}" WHERE run_id=?',
                 [run_id],
             ).fetchone()
             if duplicate is None or duplicate[0]:
                 raise ValueError("research_primary_key_invalid")
+        reference_table = "_keys_" + table if table in parts else table
         orphan = connection.execute(
-            f'SELECT count(*) FROM research."{table}" child '
-            "LEFT JOIN research.result parent ON child.result_id=parent.record_id "
+            f'SELECT count(*) FROM research."{reference_table}" child '
+            f"LEFT JOIN research.{parent_table} parent ON child.result_id=parent.record_id "
             "AND child.run_id=parent.run_id WHERE child.run_id=? "
             "AND parent.record_id IS NULL",
             [run_id],
         ).fetchone()
         if orphan is None or orphan[0]:
             raise ValueError("research_result_reference_missing")
-    parents = connection.execute(
-        "SELECT count(*) FROM research.lineage edge LEFT JOIN research.result parent "
-        "ON (edge.payload->>'parent_result_id')=parent.record_id AND edge.run_id=parent.run_id "
-        "WHERE edge.run_id=? AND (edge.payload->>'relationship')='parent' "
-        "AND parent.record_id IS NULL",
-        [run_id],
-    ).fetchone()
-    if parents is None or parents[0]:
-        raise ValueError("research_parent_reference_missing")
+    for physical in parts.get("lineage", ("lineage",)):
+        parents = connection.execute(
+            f"SELECT count(*) FROM research.{physical} edge "
+            f"LEFT JOIN research.{parent_table} parent "
+            "ON (edge.payload->>'parent_result_id')=parent.record_id AND edge.run_id=parent.run_id "
+            "WHERE edge.run_id=? AND (edge.payload->>'relationship')='parent' "
+            "AND parent.record_id IS NULL",
+            [run_id],
+        ).fetchone()
+        if parents is None or parents[0]:
+            raise ValueError("research_parent_reference_missing")
 
 
 def verify_run(
@@ -521,7 +556,10 @@ def validate_research(reference_path: Path, product_path: Path) -> dict[str, Any
                         ResearchConfig.from_dict(metadata["config"]),
                         analysis_as_of=metadata["analysis_as_of"],
                     )
-            for table in RESEARCH_TABLES:
+            checked_tables = RESEARCH_TABLES + tuple(
+                "_keys_" + table for table in partition_catalog(connection)
+            )
+            for table in checked_tables:
                 orphan = connection.execute(
                     f'SELECT count(*) FROM research."{table}" child '
                     "LEFT JOIN research.run parent USING(run_id) "

@@ -272,18 +272,15 @@ def _prepare_run(
         transaction_trace.operation = "commit"
         connection.execute("COMMIT")
     except Exception as error:
-        failure = PersistenceError(active_phase, error)
+        failure = (
+            error if isinstance(error, PersistenceError) else PersistenceError(active_phase, error)
+        )
         if active_phase == "commit":
             transaction_trace.failure(error)
         elif not begun:
             trace = PersistenceProgress("save", progress, run_id)
             trace.operation = "begin"
             trace.failure(error)
-        try:
-            if begun:
-                connection.execute("ROLLBACK")
-        except Exception as rollback_error:
-            rollback_trace = PersistenceProgress("rollback", progress, run_id)
-            rollback_trace.failure(rollback_error)
-        raise failure from error
+        # 副本失败后整体删除，关闭连接负责撤销未提交数据；不要向已自动终止的事务再次ROLLBACK。
+        raise failure from (error.__cause__ if failure is error else error)
     return metadata, False

@@ -281,8 +281,7 @@ def test_transaction_and_reuse_failures_keep_phase_and_atomic_state(
         else "commit"
     )
     assert caught.value.phase == expected
-    if scenario == "rollback":
-        assert any(event.get("phase") == "rollback" for event in events)
+    assert not any(event.get("phase") == "rollback" for event in events)
     assert any(
         event.get("phase") == expected for event in events if event["stage"] == "persistence-failed"
     )
