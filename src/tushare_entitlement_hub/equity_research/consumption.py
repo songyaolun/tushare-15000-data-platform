@@ -27,6 +27,7 @@ from .consumption_registry import (
     registry_fingerprint,
     resolve_consumer,
 )
+from .consumption_validation import ConsumptionModels
 from .context_aggregation import row_fingerprint
 from .market_evidence import MAXIMUM_SAMPLE_ROWS
 from .models import MARKET_ENTITY, ResearchInputs, ResearchResult, ResearchRow
@@ -484,6 +485,7 @@ def validate_result_consumption(result: ResearchResult) -> None:
         raise ValueError("research_consumption_missing")
     if len(records) != len(expected) or {item["api"] for item in records} != set(expected):
         raise ValueError("research_consumption_assignment_mismatch")
+    models = ConsumptionModels()
     envelope_refs = {ref.to_json() for ref in result.envelope.evidence_refs}
     envelope_gates = {check.to_json() for check in result.envelope.quality_gates}
     for record in records:
@@ -533,9 +535,9 @@ def validate_result_consumption(result: ResearchResult) -> None:
                 or max(values["certified_rows"], values["nonfinite_rows"]) > values["present_rows"]
             ):
                 raise ValueError("research_consumption_field_quality_invalid")
-        refs = tuple(EvidenceRef.from_dict(ref) for ref in record["evidence_refs"])
+        refs = tuple(models.reference(ref) for ref in record["evidence_refs"])
         if any(ref.to_json() not in envelope_refs for ref in refs) or any(
-            QualityGateResult.from_dict(check).to_json() not in envelope_gates
+            models.gate_json(check) not in envelope_gates
             for check in record["gates"]
         ):
             raise ValueError("research_consumption_reference_missing")

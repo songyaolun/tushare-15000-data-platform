@@ -20,7 +20,10 @@ SAFE_VALIDATION_CODES = frozenset(
     "research_consumption_reference_missing research_consumption_field_quality_invalid "
     "research_consumption_observation_without_evidence research_consumption_reason_codes_invalid "
     "research_consumption_scope_mismatch research_projection_payload_capacity_exceeded "
-    "invalid_batch_size".split()
+    "invalid_batch_size input_output_path_collision reference_changed_during_read "
+    "reference_catalog_missing "
+    "research_output_path_unsafe research_output_busy research_output_changed "
+    "research_output_recovery_required research_output_lock_lost".split()
 )
 
 
@@ -62,8 +65,8 @@ class PersistenceError(ValueError):
     """对外只带固定原因，阶段/类别可安全读取；原异常由调用方通过异常链保留供内部诊断。"""
 
     def __init__(self, phase: str, error: Exception) -> None:
-        """为save/verify/commit/rollback错误赋固定码；例：verify内存错误为research_verify_memory_failed。"""
-        if phase not in {"save", "verify", "commit", "rollback"}:
+        """为准备、保存、验证、提交、回滚和发布错误赋固定码；例：verify内存错误为research_verify_memory_failed。"""
+        if phase not in {"stage", "save", "verify", "commit", "rollback", "publish"}:
             raise ValueError("invalid_persistence_phase")
         self.phase = phase
         self.category = error_category(error)
@@ -81,7 +84,7 @@ class PersistenceProgress:
 
     def __init__(self, phase: str, callback: ProgressCallback | None, run_id: str | None) -> None:
         """创建单阶段计数器；例：save从0开始，非SHA256运行标识不输出到事件。"""
-        if phase not in {"save", "verify", "commit", "rollback"}:
+        if phase not in {"stage", "save", "verify", "commit", "rollback", "publish"}:
             raise ValueError("invalid_persistence_phase")
         self.phase, self.callback = phase, callback
         self.run_id = (
@@ -91,6 +94,7 @@ class PersistenceProgress:
         self.table: str | None = None
         self.processed_rows = self.payload_bytes = self.completed_results = 0
         self._last_report = 0
+        self.published = False
 
     def emit(self, stage: str) -> None:
         """发送不共享内部状态的安全事件；例：save-complete表示事务内写完，不代表已提交。"""
@@ -104,7 +108,7 @@ class PersistenceProgress:
                     "processed_rows": self.processed_rows,
                     "payload_bytes": self.payload_bytes,
                     "completed_results": self.completed_results,
-                    "committed": False,
+                    "committed": self.published,
                 }
             )
 
@@ -146,6 +150,7 @@ class PersistenceProgress:
                         "run_id": self.run_id,
                         "processed_rows": self.processed_rows,
                         "completed_results": self.completed_results,
+                        "committed": self.published,
                     }
                 )
             except Exception:

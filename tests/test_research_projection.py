@@ -37,7 +37,7 @@ def test_projection_keeps_legacy_bytes_and_serializes_root_once(monkeypatch):
 
 
 def test_non_assignment_strings_skip_regex_but_credentials_still_fail(monkeypatch):
-    """SHA256和枚举文本不含赋值分隔符，跳过不可能命中的正则；含冒号或等号仍完整检查。"""
+    """SHA256和枚举文本不含赋值分隔符，跳过不可能命中的正则；同时含关键词的赋值仍完整检查。"""
     import pytest
 
     original = raw._ASSIGNMENT
@@ -65,7 +65,7 @@ def test_non_assignment_strings_skip_regex_but_credentials_still_fail(monkeypatc
     for text in ("password=<REDACTED>", "TOKEN: <REDACTED>", MisleadingString("token=<REDACTED>")):
         with pytest.raises(ValueError):
             raw.assert_public(text)
-    assert len(searched) == 4
+    assert len(searched) == 3
 
 
 def test_projection_snapshot_isolation_and_public_boundary(monkeypatch):

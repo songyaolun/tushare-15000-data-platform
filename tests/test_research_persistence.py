@@ -18,7 +18,6 @@ from tushare_entitlement_hub.equity_research.models import (
 )
 from tushare_entitlement_hub.equity_research.pipeline import run_research, select_products
 from tushare_entitlement_hub.equity_research.storage import (
-    RESEARCH_TABLES,
     fingerprints,
     initialize_tables,
     insert_rows,
@@ -88,7 +87,7 @@ def test_real_synthetic_pipeline_metrics_idempotency_and_dependencies(tmp_path):
         assert verify_run(connection, read_metadata(connection, first["run_id"])) == first
     replay = []
     assert run_research(reference, output, AS_OF, config, progress=replay.append) == first
-    assert [event["stage"] for event in replay if event["stage"] != "verify-progress"] == [
+    assert [event["stage"] for event in replay if not event["stage"].endswith("-progress")] == [
         "start",
         "verify-start",
         "verify-complete",
@@ -202,9 +201,8 @@ def test_read_change_and_transaction_failure_leave_no_partial_results(libraries,
     monkeypatch.setattr(pipeline, "verify_run", reject_saved_run)
     with pytest.raises(ValueError, match="research_verify_validation_failed"):
         run_research(reference, output, AS_OF, config, ("P01",))
-    with duckdb.connect(str(output), config=DATABASE_CONFIG) as connection:
-        for table in (*RESEARCH_TABLES, "run", "metadata"):
-            assert connection.execute(f'SELECT count(*) FROM research."{table}"').fetchone() == (0,)
+    assert not output.exists()
+    assert not list(output.parent.glob(".*.stage-*"))
 
 
 @pytest.mark.parametrize("count", [0, 1, 511, 512, 513, 1024])

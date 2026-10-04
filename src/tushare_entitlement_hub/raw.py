@@ -21,6 +21,29 @@ _ASSIGNMENT = re.compile(
 )
 
 
+def _possible_assignment(value: str) -> bool:
+    """只筛掉绝不匹配赋值正则的文本，不代替最终安全检查；例：普通大段JSON返回False。
+
+    使用内建casefold避免字符串子类覆写；补齐Python Unicode IGNORECASE的点上/无点i，
+    长s和Kelvin符号已由casefold处理。允许筛选假阳性，最终仍对原文本运行完整正则。
+    例：'API_KEY=<REDACTED>'和'authorİzation:<REDACTED>'都返回True，不能绕过检查。
+    """
+    folded = str.casefold(value).replace("i\u0307", "i").replace("\u0131", "i")
+    return any(
+        name in folded
+        for name in (
+            "token",
+            "authorization",
+            "password",
+            "api_key",
+            "api-key",
+            "apikey",
+            "secret",
+            "cookie",
+        )
+    )
+
+
 def assert_public(value: Any) -> None:
     """递归拒绝凭据字段与文本形式的凭据赋值，错误中不带输入内容。
 
@@ -28,7 +51,7 @@ def assert_public(value: Any) -> None:
     示例：assert_public({'ts_code': '000001.SZ'}) 返回 None；
     assert_public({'nested': {'token': '<REDACTED>'}}) 抛出 ValueError。
     实际凭据值的回显另由发送时持有凭据的传输层检查，本函数不会读取任何环境变量。
-    赋值匹配必需冒号或等号；没有两种分隔符的文本只跳过不可能命中的正则，不缓存任何值。
+    赋值匹配必需分隔符及关键词；缺少必要条件时跳过不可能命中的正则，不缓存任何值。
     """
     if isinstance(value, dict):
         for name, child in value.items():
@@ -48,6 +71,7 @@ def assert_public(value: Any) -> None:
     elif (
         isinstance(value, str)
         and (str.__contains__(value, ":") or str.__contains__(value, "="))
+        and _possible_assignment(value)
         and _ASSIGNMENT.search(value)
     ):
         raise ValueError("拒绝保存疑似凭据赋值的数据")

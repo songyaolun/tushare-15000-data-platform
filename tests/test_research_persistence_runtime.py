@@ -138,9 +138,8 @@ def test_stage_failure_rolls_back_all_tables_and_keeps_safe_progress(tmp_path, m
     assert failures[0]["operation"] == ("write" if phase == "save" else "rebuild")
     assert events[-1]["stage"] != "complete"
     assert "PRIVATE_PAYLOAD" not in json.dumps(events)
-    with duckdb.connect(str(output), config=DATABASE_CONFIG) as connection:
-        for table in (*storage.RESEARCH_TABLES, "run", "metadata"):
-            assert connection.execute(f'SELECT count(*) FROM research."{table}"').fetchone()[0] == 0
+    assert not output.exists()
+    assert not list(tmp_path.glob(".products.duckdb.stage-*"))
 
 
 def test_success_and_reuse_keep_summary_and_required_milestones(tmp_path):
@@ -169,7 +168,7 @@ def test_success_and_reuse_keep_summary_and_required_milestones(tmp_path):
         pipeline.run_research(reference, output, AS_OF, config, ("P01",), progress=replay.append)
         == first
     )
-    assert [event["stage"] for event in replay if event["stage"] != "verify-progress"] == [
+    assert [event["stage"] for event in replay if not event["stage"].endswith("-progress")] == [
         "start",
         "verify-start",
         "verify-complete",
@@ -260,7 +259,7 @@ def test_transaction_and_reuse_failures_keep_phase_and_atomic_state(
     def connect(database, **kwargs):
         """只代理待写产品库，不影响只读合成reference连接。"""
         connection = original_connect(database, **kwargs)
-        return FaultyConnection(connection) if str(database) == str(output) else connection
+        return FaultyConnection(connection) if ".stage-" in str(database) else connection
 
     def reject(*args, **kwargs):
         """复用时模拟重建IO失败，旧运行不得被当成成功复用。"""
@@ -277,17 +276,21 @@ def test_transaction_and_reuse_failures_keep_phase_and_atomic_state(
     expected = (
         "save"
         if scenario == "begin"
-        else "rollback"
-        if scenario == "rollback"
         else "verify"
         if scenario == "reuse_verify"
         else "commit"
     )
     assert caught.value.phase == expected
+    if scenario == "rollback":
+        assert any(event.get("phase") == "rollback" for event in events)
     assert any(
         event.get("phase") == expected for event in events if event["stage"] == "persistence-failed"
     )
     assert "PRIVATE_" not in json.dumps(events)
+    assert not list(tmp_path.glob(".products.duckdb.stage-*"))
+    if not reused:
+        assert not output.exists()
+        return
     with original_connect(str(output), config=DATABASE_CONFIG) as connection:
         assert connection.execute("SELECT count(*) FROM research.run").fetchone()[0] == int(reused)
         assert connection.execute("SELECT count(*) FROM research.result").fetchone()[0] == int(

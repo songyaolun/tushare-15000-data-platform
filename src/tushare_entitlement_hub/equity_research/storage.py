@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,8 @@ from .source_validation import verify_source_evidence
 MAXIMUM_INSERT_ROWS = 128
 MAXIMUM_INSERT_JSON_BYTES = 512 * 1024
 MAXIMUM_RESULT_JSON_BYTES = 8 * 1024 * 1024
+MAXIMUM_STAGE_TRANSACTION_BYTES = 16 * 1024 * 1024
+MAXIMUM_STAGE_TRANSACTION_ROWS = 16384
 
 
 def run_identity(
@@ -131,6 +133,7 @@ class _InsertBuffer:
         table: str,
         row_limit: int,
         trace: PersistenceProgress | None = None,
+        after_flush: Callable[[int, int], None] | None = None,
     ) -> None:
         """初始化四列缓冲；例：row_limit=128仍受512KiB约束，大结果独占一批。"""
         self.connection, self.table, self.row_limit, self.trace = (
@@ -139,6 +142,7 @@ class _InsertBuffer:
             row_limit,
             trace,
         )
+        self.after_flush = after_flush
         self.columns: list[list[str]] = [[], [], [], []]
         self.pending_bytes = 0
 
@@ -174,9 +178,39 @@ class _InsertBuffer:
         )
         if self.trace is not None:
             self.trace.advance(self.table, len(self.columns[0]), self.pending_bytes)
+        if self.after_flush is not None:
+            self.after_flush(len(self.columns[0]), self.pending_bytes)
         for values in self.columns:
             values.clear()
         self.pending_bytes = 0
+
+
+class _StageTransactions:
+    """仅在不可见私有副本上限制事务规模；外部原子性由验证后的文件发布保证。"""
+
+    def __init__(self, connection: duckdb.DuckDBPyConnection, trace: PersistenceProgress) -> None:
+        """初始化零预算；例：每16MiB载荷或16384条物理记录提交并checkpoint一次。"""
+        self.connection, self.trace = connection, trace
+        self.rows = self.payload_bytes = 0
+
+    def advance(self, rows: int, payload_bytes: int) -> None:
+        """接收已写批大小，达到任一阈值提交并开启下一事务；例：两批9MiB触发一次分段提交。
+
+        每个SQL批仍受128行/512KiB限制，合法宽结果独占；不截断结果、不减少任何投影。
+        此连接必须由私有快照独占，失败后副本整体删除，正式库不会看见部分提交。
+        """
+        self.rows += rows
+        self.payload_bytes += payload_bytes
+        if (
+            self.rows >= MAXIMUM_STAGE_TRANSACTION_ROWS
+            or self.payload_bytes >= MAXIMUM_STAGE_TRANSACTION_BYTES
+        ):
+            self.trace.step("commit_batch")
+            self.connection.execute("COMMIT")
+            self.connection.execute("CHECKPOINT")
+            self.connection.execute("BEGIN TRANSACTION")
+            self.rows = self.payload_bytes = 0
+            self.trace.operation = "write"
 
 
 def save_results(
@@ -186,19 +220,28 @@ def save_results(
     *,
     progress: ProgressCallback | None = None,
     run_id: str | None = None,
+    staged: bool = False,
 ) -> dict[str, int]:
     """每结果只序列化根一次，七表各自按行数/字节限批，完成表示事务内写入，不代表提交。
 
     例：128个小结果可合批，超512KiB的合法结果独占一批；失败由外层统一回滚。
     不减少任何消费记录、正反证或血缘，不更改物理记录键及载荷。
+    staged=True仅供私有副本使用，按字节/行数分段提交，公开直接调用默认仍由外层事务控制。
     """
     validate_batch_size(batch_size)
     trace = PersistenceProgress("save", progress, run_id)
     try:
         trace.emit("start-save")
         trace.operation = "write"
+        transactions = _StageTransactions(connection, trace) if staged else None
         buffers = {
-            table: _InsertBuffer(connection, table, min(batch_size, MAXIMUM_INSERT_ROWS), trace)
+            table: _InsertBuffer(
+                connection,
+                table,
+                min(batch_size, MAXIMUM_INSERT_ROWS),
+                trace,
+                transactions.advance if transactions is not None else None,
+            )
             for table in RESEARCH_TABLES
         }
         counts: Counter[str] = Counter()
