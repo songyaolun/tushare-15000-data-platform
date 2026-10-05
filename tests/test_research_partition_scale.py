@@ -5,6 +5,7 @@ from hashlib import md5, sha256
 from time import perf_counter
 
 import duckdb
+import pytest
 
 from tushare_entitlement_hub.equity_research import partitions, storage
 from tushare_entitlement_hub.equity_research.persistence_runtime import PersistenceProgress
@@ -21,6 +22,7 @@ layout = {
 }
 
 
+@pytest.mark.resource_isolated
 def test_millions_of_wide_projections_keep_full_fingerprints_in_512mb(
     tmp_path, prepared_path=None
 ):

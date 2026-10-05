@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any, Literal
@@ -170,7 +171,7 @@ class ResearchInputs:
         }
 
     @cached_property
-    def record_periods(self) -> dict[tuple[str, str], str]:
+    def record_periods(self) -> Mapping[tuple[str, str], str]:
         """一次建立来源行的时间索引；例：(daily,id)映射交易日，不复制来源载荷。
 
         信封按证据直接取日期，避免逐证券重复扫描整批来源。

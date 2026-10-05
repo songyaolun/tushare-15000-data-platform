@@ -267,6 +267,20 @@ def _process(frame: Frame) -> tuple[list[Metric], dict[str, Any]]:
     return values, details
 
 
+def curve_member(spec: ResearchRow, frame: Frame) -> tuple[str, tuple[str, ...]] | None:
+    """给已选定的合约规格与唯一行情构造原有完整曲线分组键。
+
+    输入交易所、品种、报价单位、交易单位、每手单位及 2026-12 交割月，
+    返回 ('202612',规格与行情日期键)；缺规格或非法月份返回 None，不从代码猜月份。
+    """
+    names = ("exchange", "fut_code", "quote_unit", "trade_unit", "per_unit")
+    key = tuple(spec.text(name) or "" for name in names)
+    month = (spec.text("d_month") or "").replace("-", "")
+    if not all(key) or len(month) != 6 or not month.isdigit() or not 1 <= int(month[4:]) <= 12:
+        return None
+    return month, (*key, frame.latest_period)
+
+
 def _curves(inputs: ResearchInputs) -> list[ResearchResult]:
     """按显式品种、交易所和规格建立近远月曲线；例：远月 110/近月 100 得 0.1。
 
@@ -282,12 +296,11 @@ def _curves(inputs: ResearchInputs) -> list[ResearchResult]:
         if frame.reasons or len(frame.rows) != 1 or frame.entity_id not in specifications:
             continue
         spec = specifications[frame.entity_id]
-        names = ("exchange", "fut_code", "quote_unit", "trade_unit", "per_unit")
-        key = tuple(spec.text(name) or "" for name in names)
-        month = (spec.text("d_month") or "").replace("-", "")
-        if not all(key) or len(month) != 6 or not month.isdigit() or not 1 <= int(month[4:]) <= 12:
+        membership = curve_member(spec, frame)
+        if membership is None:
             continue
-        groups[(*key, frame.latest_period)].append((month, frame, spec))
+        month, key = membership
+        groups[key].append((month, frame, spec))
     results = []
     for key, items in groups.items():
         items.sort(key=lambda item: item[0])

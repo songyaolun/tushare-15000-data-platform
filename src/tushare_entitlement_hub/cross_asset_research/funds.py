@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from ..equity_research.common import gate, latest, make_result, metric
@@ -634,12 +634,15 @@ def _reference_index(inputs: ResearchInputs) -> dict[tuple[str, str], tuple[Rese
     return {key: tuple(rows) for key, rows in result.items()}
 
 
-def build_etf_exposure(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
+def build_etf_exposure(
+    inputs: ResearchInputs, *, manager_counts: Mapping[str, int] | None = None,
+) -> tuple[ResearchResult, ...]:
     """把18个基金接口加工为ETF本体、明确基准暴露、篮子重合及时点一致的风险观察。
 
     输入ETF档案、日线和规模两日数据，即使没有用户组合，也输出流动性和份额变化；
     portfolio_overlap保持unknown。场外fund_basic.market='O'不进入ETF候选。
     所有成分、管理人和指数匹配均需明确来源代码或全名证据，不按名称相似度猜关系。
+    内部完整分区可传入全观察集的管理人计数，例如同管理人的两只 ETF 分别计算仍得到 2。
     """
     groups = accepted_groups(inputs, API_FIELDS.keys() - REFERENCE_APIS)
     reference = _reference_index(inputs)
@@ -657,12 +660,14 @@ def build_etf_exposure(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
         if api in API_FIELDS:
             summary_cache[key] = observation_summary(rows, API_FIELDS[api])
             evidence_cache[key] = sampled_refs(rows, API_FIELDS[api])
-    manager_counts: dict[str, int] = {}
-    for sources in groups.values():
-        basic = latest(sources.get("etf_basic", ()))
-        if basic is not None and basic.text("mgr_name") is not None:
-            name = basic.text("mgr_name") or ""
-            manager_counts[name] = manager_counts.get(name, 0) + 1
+    if manager_counts is None:
+        counts: dict[str, int] = {}
+        for sources in groups.values():
+            basic = latest(sources.get("etf_basic", ()))
+            if basic is not None and basic.text("mgr_name") is not None:
+                name = basic.text("mgr_name") or ""
+                counts[name] = counts.get(name, 0) + 1
+        manager_counts = counts
     results = []
     for entity, sources in sorted(groups.items()):
         basic, fund = latest(sources.get("etf_basic", ())), latest(sources.get("fund_basic", ()))

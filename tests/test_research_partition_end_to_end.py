@@ -4,6 +4,7 @@ from hashlib import sha256
 from time import perf_counter
 
 import duckdb
+import pytest
 from research_fixture import AS_OF, DATABASE_CONFIG, write_reference
 
 from tushare_entitlement_hub.equity_research import partitions, pipeline, storage
@@ -11,6 +12,7 @@ from tushare_entitlement_hub.equity_research.common import make_result
 from tushare_entitlement_hub.equity_research.models import PRODUCT_IDS, ResearchResult
 
 
+@pytest.mark.resource_isolated
 def test_wide_results_are_saved_rebuilt_and_reused_in_512mb(tmp_path, monkeypatch):
     """640条约1MiB真实消费结果超过512MB，保持逐条完整重建、原子发布及幂等；每段不超过16MiB。"""
     reference, config = write_reference(tmp_path, 0)

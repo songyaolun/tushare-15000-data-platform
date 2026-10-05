@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 from itertools import chain
 from typing import Any
 
@@ -70,14 +71,19 @@ def certified_fields(row: ResearchRow, item: Registration, cutoff: str) -> tuple
 class ConsumptionAudit(DiskKeyIndex):
     """逐产品执行账本，原始数据与使用引用以 SQLite B-tree 精确关联。"""
 
-    def __init__(self, products: tuple[str, ...], binding_audit: dict[str, Any]) -> None:
+    def __init__(
+        self, products: tuple[str, ...], binding_audit: dict[str, Any], *,
+        partitioned: bool = False,
+    ) -> None:
         """创建有界磁盘账本；例如选择 P05 只分配其七个接口，注册总量仍为 206。
 
         父类缓存固定 8MiB，临时文件只在当前进程内使用，退出时清理。
+        partitioned=True 时报告注册的实际分区入口，同时保留业务处理器名称。
         """
         super().__init__()
         self.entries = tuple(item for item in registrations() if item.spec.product in products)
         self.binding_audit = binding_audit
+        self.partitioned = partitioned
         self.executed: set[str] = set()
         self.reasons: dict[str, Counter[str]] = {}
         self.consumption_reasons: dict[str, Counter[str]] = {}
@@ -101,20 +107,31 @@ class ConsumptionAudit(DiskKeyIndex):
             if api not in inputs.rows_by_api and api not in inputs.source_reasons:
                 continue
             rows = inputs.rows(api)
-            self.retained[api] = len(rows)
+            self.retained[api] = 0
             reasons = self.reasons.setdefault(api, Counter())
             reasons.update(inputs.source_reasons.get(api, ()))
             for key, values in inputs.entity_source_reasons.items():
                 if key.startswith(api + "/"):
                     reasons.update(values)
-            for row in rows:
-                fields = certified_fields(row, item, inputs.analysis_as_of)
-                if not fields:
-                    reasons["record_entity_time_or_unit_unresolved"] += 1
-                self.connection.executemany(
-                    "INSERT OR IGNORE INTO eligible VALUES (?,?,?)",
-                    ((api, str(row.raw["source_record_id"]), name) for name in fields),
-                )
+            self.source_rows(item, rows, inputs.analysis_as_of)
+
+    def source_rows(self, item: Registration, rows: Iterable[ResearchRow], cutoff: str) -> None:
+        """流式登记一个来源的完整保留集，使用字段仍须与实际业务引用精确相交。
+
+        输入磁盘迭代器的十万行只增加磁盘证据键和计数，不物化来源行列表；
+        若仅八行实际引用，observed_rows 仍至多为八，保留数不冒充真实观察数。
+        """
+        api = item.spec.api
+        reasons = self.reasons.setdefault(api, Counter())
+        for row in rows:
+            self.retained[api] += 1
+            fields = certified_fields(row, item, cutoff)
+            if not fields:
+                reasons["record_entity_time_or_unit_unresolved"] += 1
+            self.connection.executemany(
+                "INSERT OR IGNORE INTO eligible VALUES (?,?,?)",
+                ((api, str(row.raw["source_record_id"]), name) for name in fields),
+            )
 
     def result(self, product: str, result: ResearchResult) -> None:
         """仅在真实处理器返回后登记执行，并核验旧消费记录或登记新产品实际证据。
@@ -215,7 +232,9 @@ class ConsumptionAudit(DiskKeyIndex):
                 )
             by_api[api] = {
                 "product": item.spec.product,
-                "handler": item.handler,
+                "handler": item.partition_handler
+                if self.partitioned and item.partition_handler is not None else item.handler,
+                "business_handler": item.handler,
                 "purpose": item.spec.purpose,
                 "selected_fields": list(item.spec.selected_fields),
                 "registered": True,

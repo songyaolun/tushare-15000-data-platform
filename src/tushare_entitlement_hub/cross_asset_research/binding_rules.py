@@ -9,7 +9,7 @@ from ..product_foundation.registry import ConsumerSpec, load_registry
 from ..reference_contract import ReferenceContract
 from ..store import digest
 
-BINDING_VERSION = "all-products-bindings/v1"
+BINDING_VERSION = "all-products-bindings/v2"
 ROW_UNIT_VERSION = "cross-row-units/v2"
 SOURCE_SNAPSHOT_APIS = frozenset({"rt_hk_k", "stock_company"})
 ALLOWED_CURRENCIES = frozenset({"CNY", "HKD", "USD", "EUR", "JPY", "GBP", "AUD", "CAD", "CHF"})

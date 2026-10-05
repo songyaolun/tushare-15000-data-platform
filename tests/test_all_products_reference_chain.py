@@ -16,6 +16,8 @@ def test_all_products_strict_reference_chain(tmp_path: Path) -> None:
     assert summary["generated_reference_apis"] == 206
     assert summary["new_api_states"]["own_product_reference"] == 107
     assert summary["new_no_own_product_reference"] == []
-    for state in ("readable", "configured", "executed"):
+    for state in ("readable", "executed"):
         assert summary["all_api_states"][state] == 206
         assert summary["new_api_states"][state] == 107
+    assert summary["all_api_states"]["configured"] == 205
+    assert summary["new_api_states"]["configured"] == 107

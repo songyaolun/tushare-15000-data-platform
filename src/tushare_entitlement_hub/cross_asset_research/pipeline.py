@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,7 @@ def run(
 
     例如 selection=('P05',) 仅发布预期产品；空选择发布全部十三产品。
     使用既有 512MB DuckDB、8MiB 结果门禁、16MiB 分段提交和磁盘唯一键登记。
+    结果写入失败时显式关闭执行迭代器，例如容量异常仍立即清理私有输入分区。
     """
     from .bindings import verify_binding_audit
 
@@ -87,8 +89,7 @@ def run(
             if existing is None:
                 state = ExecutionState()
                 connection.execute("BEGIN TRANSACTION")
-                counts = save_results(
-                    connection,
+                with closing(
                     execute(
                         reference,
                         cutoff,
@@ -99,12 +100,12 @@ def run(
                         limits,
                         state,
                         progress,
-                    ),
-                    config.thresholds.fact_batch_size,
-                    progress=bounded_progress,
-                    run_id=run_id,
-                    staged=True,
-                )
+                    )
+                ) as results:
+                    counts = save_results(
+                        connection, results, config.thresholds.fact_batch_size,
+                        progress=bounded_progress, run_id=run_id, staged=True,
+                    )
                 connection.execute("COMMIT")
                 projections = accumulate_records(
                     _stored_records(connection, run_id, RESEARCH_TABLES)

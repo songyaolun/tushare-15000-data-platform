@@ -42,6 +42,7 @@ from .binding_rules import (
     entity_mapping,
 )
 from .bindings import projection_fields, verify_binding_audit
+from .partitioned_inputs import InputSpool
 from .retention import RetentionGroup
 
 SOURCE_APIS = frozenset(entry.api for entry in cross_registry())
@@ -202,11 +203,14 @@ def load_inputs(
     *,
     progress: ProgressCallback | None = None,
     remaining_rows: int | None = None,
+    spool: InputSpool | None = None,
 ) -> tuple[ResearchInputs, dict[str, int]]:
     """只读取新增107来源，以有限批扫描并记录排除、保留和历史释放数量。
 
     例如空绑定scanned_rows=0；remaining_rows=0时仍扫描已绑定来源并拒绝整源。
-    内存字节与行数分别设门禁，任一实体或来源溢出均清空整组，不输出截断后的总量。
+    默认返回有界内存观察集；正式执行传入 spool 时将完整行写到磁盘，返回分区模板。
+    例如十万目录行超过旧内存预算仍可全部进入 spool，随后按完整实体分区计算；
+    显式来源或总行数超限直接拒绝发布，不输出截断后的总量。
     """
     check_paths(reference_path)
     if remaining_rows is not None and (type(remaining_rows) is not int or remaining_rows < 0):
@@ -295,6 +299,12 @@ def load_inputs(
                         reasons.add("source_local_entity_only")
                     elif row.raw["entity_basis"] == "observed_directory":
                         reasons.add("directory_identity_observed_only")
+                    if spool is not None:
+                        spool.append(prepare_row_numeric(
+                            row, effective, contracts[api], certificates,
+                            frozenset(currency_fields.get(api, ())),
+                        ))
+                        continue
                     identity = str(row.entity_id)
                     if overflow or identity in blocked:
                         continue
@@ -336,6 +346,16 @@ def load_inputs(
                         )
                 if progress is not None:
                     progress({"stage": "scan_cross_asset_reference", "source_api": api, **counts})
+            if spool is not None:
+                counts["retained_rows"] += spool.retain(
+                    api, keep_versions=api in VERSION_APIS,
+                    maximum_rows=min(
+                        config.maximum_source_rows, total_budget - counts["retained_rows"],
+                    ),
+                )
+                rows_by_api[api] = ()
+                source_reasons[api] = tuple(sorted(reasons))
+                continue
             retained_rows = tuple(
                 prepare_row_numeric(
                     row,
@@ -357,6 +377,8 @@ def load_inputs(
     counts["discarded_rows"] = (
         counts["scanned_rows"] - counts["retained_rows"] - counts["excluded_rows"]
     )
+    if spool is not None:
+        counts["spooled_rows"] = counts["retained_rows"]
     return ResearchInputs(
         analysis_as_of=cutoff,
         run_id=run_id,

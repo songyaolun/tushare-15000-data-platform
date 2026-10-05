@@ -12,7 +12,7 @@ from tushare_entitlement_hub.cli import app
 from tushare_entitlement_hub.cross_asset_research import pipeline, storage
 from tushare_entitlement_hub.cross_asset_research.bindings import build_config
 from tushare_entitlement_hub.cross_asset_research.execution import RunLimits
-from tushare_entitlement_hub.cross_asset_research.registry import PRODUCTS
+from tushare_entitlement_hub.cross_asset_research.registry import HANDLERS, PRODUCTS
 from tushare_entitlement_hub.equity_research.models import ResearchConfig, ResearchResult
 from tushare_entitlement_hub.equity_research.storage import _stored_records
 from tushare_entitlement_hub.reference_storage import file_checksum
@@ -88,7 +88,11 @@ def test_build_run_validate_cli_has_nonempty_metrics_and_exact_replay(tmp_path):
         ],
     )
     assert built.exit_code == 0, built.output
-    assert json.loads(built.stdout)["summary"]["configured_apis"] == 206
+    built_audit = json.loads(built.stdout)
+    assert built_audit["summary"]["configured_apis"] == 205
+    assert built_audit["summary"]["configured_apis"] == sum(
+        source["configured"] for source in built_audit["sources"].values()
+    )
     args = [
         "research-all",
         "run",
@@ -386,7 +390,11 @@ def test_single_result_over_eight_mib_never_publishes(tmp_path, monkeypatch):
             ),
         )
 
-    monkeypatch.setattr(execution, "resolve_handler", lambda name: oversized)
+    original_resolver = execution.resolve_handler
+    monkeypatch.setattr(
+        execution, "resolve_handler",
+        lambda name: oversized if name == HANDLERS["P05"] else original_resolver(name),
+    )
     with pytest.raises(ValueError, match="research_result_payload_capacity_exceeded"):
         pipeline.run(reference, output, AS_OF, config, ("P05",))
     assert not output.exists()
@@ -417,7 +425,11 @@ def test_multi_partition_results_preserve_payload_and_replay(tmp_path, monkeypat
             for index in range(20)
         )
 
-    monkeypatch.setattr(execution, "resolve_handler", lambda name: wide)
+    original_resolver = execution.resolve_handler
+    monkeypatch.setattr(
+        execution, "resolve_handler",
+        lambda name: wide if name == HANDLERS["P05"] else original_resolver(name),
+    )
     first = pipeline.run(reference, output, AS_OF, config, ("P05",))
     assert first["result_count"] == 20
     assert first["physical_json_bytes"] > 20 * 1024 * 1024

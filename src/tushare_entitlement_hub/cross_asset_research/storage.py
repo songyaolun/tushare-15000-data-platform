@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,7 @@ def execution_summary(state: ExecutionState) -> dict[str, Any]:
             name: dict(sorted(states.items())) for name, states in sorted(state.states.items())
         },
         "processing": state.processing,
+        "input_storage": state.input_storage,
         "consumption": state.consumption,
     }
 
@@ -160,6 +162,7 @@ def replay(reference: Path, metadata: dict[str, Any]) -> None:
 
     例如修改一条期货压力指标并重写子表，物理一致性可能通过，本次重算仍拒绝。
     仅用于当前参考指纹对应批次，历史参考文件缺失时不能声称完成来源重算。
+    若投影重算中断，显式关闭输入迭代器以删除私有分区暂存，不依赖垃圾回收时机。
     """
     from .bindings import verify_binding_audit
 
@@ -167,21 +170,25 @@ def replay(reference: Path, metadata: dict[str, Any]) -> None:
     verify_binding_audit(config, metadata["reference_sha256"], metadata["analysis_as_of"])
     state = ExecutionState()
 
-    def projections() -> Iterator[EncodedRecord]:
-        """只保留当前结果的投影；例如十万结果重算不创建十万个模型的列表。"""
-        for result in execute(
-            reference,
-            metadata["analysis_as_of"],
-            metadata["run_id"],
-            config,
-            tuple(metadata["products"]),
-            tuple(metadata["holdings"]),
-            RunLimits(**metadata["limits"]),
-            state,
-        ):
-            yield from project_result(result)
+    def projections() -> Generator[EncodedRecord, None, None]:
+        """只保留当前结果的投影；例如十万结果重算不创建模型列表，异常时关闭暂存。"""
+        with closing(
+            execute(
+                reference,
+                metadata["analysis_as_of"],
+                metadata["run_id"],
+                config,
+                tuple(metadata["products"]),
+                tuple(metadata["holdings"]),
+                RunLimits(**metadata["limits"]),
+                state,
+            )
+        ) as results:
+            for result in results:
+                yield from project_result(result)
 
-    rebuilt = accumulate_records(projections())
+    with closing(projections()) as records:
+        rebuilt = accumulate_records(records)
     summary = metadata["summary"]
     if rebuilt != metadata["projections"] or any(
         summary.get(key) != value for key, value in execution_summary(state).items()

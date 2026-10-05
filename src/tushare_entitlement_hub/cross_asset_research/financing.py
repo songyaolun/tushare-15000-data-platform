@@ -261,6 +261,39 @@ def _process(frame: Frame) -> tuple[list[Metric], dict[str, Any]]:
     return values, details
 
 
+def option_member(
+    inputs: ResearchInputs, spec: ResearchRow, frame: Frame,
+) -> tuple[str, tuple[str, ...]] | None:
+    """按原有明确关系和到期口径返回方向及完整 PCR 分组键。
+
+    输入唯一确认标的、认购方向、有效到期与乘数时返回 ('call',分组键)；
+    缺标的或到期早于行情日返回 None。紧凑日期先规范化，避免等价日期被错误分区。
+    """
+    relations = [
+        relation
+        for relation in inputs.config.relations_by_source.get(
+            (frame.entity_id, "option_underlying"), ()
+        )
+        if relation.confirmed and relation.usable_at(inputs.analysis_as_of)
+    ]
+    side = {"C": "call", "P": "put", "认购": "call", "认沽": "put"}.get(
+        spec.text("call_put") or ""
+    )
+    keys = tuple(
+        spec.text(name) or ""
+        for name in ("maturity_date", "exercise_type", "opt_type", "opt_multiplier")
+    )
+    if len(relations) != 1 or side is None or not all(keys):
+        return None
+    try:
+        maturity = date.fromisoformat(keys[0]).isoformat()
+    except ValueError:
+        return None
+    if maturity < frame.latest_period:
+        return None
+    return side, (relations[0].to_entity_id, maturity, *keys[1:], frame.latest_period)
+
+
 def _option_groups(inputs: ResearchInputs) -> list[ResearchResult]:
     """按已确认标的、到期、执行方式及合约乘数汇总 PCR；例：看跌 20/看涨 10 得 2。
 
@@ -276,30 +309,11 @@ def _option_groups(inputs: ResearchInputs) -> list[ResearchResult]:
         if frame.reasons or len(frame.rows) != 1 or frame.entity_id not in specs:
             continue
         spec = specs[frame.entity_id]
-        relations = [
-            relation
-            for relation in inputs.config.relations_by_source.get(
-                (frame.entity_id, "option_underlying"), ()
-            )
-            if relation.confirmed and relation.usable_at(inputs.analysis_as_of)
-        ]
-        side = {"C": "call", "P": "put", "认购": "call", "认沽": "put"}.get(
-            spec.text("call_put") or ""
-        )
-        keys = tuple(
-            spec.text(name) or ""
-            for name in ("maturity_date", "exercise_type", "opt_type", "opt_multiplier")
-        )
-        if len(relations) != 1 or side is None or not all(keys):
+        membership = option_member(inputs, spec, frame)
+        if membership is None:
             continue
-        try:
-            maturity = date.fromisoformat(keys[0]).isoformat()
-        except ValueError:
-            continue
-        if maturity < frame.latest_period:
-            continue
-        keys = (maturity, *keys[1:])
-        groups[(relations[0].to_entity_id, *keys, frame.latest_period)].append((side, frame, spec))
+        side, key = membership
+        groups[key].append((side, frame, spec))
     results = []
     for key, members in groups.items():
         frame = Frame(

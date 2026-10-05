@@ -29,8 +29,15 @@ SAFE_VALIDATION_CODES = frozenset(
     "research_output_path_unsafe research_output_busy research_output_changed "
     "research_output_recovery_required research_output_lock_lost "
     "all_products_result_capacity_exceeded all_products_output_capacity_exceeded "
-    "portfolio_parent_capacity_exceeded portfolio_input_capacity_exceeded".split()
+    "portfolio_parent_capacity_exceeded portfolio_input_capacity_exceeded "
+    "research_input_spool_capacity_exceeded research_input_source_capacity_exceeded "
+    "research_input_partition_capacity_exceeded".split()
 )
+
+INPUT_CAPACITY_CODES = frozenset({
+    "research_input_spool_capacity_exceeded", "research_input_source_capacity_exceeded",
+    "research_input_partition_capacity_exceeded",
+})
 
 
 class ResultPayloadCapacityError(ValueError):
@@ -99,7 +106,12 @@ def database_error_code(error: Exception) -> str | None:
 
 
 def error_category(error: Exception) -> str:
-    """按异常类型及引擎固定错误前缀分类，不回显原文；例：DuckDB内存错误得到memory。"""
+    """按异常类型及固定安全码分类，不回显载荷；例：DuckDB内存错误得到memory。
+
+    输入分区、来源行数或暂存预算超限得到capacity，避免包装后只剩笼统validation。
+    """
+    if isinstance(error, ValueError) and str(error) in INPUT_CAPACITY_CODES:
+        return "capacity"
     code = database_error_code(error)
     if code in {
         "fatal_rollback_memory", "fatal_checkpoint_memory", "transaction_commit_memory",

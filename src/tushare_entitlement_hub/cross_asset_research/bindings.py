@@ -10,7 +10,11 @@ from typing import Any
 import duckdb
 
 from ..catalog import load_policies
-from ..equity_research.adapter import inspect_research_source, source_manifests
+from ..equity_research.adapter import (
+    UNRESOLVED_APIS,
+    inspect_research_source,
+    source_manifests,
+)
 from ..equity_research.binding_builder import (
     MASTER_FIELDS,
     METADATA,
@@ -189,8 +193,12 @@ def build_config(
 ) -> BuildResult:
     """从只读reference生成206接口配置与逐源审计，旧99仍经过原构建器全部门禁。
 
-    输入含206个唯一清单的合成库，输出配置和all-products-bindings/v1报告；
+    输入含206个唯一清单的合成库，输出配置和all-products-bindings/v2报告；
     当前来源清单缺失、重复、契约不一致或容量溢出均拒绝，目录额外项不参与判断。
+    扫描限额原样持久化，例如默认配置的单源/总行数为2000000/5000000，
+    配置写入再读取不会回落到手工空配置的小样本默认值。
+    旧来源按真实适配器的实体和时间要求登记 configured；例如 factor_value
+    缺实体绑定时记录 research_bindings_missing，不把可扫描误报为可配置消费。
     """
     check_paths(reference)
     cutoff = normalize_timestamp(cutoff)
@@ -199,9 +207,19 @@ def build_config(
     contracts = load_reference_contracts(load_policies())
     entries = {entry.api: entry for entry in cross_registry()}
     mappings = {mapping.source_api: mapping for mapping in time_registry(contracts)}
-    sources = {
-        api: dict(report, configured=True) for api, report in legacy.audit["sources"].items()
-    }
+    legacy_time_apis = {item.source_api for item in legacy.config.foundation.time_mappings}
+    legacy_entity_apis = {item.source_api for item in legacy.config.foundation.entity_mappings}
+    sources = {}
+    for api, report in legacy.audit["sources"].items():
+        configured = api in legacy_time_apis and (
+            api in legacy_entity_apis or api in UNRESOLVED_APIS
+        )
+        binding_reasons = dict(report["reason_counts"])
+        if not configured:
+            binding_reasons["research_bindings_missing"] = 1
+        sources[api] = dict(
+            report, configured=configured, reason_counts=dict(sorted(binding_reasons.items()))
+        )
     entities = EntityBuild(
         maximum_entities=limits.maximum_entities,
         extra_namespaces=MASTER_NAMESPACES,
@@ -314,6 +332,8 @@ def build_config(
     }
     config = replace(
         legacy.config,
+        maximum_source_rows=limits.maximum_source_rows,
+        maximum_total_rows=limits.maximum_total_rows,
         foundation=replace(
             legacy.config.foundation,
             entities=tuple(all_entities[key] for key in sorted(all_entities)),
@@ -335,6 +355,10 @@ def build_config(
         "rules_fingerprint": rules_fingerprint(contracts),
         "configuration_sha256": configuration_hash(config),
         "config_sha256": configuration_hash(config),
+        "runtime_limits": {
+            "maximum_source_rows": config.maximum_source_rows,
+            "maximum_total_rows": config.maximum_total_rows,
+        },
         "historical_pit_certified": False,
         "row_unit_version": ROW_UNIT_VERSION,
         "row_currency_fields": {
@@ -346,7 +370,7 @@ def build_config(
         "reason_codes": ["historical_pit_uncertified", "universe_scope_uncertified"],
         "summary": {
             "registered_apis": 206,
-            "configured_apis": len(sources),
+            "configured_apis": sum(report["configured"] for report in sources.values()),
             "readable_apis": sum(report["readable"] for report in sources.values()),
             "scanned_rows": sum(report["scanned_rows"] for report in sources.values()),
             "observed_apis": 0,

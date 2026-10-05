@@ -518,16 +518,20 @@ def _theme_state(sources: dict[str, tuple[ResearchRow, ...]]) -> tuple[Metric, s
     ), state
 
 
-def build_theme_opportunities(inputs: ResearchInputs) -> tuple[ResearchResult, ...]:
+def build_theme_opportunities(
+    inputs: ResearchInputs, *, prices: dict[str, tuple[ResearchRow, ...]] | None = None,
+) -> tuple[ResearchResult, ...]:
     """将P02的22个接口加工成时点一致的来源内主题观察产品。
 
     输入已绑定主题的成员、行情和资金证据，输出广度、动量、拥挤旁证及成员贡献；
     没有输入时返回()。未知成员有效期输出observed_snapshot_only，始终不认证历史PIT。
     指标计算用完整已适配组；只有证据和展示样本有上限，绝不截断业务分母。
+    内部分区调用可复用已认证价格索引，例如百个主题只建立一次 daily 索引。
     """
     groups = accepted_groups(inputs, API_FIELDS)
-    price_groups = accepted_groups(inputs, ("daily",))
-    prices = {entity: values.get("daily", ()) for entity, values in price_groups.items()}
+    if prices is None:
+        price_groups = accepted_groups(inputs, ("daily",))
+        prices = {entity: values.get("daily", ()) for entity, values in price_groups.items()}
     results = []
     for entity, sources in sorted(groups.items()):
         metrics: list[Metric] = []

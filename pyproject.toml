@@ -13,7 +13,7 @@ dependencies = ["duckdb>=1.2,<2", "httpx>=0.28,<1", "typer>=0.16,<1", "beautiful
 tushare-hub = "tushare_entitlement_hub.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8.3,<10", "pytest-cov>=6,<8", "ruff>=0.11,<1", "mypy>=1.15,<2", "types-beautifulsoup4", "types-Markdown"]
+dev = ["pytest>=8.3,<10", "pytest-cov>=6,<8", "coverage>=7.10.6,<8", "ruff>=0.11,<1", "mypy>=1.15,<2", "types-beautifulsoup4", "types-Markdown"]
 
 [tool.ruff]
 line-length = 100
@@ -28,6 +28,7 @@ addopts = "--strict-markers"
 
 [tool.coverage.run]
 source = ["tushare_entitlement_hub"]
+patch = ["subprocess"]
 
 [tool.coverage.report]
 show_missing = true

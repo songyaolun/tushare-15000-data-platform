@@ -21,7 +21,7 @@ from ..equity_research.consumption_registry import (
 from ..product_foundation.registry import ConsumerSpec, load_registry, validate_registry
 from ..store import digest
 
-VERSION = "all-products-consumption/v1"
+VERSION = "all-products-consumption/v2"
 NEW_PRODUCTS = {
     "P02": "theme_opportunities/v1",
     "P05": "expectation_revision/v1",
@@ -41,6 +41,7 @@ HANDLERS = {
     "P11": "financing.build_financing",
     "P12": "portfolio.build_portfolio",
 }
+PARTITION_HANDLER = "partitioned_execution.partitioned_results"
 EXPECTED_COUNTS = {"P02": 22, "P05": 7, "P08": 18, "P09": 19, "P10": 26, "P11": 14, "P12": 1}
 
 
@@ -50,6 +51,7 @@ class Registration:
 
     spec: ConsumerSpec
     handler: str
+    partition_handler: str | None = None
 
 
 def registrations() -> tuple[Registration, ...]:
@@ -57,6 +59,7 @@ def registrations() -> tuple[Registration, ...]:
 
     例如 forecast 绑定 P05 的预期处理器；若新增矩阵项未归属则立即拒绝。
     旧六产品继续使用原消费处理器，因而不把基础 coverage 当作执行证明。
+    新来源同时登记实际分区入口，例如 P05 的业务处理器和磁盘执行入口均进入指纹。
     """
     entries = load_registry()
     validate_registry(entries)
@@ -70,6 +73,7 @@ def registrations() -> tuple[Registration, ...]:
             HANDLERS[item.product]
             if item.product in NEW_PRODUCTS
             else "equity." + legacy[item.api].handler,
+            PARTITION_HANDLER if item.product in NEW_PRODUCTS else None,
         )
         for item in entries
     )
@@ -79,10 +83,11 @@ def resolve_handler(name: str) -> Callable[..., Any]:
     """只解析本模块白名单内真实可调用处理器，不允许用户注入模块路径。
 
     输入 themes.build_theme_opportunities 返回主题构造函数；未知名称抛固定错误。
+    分区入口也必须来自唯一白名单，不能将用户输入当成可导入的模块路径。
     """
     if name.startswith("equity."):
         return resolve_consumer(name.removeprefix("equity."))
-    if name not in HANDLERS.values():
+    if name not in HANDLERS.values() and name != PARTITION_HANDLER:
         raise ValueError("all_products_handler_missing")
     module, attribute = name.split(".")
     handler: Any = getattr(import_module(f"{__package__}.{module}"), attribute, None)
@@ -103,9 +108,11 @@ def validate_handlers() -> None:
     """在扫描前解析所有 206 项的处理器，缺实现不能记为 registered 完成。
 
     例如 financing 模块缺失时运行立即失败，而不会产出伪造的执行摘要。
+    分区执行入口同样预先解析，不能只登记业务函数却遗漏正式运行所用的消费者。
     """
     for name in sorted({item.handler for item in registrations()}):
         resolve_handler(name)
+    resolve_handler(PARTITION_HANDLER)
     for item in registrations():
         if item.spec.product in NEW_PRODUCTS:
             module = import_module(f"{__package__}.{item.handler.split('.')[0]}")
