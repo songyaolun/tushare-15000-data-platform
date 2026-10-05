@@ -328,13 +328,14 @@ def build_config(
         ),
         binding_audit_json="{}",
     )
+    configuration_fingerprint = configuration_hash(config)
     audit = {
         "version": BINDING_VERSION,
         "reference_sha256": before,
         "generated_as_of": cutoff,
         "rules_fingerprint": rules_fingerprint(contracts),
-        "configuration_sha256": configuration_hash(config),
-        "config_sha256": configuration_hash(config),
+        "configuration_sha256": configuration_fingerprint,
+        "config_sha256": configuration_fingerprint,
         "historical_pit_certified": False,
         "row_unit_version": ROW_UNIT_VERSION,
         "row_currency_fields": {
@@ -416,12 +417,13 @@ def verify_binding_audit(config: ResearchConfig, reference_hash: str, cutoff: st
         raise ValueError("binding_reference_mismatch")
     if audit.get("generated_as_of") != cutoff:
         raise ValueError("binding_cutoff_mismatch")
+    configuration_fingerprint = configuration_hash(config)
     if (
         audit.get("version") != BINDING_VERSION
         or audit.get("row_unit_version") != ROW_UNIT_VERSION
         or audit.get("rules_fingerprint")
         != rules_fingerprint(load_reference_contracts(load_policies()))
-        or audit.get("configuration_sha256") != configuration_hash(config)
-        or audit.get("config_sha256") != configuration_hash(config)
+        or audit.get("configuration_sha256") != configuration_fingerprint
+        or audit.get("config_sha256") != configuration_fingerprint
     ):
         raise ValueError("binding_configuration_mismatch")

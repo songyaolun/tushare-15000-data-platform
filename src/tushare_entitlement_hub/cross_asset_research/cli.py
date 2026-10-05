@@ -9,10 +9,11 @@ from typing import Annotated, Any
 import duckdb
 import typer
 
+from ..equity_research.binding_builder import build_failure_code
 from ..equity_research.binding_io import BuildLimits, check_paths, publish_files
 from ..equity_research.cli import print_progress
 from ..equity_research.models import ResearchConfig
-from ..equity_research.persistence_runtime import PersistenceError
+from ..equity_research.persistence_runtime import SAFE_VALIDATION_CODES, PersistenceError
 from ..equity_research.storage import _stored_records
 from ..store import encode
 from .execution import RunLimits
@@ -31,6 +32,9 @@ def build_config(
     audit: Annotated[Path | None, typer.Option(help="独立逐接口审计 JSON")] = None,
     maximum_source_rows: Annotated[int, typer.Option()] = 2_000_000,
     maximum_total_rows: Annotated[int, typer.Option()] = 5_000_000,
+    maximum_entities: Annotated[
+        int, typer.Option(help="跨市场主数据实体条数硬上限")
+    ] = 500_000,
 ) -> None:
     """只读生成 206 接口绑定，先写审计再原子替换配置，配置作为提交标记。
 
@@ -48,13 +52,20 @@ def build_config(
             limits=BuildLimits(
                 maximum_source_rows=maximum_source_rows,
                 maximum_total_rows=maximum_total_rows,
+                maximum_entities=maximum_entities,
             ),
         )
         publish_files(((report, encode(result.audit)), (output, result.config.to_json())))
         typer.echo(encode(result.audit))
-    except (ValueError, OSError, duckdb.Error, KeyError, TypeError):
+    except (ValueError, OSError, duckdb.Error, KeyError, TypeError) as error:
         typer.echo(
-            encode({"status": "failed", "reason_codes": ["all_products_build_config_failed"]})
+            encode(
+                {
+                    "status": "failed",
+                    "reason_codes": ["all_products_build_config_failed"],
+                    "detail_code": build_failure_code(error),
+                }
+            )
         )
         raise typer.Exit(1) from None
 
@@ -91,7 +102,12 @@ def run(
             progress=print_progress,
         )
     except (ValueError, OSError, duckdb.Error, KeyError, TypeError) as error:
-        failure: dict[str, Any] = {"status": "failed", "reason_codes": ["all_products_run_failed"]}
+        safe_reason = (
+            str(error)
+            if isinstance(error, ValueError) and str(error) in SAFE_VALIDATION_CODES
+            else "all_products_run_failed"
+        )
+        failure: dict[str, Any] = {"status": "failed", "reason_codes": [safe_reason]}
         if isinstance(error, PersistenceError):
             failure.update(
                 reason_codes=[error.reason_code],

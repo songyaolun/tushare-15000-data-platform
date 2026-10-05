@@ -148,7 +148,7 @@ def test_results_limit_alias_and_audit_report_actual_current_run(tmp_path):
 
 
 def test_build_config_explicit_audit_path_and_capacity_failure_preserve_output(tmp_path):
-    """场景：指定独立审计路径并随后超扫描预算；预期：两份产物建立，失败不覆盖旧配置。"""
+    """场景：显式配置跨市场实体预算后触发两类容量错误；预期：失败保留旧配置。"""
     reference = write_reference(tmp_path)
     output, audit = tmp_path / "config.json", tmp_path / "audit.json"
     args = [
@@ -164,15 +164,19 @@ def test_build_config_explicit_audit_path_and_capacity_failure_preserve_output(t
         AS_OF,
     ]
     runner = CliRunner()
-    built = runner.invoke(app, args)
+    built = runner.invoke(app, args + ["--maximum-entities", "500000"])
     assert built.exit_code == 0 and json.loads(audit.read_text()) == json.loads(built.stdout)
     original = output.read_bytes()
     failed = runner.invoke(app, args + ["--maximum-total-rows", "1"])
     assert failed.exit_code == 1 and output.read_bytes() == original
+    assert json.loads(failed.stdout)["detail_code"] == "binding_scan_capacity_exceeded"
+    failed = runner.invoke(app, args + ["--maximum-entities", "1"])
+    assert failed.exit_code == 1 and output.read_bytes() == original
+    assert json.loads(failed.stdout)["detail_code"] == "binding_entity_capacity_exceeded"
 
 
 def test_holdings_input_file_over_eight_mib_is_rejected_before_reading(tmp_path):
-    """场景：持仓文件大于8MiB；预期：按文件大小预检拒绝，不能先读入全部持仓。"""
+    """场景：持仓文件大于8MiB；预期：预检拒绝并返回固定容量码，不读取载荷。"""
     holdings = tmp_path / "holdings.json"
     with holdings.open("wb") as handle:
         handle.seek(8 * 1024 * 1024)
@@ -195,7 +199,7 @@ def test_holdings_input_file_over_eight_mib_is_rejected_before_reading(tmp_path)
         ],
     )
     assert result.exit_code == 1
-    assert json.loads(result.stdout)["reason_codes"] == ["all_products_run_failed"]
+    assert json.loads(result.stdout)["reason_codes"] == ["portfolio_input_capacity_exceeded"]
 
 
 def test_persistence_error_retains_safe_phase_without_raw_exception_text(tmp_path, monkeypatch):
