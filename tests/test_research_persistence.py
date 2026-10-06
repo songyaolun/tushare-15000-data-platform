@@ -10,6 +10,7 @@ from research_fixture import AS_OF, DATABASE_CONFIG, write_reference
 from tushare_entitlement_hub.equity_research import pipeline
 from tushare_entitlement_hub.equity_research.common import gate, make_result, metric
 from tushare_entitlement_hub.equity_research.models import (
+    CANDIDATE_RANKING_PRODUCT_IDS,
     MARKET_ENTITY,
     PRODUCT_IDS,
     ResearchConfig,
@@ -106,6 +107,14 @@ def test_real_synthetic_pipeline_metrics_idempotency_and_dependencies(tmp_path):
     assert selected["products"] == list(PRODUCT_IDS[1:5])
     assert selected["run_id"] != first["run_id"]
     assert validate_research(reference, output)["valid"]
+    horizons = run_research(
+        reference, output, AS_OF, config, ("P03S", "P03M", "P03L")
+    )
+    assert horizons["products"] == list(
+        PRODUCT_IDS[1:4] + CANDIDATE_RANKING_PRODUCT_IDS
+    )
+    assert horizons["run_id"] not in {first["run_id"], selected["run_id"]}
+    assert validate_research(reference, output)["valid"]
 
 
 def test_empty_reference_and_missing_bindings_remain_incomplete(tmp_path):
@@ -126,6 +135,9 @@ def test_empty_reference_and_missing_bindings_remain_incomplete(tmp_path):
         (("P01",), PRODUCT_IDS[:1]),
         (("P03",), PRODUCT_IDS[1:5]),
         (("P13",), PRODUCT_IDS[1:4] + PRODUCT_IDS[5:]),
+        (("P03S",), PRODUCT_IDS[1:4] + CANDIDATE_RANKING_PRODUCT_IDS[:1]),
+        (("P03M",), PRODUCT_IDS[1:3] + CANDIDATE_RANKING_PRODUCT_IDS[1:2]),
+        (("P03L",), PRODUCT_IDS[1:3] + CANDIDATE_RANKING_PRODUCT_IDS[2:]),
         (("P04", "P04"), PRODUCT_IDS[1:2]),
         ((PRODUCT_IDS[0],), PRODUCT_IDS[:1]),
     ],

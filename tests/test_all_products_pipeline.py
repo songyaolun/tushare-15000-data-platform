@@ -12,7 +12,7 @@ from tushare_entitlement_hub.cli import app
 from tushare_entitlement_hub.cross_asset_research import pipeline, storage
 from tushare_entitlement_hub.cross_asset_research.bindings import build_config
 from tushare_entitlement_hub.cross_asset_research.execution import RunLimits
-from tushare_entitlement_hub.cross_asset_research.registry import PRODUCTS
+from tushare_entitlement_hub.cross_asset_research.registry import DEFAULT_PRODUCTS, PRODUCTS
 from tushare_entitlement_hub.equity_research.models import ResearchConfig, ResearchResult
 from tushare_entitlement_hub.equity_research.storage import _stored_records
 from tushare_entitlement_hub.reference_storage import file_checksum
@@ -105,7 +105,7 @@ def test_build_run_validate_cli_has_nonempty_metrics_and_exact_replay(tmp_path):
     assert first.exit_code == 2, first.output
     summary = json.loads(first.stdout)
     assert summary["consumption"]["registered"] == summary["consumption"]["executed"] == 206
-    assert set(summary["product_states"]) == set(PRODUCTS)
+    assert set(summary["product_states"]) == set(DEFAULT_PRODUCTS)
     results, metadata = saved_results(output)
     metrics = {
         product: {
@@ -115,7 +115,7 @@ def test_build_run_validate_cli_has_nonempty_metrics_and_exact_replay(tmp_path):
             for metric in result.metrics
             if metric.value is not None
         }
-        for product in PRODUCTS.values()
+        for product in (PRODUCTS[name] for name in DEFAULT_PRODUCTS)
     }
     for name in ("P02", "P05", "P08", "P09", "P10", "P11"):
         assert any(value is not None for value in metrics[PRODUCTS[name]].values()), (
@@ -202,6 +202,95 @@ def test_build_run_validate_cli_has_nonempty_metrics_and_exact_replay(tmp_path):
             }
         )
     )
+
+
+def test_explicit_candidate_horizons_are_independent_and_replayable(tmp_path):
+    """场景：显式运行三套 P03 排名；预期：产品身份独立、依赖闭包准确且可完整重放。"""
+    reference = write_reference(tmp_path)
+    output, config_path = tmp_path / "rankings.duckdb", tmp_path / "config.json"
+    runner = CliRunner()
+    built = runner.invoke(
+        app,
+        [
+            "research-all",
+            "build-config",
+            "--reference",
+            str(reference),
+            "--output",
+            str(config_path),
+            "--as-of",
+            AS_OF,
+        ],
+    )
+    assert built.exit_code == 0, built.output
+    run = runner.invoke(
+        app,
+        [
+            "research-all",
+            "run",
+            "--reference",
+            str(reference),
+            "--output",
+            str(output),
+            "--config",
+            str(config_path),
+            "--as-of",
+            AS_OF,
+            "--product",
+            "P03S",
+            "--product",
+            "P03M",
+            "--product",
+            "P03L",
+        ],
+    )
+    assert run.exit_code == 2, run.output
+    summary = json.loads(run.stdout)
+    assert set(summary["product_states"]) == {
+        "P04",
+        "P06",
+        "P07",
+        "P03S",
+        "P03M",
+        "P03L",
+    }
+    results, _ = saved_results(output)
+    ranking_products = {PRODUCTS[name] for name in ("P03S", "P03M", "P03L")}
+    ranking_results = [
+        result for result in results if result.envelope.product_id in ranking_products
+    ]
+    assert {result.envelope.product_id for result in ranking_results} == ranking_products
+    assert {result.details["ranking_horizon"] for result in ranking_results} == {
+        "short_term",
+        "medium_term",
+        "long_term",
+    }
+    for alias in ("P03S", "P03M", "P03L"):
+        selected = runner.invoke(
+            app,
+            [
+                "research-all",
+                "results",
+                "--output",
+                str(output),
+                "--product",
+                alias,
+                "--limit",
+                "5",
+            ],
+        )
+        assert selected.exit_code == 0, selected.output
+        payloads = [json.loads(line) for line in selected.stdout.splitlines()]
+        assert payloads
+        assert {payload["envelope"]["product_id"] for payload in payloads} == {
+            PRODUCTS[alias]
+        }
+    validated = runner.invoke(
+        app,
+        ["research-all", "validate", "--reference", str(reference), "--output", str(output)],
+    )
+    assert validated.exit_code == 0, validated.output
+    assert json.loads(validated.stdout)["valid"] is True
 
 
 def test_missing_bindings_produces_explicit_unknown_for_all_products(tmp_path):

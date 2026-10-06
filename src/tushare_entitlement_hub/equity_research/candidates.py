@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from math import ceil, isfinite, log1p
+from math import ceil, fsum, isfinite, log1p
 from typing import cast
 
 from ..product_foundation.contracts import (
@@ -132,7 +132,7 @@ def _rank_and_explain(
             }
         ):
             remaining = {
-                result.envelope.entity_id: sum(
+                result.envelope.entity_id: fsum(
                     component.contribution or 0
                     for component in result.envelope.contributions
                     if component.feature_id != factor

@@ -26,6 +26,7 @@ from .consumption_registry import (
     load_consumption_registry,
     registry_fingerprint,
     resolve_consumer,
+    source_product,
 )
 from .consumption_validation import ConsumptionModels
 from .context_aggregation import row_fingerprint
@@ -377,10 +378,9 @@ def attach_consumption(
     同实体多条事件按result_id字典序选唯一stock承载者，与事件输入顺序无关；
     例：同实体结果ID为'b'、'a'时仅'a'消费stock行，'b'记录零行及指向'a'的原因。
     """
+    expected_product = source_product(product)
     registrations = tuple(
-        item
-        for item in load_consumption_registry()
-        if PRODUCT_ALIASES[item.spec.product] == product
+        item for item in load_consumption_registry() if item.spec.product == expected_product
     )
     stock_owners: dict[str, str] = {}
     for result in results:
@@ -476,10 +476,11 @@ def validate_result_consumption(result: ResearchResult) -> None:
     """
     details = result.details
     records = details.get("consumption")
+    expected_product = source_product(result.envelope.product_id)
     expected = {
         item.spec.api: item
         for item in load_consumption_registry()
-        if PRODUCT_ALIASES[item.spec.product] == result.envelope.product_id
+        if item.spec.product == expected_product
     }
     if details.get("consumption_version") != CONSUMPTION_VERSION or not isinstance(records, list):
         raise ValueError("research_consumption_missing")
@@ -575,10 +576,11 @@ def summarize_consumption(counts: dict[str, Counter[str]], products: list[str]) 
 
     输入六产品全缺数据，输出assigned=registered=executed=99、observed=0。
     """
+    selected_source_products = {source_product(product) for product in products}
     expected = {
         item.spec.api
         for item in load_consumption_registry()
-        if PRODUCT_ALIASES[item.spec.product] in products
+        if item.spec.product in selected_source_products
     }
     return {
         "version": CONSUMPTION_VERSION,

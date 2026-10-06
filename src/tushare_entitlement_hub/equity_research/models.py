@@ -26,6 +26,12 @@ PRODUCT_IDS = (
     "equity_research_candidates/v1",
     "event_thesis_review/v1",
 )
+CANDIDATE_RANKING_PRODUCT_IDS = (
+    "equity_short_term_candidates/v1",
+    "equity_medium_term_candidates/v1",
+    "equity_long_term_candidates/v1",
+)
+ALL_EQUITY_PRODUCT_IDS = PRODUCT_IDS[:5] + CANDIDATE_RANKING_PRODUCT_IDS + PRODUCT_IDS[5:]
 
 
 def default_thresholds() -> FoundationPolicy:

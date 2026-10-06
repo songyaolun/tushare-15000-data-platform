@@ -3,6 +3,7 @@
 import json
 from collections import defaultdict
 from dataclasses import replace
+from datetime import date, timedelta
 
 import duckdb
 import pytest
@@ -392,12 +393,12 @@ def test_quote_quality_units_currency_and_finite_conversion(patch, certificate_p
 
 
 def test_current_retention_releases_old_days_and_keeps_financial_profiles():
-    """场景：日线、宏观、披露日程与报表口径历史；预期：按各自当前窗口保留。"""
+    """场景：日线、宏观、披露日程与报表口径历史；预期：按各自窗口保留。"""
     groups = defaultdict(list)
     config = configured("daily")
     assert not retain_current(groups, row("daily", "old", day="2026-10-01"), config)
     assert not retain_current(groups, row("daily", "new", day=DAY), config)
-    assert [item.raw["source_record_id"] for item in groups[(A, "", "")]] == ["new"]
+    assert [item.raw["source_record_id"] for item in groups[(A, "", "")]] == ["old", "new"]
     macro = defaultdict(list)
     for period in ("2026-07", "2026-09", "2026-08"):
         retain_current(macro, row("cn_cpi", period, day=period), config)
@@ -422,18 +423,51 @@ def test_current_retention_releases_old_days_and_keeps_financial_profiles():
     assert ("unresolved", "", "") in unresolved
 
 
-def test_batch_boundaries_and_current_history_release(tmp_path):
-    """场景：多批同实体旧历史后遇最新日；预期：不因历史总量超限，最终仅保留当前日。"""
+def test_batch_boundaries_keep_configured_daily_history(tmp_path):
+    """场景：多批同实体日线；预期：61期窗口保留现有四日且不触发实体容量。"""
     records = [
         source("daily", str(index), trade_date="2026-09-" + str(index + 10)) for index in range(3)
     ] + [source("daily", "current")]
     path = reference_database(tmp_path, {"daily": records})
-    config = configured("daily", maximum_rows_per_entity_source=1)
+    config = configured("daily", maximum_rows_per_entity_source=61)
     config = replace(config, thresholds=replace(config.thresholds, fact_batch_size=2))
     result, counts = load_inputs(path, NOW, "run", config)
     assert counts["batches"] == 2 and counts["scanned_rows"] == 4
-    assert counts["retained_rows"] == 1
-    assert result.rows("daily")[0].raw["source_record_id"] == "current"
+    assert counts["retained_rows"] == 4
+    assert {item.raw["source_record_id"] for item in result.rows("daily")} == {
+        "0",
+        "1",
+        "2",
+        "current",
+    }
+
+
+def test_daily_and_financial_history_windows_evict_only_excess_periods():
+    """场景：日线超过61期且财务超过12期；预期：分别保留最新61期与12期。"""
+    config = configured("daily")
+    daily_groups = defaultdict(list)
+    first_day = date(2026, 1, 1)
+    for offset in range(62):
+        day = (first_day + timedelta(days=offset)).isoformat()
+        retain_current(daily_groups, row("daily", str(offset), day=day), config)
+    assert len(daily_groups[(A, "", "")]) == 61
+    assert daily_groups[(A, "", "")][0].availability.data_as_of == "2026-01-02"
+
+    financial_groups = defaultdict(list)
+    for year in range(2013, 2026):
+        period = f"{year}-12-31"
+        retain_current(
+            financial_groups,
+            row(
+                "income",
+                str(year),
+                day=period,
+                raw={"report_type": "1", "comp_type": "1"},
+            ),
+            config,
+        )
+    assert len(financial_groups[(A, "1", "1")]) == 12
+    assert financial_groups[(A, "1", "1")][0].availability.data_as_of == "2014-12-31"
 
 
 def test_entity_capacity_rejects_whole_event_group_without_affecting_other_stock(tmp_path):
@@ -513,14 +547,19 @@ def test_entity_capacity_spans_financial_report_profiles(tmp_path):
 def test_discarded_history_and_rejected_rows_have_separate_accounting(tmp_path):
     """场景：旧历史被释放且未来行被拒绝；预期：丢弃和拒绝分列，扫描总数可逐项对账。"""
     records = [
-        source("daily", "old", trade_date="2026-10-01"),
-        source(),
-        source("daily", "future", observed_at="2026-10-04T00:00:00Z"),
+        source(
+            "daily",
+            f"history-{offset}",
+            trade_date=(date(2026, 10, 2) - timedelta(days=offset)).isoformat(),
+        )
+        for offset in range(62)
     ]
+    records.append(source("daily", "future", observed_at="2026-10-04T00:00:00Z"))
     path = reference_database(tmp_path, {"daily": records})
     _, counts = load_inputs(path, NOW, "run", configured("daily"))
-    assert counts["scanned_rows"] == 3
-    assert counts["retained_rows"] == counts["excluded_rows"] == counts["discarded_rows"] == 1
+    assert counts["scanned_rows"] == 63
+    assert counts["retained_rows"] == 61
+    assert counts["excluded_rows"] == counts["discarded_rows"] == 1
 
 
 @pytest.mark.parametrize(

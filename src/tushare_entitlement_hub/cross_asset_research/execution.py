@@ -10,6 +10,11 @@ from typing import Any
 
 from ..equity_research.adapter import SOURCE_APIS as EQUITY_SOURCE_APIS
 from ..equity_research.adapter import load_inputs as load_equity_inputs
+from ..equity_research.candidate_horizons import (
+    build_long_term_candidates,
+    build_medium_term_candidates,
+    build_short_term_candidates,
+)
 from ..equity_research.candidates import build_candidates
 from ..equity_research.common import gate, make_result
 from ..equity_research.consumption import attach_consumption
@@ -22,7 +27,14 @@ from ..equity_research.models import MARKET_ENTITY, ResearchConfig, ResearchInpu
 from ..product_foundation.contracts import Truth
 from ..product_foundation.progress import ProgressCallback
 from .audit import ConsumptionAudit
-from .registry import HANDLERS, NEW_PRODUCTS, PRODUCTS, registrations, resolve_handler
+from .registry import (
+    HANDLERS,
+    NEW_PRODUCTS,
+    PRODUCTS,
+    registrations,
+    resolve_handler,
+    source_products,
+)
 
 EQUITY_SUPPORT_APIS = {
     "P01": frozenset({"daily", "stk_limit", "suspend_d"}),
@@ -94,7 +106,9 @@ def execute(
     all_registrations = registrations()
     product_source_apis = {
         product: frozenset(
-            item.spec.api for item in all_registrations if item.spec.product == product
+            item.spec.api
+            for item in all_registrations
+            if item.spec.product in source_products(product)
         )
         for product in PRODUCTS
     }
@@ -182,6 +196,7 @@ def execute(
         return combined
 
     parents: dict[str, tuple[ResearchResult, ...]] = {}
+    parent_consumers = {"P03", "P03S", "P03M", "P03L", "P13"}.intersection(products)
     portfolio_parents: list[ResearchResult] = []
     portfolio_entities = {str(item.get("entity_id", "")) for item in holdings}
     if "P12" in products and not holdings:
@@ -213,6 +228,14 @@ def execute(
                 results = builders[product](inputs)
             elif product == "P03":
                 results = build_candidates(inputs, parents["P04"], parents["P06"], parents["P07"])
+            elif product == "P03S":
+                results = build_short_term_candidates(
+                    inputs, parents["P04"], parents["P06"], parents["P07"]
+                )
+            elif product == "P03M":
+                results = build_medium_term_candidates(inputs, parents["P04"], parents["P06"])
+            elif product == "P03L":
+                results = build_long_term_candidates(inputs, parents["P04"], parents["P06"])
             elif product == "P13":
                 results = build_events(
                     inputs,
@@ -250,7 +273,8 @@ def execute(
                 audit.result(product, result)
                 state.states.setdefault(product, Counter())[result.envelope.state.value] += 1
                 yield result
-            if product == "P13" or (product == "P03" and "P13" not in products):
+            parent_consumers.discard(product)
+            if not parent_consumers:
                 parents.clear()
             if progress is not None:
                 progress(

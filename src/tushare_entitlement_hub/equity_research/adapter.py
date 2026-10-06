@@ -31,6 +31,7 @@ from .binding_rules import PUBLIC_FIELDS, period_visible
 from .consumption_registry import (
     BOUNDED_EVENT_APIS,
     EVENT_APIS,
+    HISTORY_PERIODS,
     TWO_PERIOD_APIS,
     load_consumption_registry,
 )
@@ -233,10 +234,10 @@ def retain_current(
     *,
     entity_counts: dict[str, int] | None = None,
 ) -> bool:
-    """流式保留当前业务期间及同序变体，宏观保留最近两个期间；返回是否容量溢出。
+    """流式保留各来源需要的业务窗口及同序变体，返回是否容量溢出。
 
-    例：daily旧日后遇新日，旧行释放；share_float事件全部保留，超过容量整组拒绝。
-    财务按报表口径分别保留最新期，未在内存物化完整历史。
+    例：daily 保留最近 61 个观察期；share_float 事件全部保留，超过容量整组拒绝。
+    财务按报表口径保留最近 12 期，供三年年度排名核验，不物化更早历史。
     """
     dimensions = (row.text("report_type") or "", row.text("comp_type") or "")
     if row.source_api == "cb_rating":
@@ -252,7 +253,10 @@ def retain_current(
     candidates.append(row)
     if row.source_api not in EVENT_APIS or row.source_api in BOUNDED_EVENT_APIS:
         periods = sorted({retention_period(item) for item in candidates}, reverse=True)
-        width = 2 if row.source_api in TWO_PERIOD_APIS | BOUNDED_EVENT_APIS else 1
+        width = HISTORY_PERIODS.get(
+            row.source_api,
+            2 if row.source_api in TWO_PERIOD_APIS | BOUNDED_EVENT_APIS else 1,
+        )
         chosen = set(periods[:width])
         candidates[:] = [item for item in candidates if retention_period(item) in chosen]
     if entity_counts is None:

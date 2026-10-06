@@ -15,7 +15,9 @@ from .persistence_runtime import PersistenceError
 from .pipeline import run_research
 from .storage import RESULT_PAYLOAD_CAPACITY_ERROR, validate_research
 
-research_app = typer.Typer(help="离线运行P01/P03/P04/P06/P07/P13股票研究产品。")
+research_app = typer.Typer(
+    help="离线运行六个默认股票产品，并支持P03S/P03M/P03L三个显式独立排名。"
+)
 
 
 @research_app.command("build-config")

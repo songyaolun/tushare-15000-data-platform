@@ -20,7 +20,14 @@ from .consumption_registry import (
     registry_fingerprint,
     validate_consumption_registry,
 )
-from .models import PRODUCT_IDS, RULE_VERSION, ResearchConfig, ResearchResult
+from .models import (
+    ALL_EQUITY_PRODUCT_IDS,
+    CANDIDATE_RANKING_PRODUCT_IDS,
+    PRODUCT_IDS,
+    RULE_VERSION,
+    ResearchConfig,
+    ResearchResult,
+)
 from .partitions import (
     PartitionWriter,
     partition_catalog,
@@ -425,13 +432,16 @@ def _verify_run(
     run_id = metadata["run_id"]
     selection = metadata["selection"]
     required_products = set(selection)
-    if required_products & set(PRODUCT_IDS[4:]):
+    if required_products & {PRODUCT_IDS[4], PRODUCT_IDS[5], CANDIDATE_RANKING_PRODUCT_IDS[0]}:
         required_products.update(PRODUCT_IDS[1:4])
+    if required_products & set(CANDIDATE_RANKING_PRODUCT_IDS[1:]):
+        required_products.update(PRODUCT_IDS[1:3])
     if (
         not selection
         or selection != sorted(set(selection))
-        or not set(selection) <= set(PRODUCT_IDS)
-        or metadata["products"] != [name for name in PRODUCT_IDS if name in required_products]
+        or not set(selection) <= set(ALL_EQUITY_PRODUCT_IDS)
+        or metadata["products"]
+        != [name for name in ALL_EQUITY_PRODUCT_IDS if name in required_products]
     ):
         raise ValueError("research_product_selection_invalid")
     if (

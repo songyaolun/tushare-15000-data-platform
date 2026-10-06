@@ -34,9 +34,15 @@ from tushare_entitlement_hub.equity_research.consumption_registry import (
     load_consumption_registry,
     registry_fingerprint,
     resolve_consumer,
+    source_product,
     validate_consumption_registry,
 )
-from tushare_entitlement_hub.equity_research.models import MARKET_ENTITY, ResearchConfig
+from tushare_entitlement_hub.equity_research.models import (
+    CANDIDATE_RANKING_PRODUCT_IDS,
+    MARKET_ENTITY,
+    PRODUCT_IDS,
+    ResearchConfig,
+)
 from tushare_entitlement_hub.equity_research.pipeline import run_research
 from tushare_entitlement_hub.equity_research.storage import (
     record_rows,
@@ -111,6 +117,8 @@ def test_missing_or_duplicate_registration_is_rejected(monkeypatch):
         "equity-consumption/v9",
         "equity-consumption/v10",
         "equity-consumption/v11",
+        "equity-consumption/v12",
+        "equity-consumption/v13",
     ],
 )
 def test_registry_rule_version_prevents_reusing_original_v1_run_key(previous_version):
@@ -130,7 +138,7 @@ def test_registry_rule_version_prevents_reusing_original_v1_run_key(previous_ver
             sorted(selection),
         ]
     )
-    assert CONSUMPTION_VERSION == "equity-consumption/v13"
+    assert CONSUMPTION_VERSION == "equity-consumption/v14"
     assert run_identity("synthetic", NOW, config, selection) != previous_gate_key
     assert all(name.endswith("/v1") for name in PRODUCT_ALIASES.values())
 
@@ -139,7 +147,7 @@ def test_empty_results_execute_all_99_without_claiming_observations():
     """场景：六产品没有任何数据；预期：99接口确实调用处理器，全部保持unknown。"""
     context = inputs(entities=())
     counts = {}
-    for product in PRODUCT_ALIASES.values():
+    for product in PRODUCT_IDS:
         result = make_result(context, product, MARKET_ENTITY)
         attached = attach_consumption(context, product, (result,))
         assert len(attached) == 1
@@ -154,6 +162,18 @@ def test_empty_results_execute_all_99_without_claiming_observations():
     assert summary["assigned_apis"] == summary["registered_apis"] == summary["executed_apis"] == 99
     assert summary["observed_apis"] == 0
     assert summary["status_counts"]["unknown"] == 99
+
+
+@pytest.mark.parametrize("product", CANDIDATE_RANKING_PRODUCT_IDS)
+def test_candidate_rankings_reuse_p03_source_contract(product):
+    """场景：三个新榜附加消费记录；预期：均复用 P03 的 16 项来源并可独立校验。"""
+    context = inputs(entities=())
+    result = make_result(context, product, MARKET_ENTITY)
+    attached = attach_consumption(context, product, (result,))[0]
+    validate_result_consumption(attached)
+    assert source_product(product) == "P03"
+    assert len(attached.details["consumption"]) == 16
+    assert {item["product"] for item in attached.details["consumption"]} == {"P03"}
 
 
 @pytest.mark.parametrize("api", ["factor_list", "hm_list", "index_basic", "cb_daily"])

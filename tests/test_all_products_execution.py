@@ -187,6 +187,62 @@ def test_cross_sources_are_loaded_once_per_selected_product(tmp_path, monkeypatc
     assert state.processing == {"cross_only": 2, "equity_only": 1, "retained_rows": 4}
 
 
+@pytest.mark.parametrize(
+    ("product", "builder_name", "parent_names"),
+    [
+        ("P03S", "build_short_term_candidates", ("P04", "P06", "P07")),
+        ("P03M", "build_medium_term_candidates", ("P04", "P06")),
+        ("P03L", "build_long_term_candidates", ("P04", "P06")),
+    ],
+)
+def test_optional_candidate_rankings_execute_with_exact_parent_closure(
+    tmp_path, monkeypatch, product, builder_name, parent_names
+):
+    """场景：显式选择一个周期榜；预期：只展开声明的父产品并调用对应构造器。"""
+    config, context, _, _ = prepared_inputs(monkeypatch)
+    calls = []
+
+    def parent_builder(product_name):
+        """生成一个可传递的父结果；例如 P04 返回基础面产品标识。"""
+
+        def build(current):
+            """记录父产品执行并返回确定性结果；例如当前上下文生成单实体结果。"""
+            calls.append(product_name)
+            return (make_result(current, PRODUCTS[product_name], IDENTITY),)
+
+        return build
+
+    for parent_name, function_name in (
+        ("P04", "build_fundamental"),
+        ("P06", "build_governance"),
+        ("P07", "build_flow"),
+    ):
+        monkeypatch.setattr(execution, function_name, parent_builder(parent_name))
+
+    def ranking_builder(current, *parents):
+        """记录新榜及父集合数量；例如 P03M 必须收到两组父结果。"""
+        calls.append((product, len(parents)))
+        return (make_result(current, PRODUCTS[product], IDENTITY),)
+
+    monkeypatch.setattr(execution, builder_name, ranking_builder)
+    products = select_products((product,))
+    results = tuple(
+        execution.execute(
+            tmp_path / "reference",
+            NOW,
+            context.run_id,
+            config,
+            products,
+            (),
+            execution.RunLimits(),
+            execution.ExecutionState(),
+        )
+    )
+    assert [name for name in calls if isinstance(name, str)] == list(parent_names)
+    assert (product, len(parent_names)) in calls
+    assert results[-1].envelope.product_id == PRODUCTS[product]
+
+
 def test_execution_rejects_accumulated_rows_over_persisted_limit(tmp_path, monkeypatch):
     """场景：共享来源保留行超过配置总预算；预期：构造产品前立即拒绝，不能继续消费。"""
     config, context, _, _ = prepared_inputs(monkeypatch)

@@ -9,10 +9,27 @@ from typing import Any
 
 from ..product_foundation.registry import ConsumerSpec, load_registry
 from ..store import digest
-from .models import PRODUCT_IDS, ResearchInputs, ResearchRow
+from .models import CANDIDATE_RANKING_PRODUCT_IDS, PRODUCT_IDS, ResearchInputs, ResearchRow
 
-CONSUMPTION_VERSION = "equity-consumption/v13"
-PRODUCT_ALIASES = dict(zip(("P01", "P04", "P06", "P07", "P03", "P13"), PRODUCT_IDS, strict=True))
+CONSUMPTION_VERSION = "equity-consumption/v14"
+PRODUCT_ALIASES = {
+    **dict(zip(("P01", "P04", "P06", "P07", "P03", "P13"), PRODUCT_IDS, strict=True)),
+    **dict(zip(("P03S", "P03M", "P03L"), CANDIDATE_RANKING_PRODUCT_IDS, strict=True)),
+}
+CANDIDATE_SOURCE_PRODUCTS = {
+    product_id: "P03" for product_id in CANDIDATE_RANKING_PRODUCT_IDS
+}
+
+
+def source_product(product_id: str) -> str:
+    """返回结果产品对应的原始消费归属。
+
+    例如短期榜产品标识返回 ``P03``，普通 P04 产品标识也返回 ``P04``；未知
+    产品标识返回空字符串，供后续契约校验失败关闭。
+    """
+    if product_id in CANDIDATE_SOURCE_PRODUCTS:
+        return CANDIDATE_SOURCE_PRODUCTS[product_id]
+    return next((alias for alias, value in PRODUCT_ALIASES.items() if value == product_id), "")
 CONTEXT_APIS = frozenset(
     {
         "trade_cal",
@@ -180,6 +197,16 @@ EVENT_APIS = frozenset(
     }
 )
 BOUNDED_EVENT_APIS = frozenset({"disclosure_date"})
+HISTORY_PERIODS = {
+    "daily": 61,
+    "income": 12,
+    "income_vip": 12,
+    "balancesheet": 12,
+    "balancesheet_vip": 12,
+    "cashflow": 12,
+    "cashflow_vip": 12,
+    "fina_audit": 12,
+}
 TWO_PERIOD_APIS = frozenset(
     {
         "cn_pmi",
@@ -257,6 +284,8 @@ def load_consumption_registry() -> tuple[ConsumptionRegistration, ...]:
         retention = (
             "bounded_events"
             if item.api in EVENT_APIS
+            else f"latest_{HISTORY_PERIODS[item.api]}_periods"
+            if item.api in HISTORY_PERIODS
             else "two_periods"
             if item.api in TWO_PERIOD_APIS
             else "current_period"

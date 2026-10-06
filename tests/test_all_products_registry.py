@@ -12,12 +12,13 @@ from tushare_entitlement_hub.product_foundation.registry import load_registry
 
 
 def test_registry_has_exact_unique_matrix_entries_and_callable_handlers():
-    """场景：权威消费矩阵；预期：206项唯一、13产品、用途字段逐项一致且处理器可调用。"""
+    """场景：权威消费矩阵；预期：206项归属默认13产品，另有三个显式排名产品。"""
     entries = registry.registrations()
     matrix = {entry.api: entry for entry in load_registry()}
     assert len(entries) == len({entry.spec.api for entry in entries}) == 206
-    assert {entry.spec.product for entry in entries} == set(registry.PRODUCTS)
-    assert len(registry.PRODUCTS) == 13
+    assert {entry.spec.product for entry in entries} == set(registry.DEFAULT_PRODUCTS)
+    assert len(registry.DEFAULT_PRODUCTS) == 13
+    assert len(registry.PRODUCTS) == 16
     assert (
         Counter(
             entry.spec.product for entry in entries if entry.spec.product in registry.NEW_PRODUCTS
@@ -67,6 +68,9 @@ def test_handler_resolver_rejects_missing_callable(monkeypatch):
         (("P03",), ("P04", "P06", "P07", "P03")),
         (("P13",), ("P04", "P06", "P07", "P13")),
         (("P03", "P13"), ("P04", "P06", "P07", "P03", "P13")),
+        (("P03S",), ("P04", "P06", "P07", "P03S")),
+        (("P03M",), ("P04", "P06", "P03M")),
+        (("P03L",), ("P04", "P06", "P03L")),
     ],
 )
 def test_product_selection_expands_dependencies_and_deduplicates(selection, expected):
@@ -79,8 +83,17 @@ def test_all_and_portfolio_selection_cover_thirteen_products():
     assert registry.select_products(("P12",)) == registry.select_products(())
     assert len(registry.select_products(())) == 13
     assert registry.select_products(())[-1] == "P12"
+    assert not {"P03S", "P03M", "P03L"}.intersection(registry.select_products(()))
     with pytest.raises(ValueError, match="unknown_all_products_selection"):
         registry.select_products(("P99",))
+
+
+def test_optional_rankings_reuse_explicit_source_products():
+    """场景：三个可选榜单读取原有来源；预期：短中期复用P03，长期另读取P04三表。"""
+    assert registry.source_products("P03S") == frozenset({"P03"})
+    assert registry.source_products("P03M") == frozenset({"P03"})
+    assert registry.source_products("P03L") == frozenset({"P03", "P04"})
+    assert registry.source_products("P05") == frozenset({"P05"})
 
 
 def test_fingerprint_changes_when_registered_purpose_changes(monkeypatch):

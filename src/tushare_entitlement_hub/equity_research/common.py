@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from math import fsum
 from typing import Any
 
 from ..product_foundation.contracts import (
@@ -170,7 +171,7 @@ def make_result(
         if period is not None:
             periods.setdefault(api, []).append(period)
     source_as_of = {api: max(values) for api, values in periods.items()}
-    score = sum(item.contribution for item in components if item.contribution is not None)
+    score = fsum(item.contribution for item in components if item.contribution is not None)
     envelope = DecisionEnvelope(
         product_id=product_id,
         entity_id=entity_id,

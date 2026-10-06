@@ -21,7 +21,9 @@ from .pipeline import run as run_products
 from .registry import PRODUCTS
 from .storage import validate as validate_products
 
-all_products_app = typer.Typer(help="离线运行全部十三产品和206个真实接口消费者。")
+all_products_app = typer.Typer(
+    help="离线运行默认十三产品，并支持P03S/P03M/P03L三个显式独立排名。"
+)
 
 
 @all_products_app.command("build-config")

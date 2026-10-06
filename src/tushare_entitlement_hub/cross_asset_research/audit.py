@@ -15,7 +15,7 @@ from ..product_foundation.contracts import Truth
 from ..product_foundation.temporal import availability_gate
 from ..reference_contract import load_reference_contracts
 from ..standard import is_standard_numeric_field
-from .registry import NEW_PRODUCTS, PRODUCTS, Registration, registrations
+from .registry import NEW_PRODUCTS, PRODUCTS, Registration, registrations, source_products
 
 SOURCE_SERIES = frozenset(
     item.spec.api
@@ -76,7 +76,12 @@ class ConsumptionAudit(DiskKeyIndex):
         父类缓存固定 8MiB，临时文件只在当前进程内使用，退出时清理。
         """
         super().__init__()
-        self.entries = tuple(item for item in registrations() if item.spec.product in products)
+        selected_source_products = frozenset().union(
+            *(source_products(product) for product in products)
+        )
+        self.entries = tuple(
+            item for item in registrations() if item.spec.product in selected_source_products
+        )
         self.binding_audit = binding_audit
         self.executed: set[str] = set()
         self.reasons: dict[str, Counter[str]] = {}
@@ -124,7 +129,8 @@ class ConsumptionAudit(DiskKeyIndex):
         同时存在带本来源引用的未知比较时，保留 observed 并另计业务缺口；
         同一指标或门禁的重复接口引用、重复原因码各算一次，独立诊断分别计数。
         """
-        self.executed.add(product)
+        assigned_products = source_products(product)
+        self.executed.update(assigned_products)
         if result.envelope.product_id != PRODUCTS[product]:
             raise ValueError("all_products_result_product_mismatch")
         if product not in NEW_PRODUCTS:
@@ -135,7 +141,9 @@ class ConsumptionAudit(DiskKeyIndex):
                 self.consumption_reasons.setdefault(api, Counter()).update(
                     record["reason_codes"]
                 )
-        assigned = {item.spec.api for item in self.entries if item.spec.product == product}
+        assigned = {
+            item.spec.api for item in self.entries if item.spec.product in assigned_products
+        }
         if product in NEW_PRODUCTS:
             gaps = chain(
                 (
