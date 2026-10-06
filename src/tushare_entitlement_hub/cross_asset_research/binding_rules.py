@@ -6,10 +6,11 @@ from ..equity_research.binding_rules import PUBLIC_FIELDS
 from ..product_foundation.bindings import EntityMapping, TimeMapping
 from ..product_foundation.entities import EntityKind
 from ..product_foundation.registry import ConsumerSpec, load_registry
+from ..product_foundation.temporal import AvailabilityFact, availability_gate
 from ..reference_contract import ReferenceContract
 from ..store import digest
 
-BINDING_VERSION = "all-products-bindings/v1"
+BINDING_VERSION = "all-products-bindings/v2"
 ROW_UNIT_VERSION = "cross-row-units/v2"
 SOURCE_SNAPSHOT_APIS = frozenset({"rt_hk_k", "stock_company"})
 ALLOWED_CURRENCIES = frozenset({"CNY", "HKD", "USD", "EUR", "JPY", "GBP", "AUD", "CAD", "CHF"})
@@ -177,6 +178,16 @@ MASTER_NAMESPACES = {
 OBSERVED_MASTERS = frozenset(
     {"dc_index", "tdx_index", "index_classify", "fx_obasic", "sge_basic", "ci_index_member"}
 )
+CURRENT_DIRECTORY_APIS = frozenset(
+    {
+        "fund_basic",
+        "fut_basic",
+        "hk_basic",
+        "opt_basic",
+        "ths_index",
+        "us_basic",
+    }
+)
 DIRECTORY_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {"ci_index_member": ("l3_code", "l3_name")}
 MASTER_KINDS = {
     "fund_basic": EntityKind.ETF_SHARE,
@@ -245,6 +256,20 @@ def entity_mapping(api: str) -> EntityMapping:
     )
 
 
+def current_lifecycle_reason(
+    api: str, availability: AvailabilityFact, cutoff: str
+) -> str | None:
+    """校验当前目录记录在截止时点仍生效，其余时序来源不附加生命周期条件。
+
+    例如截止日之前已退市的 opt_basic 返回 ``no_longer_effective``；普通日线返回
+    ``None``。该门禁只限制当前截面产品，不把当前观察伪装成历史 PIT 认证。
+    """
+    if api not in CURRENT_DIRECTORY_APIS:
+        return None
+    result = availability_gate(availability, cutoff, require_effective=True)
+    return None if result.passed else result.reason_codes[0]
+
+
 def time_registry(contracts: dict[str, ReferenceContract]) -> tuple[TimeMapping, ...]:
     """逐项核对107个显式字段声明，不以报告期或抓取时刻补公告时间。
 
@@ -309,7 +334,8 @@ def rules_fingerprint(contracts: dict[str, ReferenceContract]) -> str:
             sorted(PUBLIC_FIELDS),
             sorted(EVENT_APIS),
             sorted(SECURITY_APIS),
-        sorted(SOURCE_SNAPSHOT_APIS),
+            sorted(SOURCE_SNAPSHOT_APIS),
+            sorted(CURRENT_DIRECTORY_APIS),
             sorted(OBSERVED_MASTERS),
             MASTER_NAMESPACES,
             DIRECTORY_IDENTITY_FIELDS,

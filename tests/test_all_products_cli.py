@@ -164,8 +164,22 @@ def test_build_config_explicit_audit_path_and_capacity_failure_preserve_output(t
         AS_OF,
     ]
     runner = CliRunner()
-    built = runner.invoke(app, args + ["--maximum-entities", "500000"])
+    built = runner.invoke(
+        app,
+        args
+        + [
+            "--maximum-source-rows",
+            "1000",
+            "--maximum-total-rows",
+            "100000",
+            "--maximum-entities",
+            "500000",
+        ],
+    )
     assert built.exit_code == 0 and json.loads(audit.read_text()) == json.loads(built.stdout)
+    generated = ResearchConfig.from_json(output.read_text())
+    assert generated.maximum_source_rows == 1000
+    assert generated.maximum_total_rows == 100000
     original = output.read_bytes()
     failed = runner.invoke(app, args + ["--maximum-total-rows", "1"])
     assert failed.exit_code == 1 and output.read_bytes() == original

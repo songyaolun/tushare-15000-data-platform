@@ -208,6 +208,29 @@ def test_extra_catalog_items_are_not_scanned_or_parsed(tmp_path):
     assert "research_bindings_missing" in inputs.source_reasons["fx_daily"]
 
 
+def test_product_source_subset_scans_only_requested_interfaces(tmp_path):
+    """场景：执行阶段只选择一个产品来源子集；预期：不读取或报告其他产品接口。"""
+    reference = write_all_reference(
+        tmp_path,
+        {
+            "fx_daily": [{"ts_code": "USD/CNY", "trade_date": "20261002"}],
+            "fund_basic": [{"ts_code": "FUND", "list_date": "20200101"}],
+        },
+    )
+    config = build_config(reference, AS_OF).config
+    inputs, counts = load_inputs(
+        reference,
+        AS_OF,
+        "run",
+        config,
+        source_apis=frozenset({"fx_daily"}),
+    )
+    assert set(inputs.rows_by_api) == set(inputs.source_reasons) == {"fx_daily"}
+    assert counts["scanned_rows"] == 1
+    with pytest.raises(ValueError, match="input_source_selection_invalid"):
+        load_inputs(reference, AS_OF, "run", config, source_apis=frozenset({"unknown"}))
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -539,6 +562,42 @@ def test_combined_entity_capacity_includes_legacy_index_entities(tmp_path):
     )
     with pytest.raises(ValueError, match="binding_entity_capacity_exceeded"):
         build_config(reference, AS_OF, limits=BuildLimits(maximum_entities=3))
+
+
+def test_current_master_catalog_excludes_future_and_expired_lifecycles(tmp_path):
+    """场景：期权目录同时含当前、未来和已到期合约；预期：配置及运行只保留截止时点有效合约。"""
+    reference = write_all_reference(
+        tmp_path,
+        {
+            "opt_basic": [
+                {
+                    "ts_code": "CURRENT",
+                    "list_date": "20260101",
+                    "delist_date": "20261231",
+                },
+                {
+                    "ts_code": "EXPIRED",
+                    "list_date": "20200101",
+                    "delist_date": "20260101",
+                },
+                {
+                    "ts_code": "FUTURE",
+                    "list_date": "20270101",
+                    "delist_date": "20271231",
+                },
+            ]
+        },
+    )
+    result = build_config(reference, AS_OF)
+    aliases = [
+        alias.alias for alias in result.config.foundation.aliases if alias.source == "opt_basic"
+    ]
+    assert aliases == ["CURRENT"]
+    reasons = result.audit["sources"]["opt_basic"]["reason_counts"]
+    assert reasons["no_longer_effective"] == reasons["not_yet_effective"] == 1
+    inputs, counts = load_inputs(reference, AS_OF, "run", result.config)
+    assert [row.text("ts_code") for row in inputs.rows("opt_basic")] == ["CURRENT"]
+    assert counts["excluded_rows"] >= 2
 
 
 def test_equity_projection_filters_foreign_peers_and_relation_endpoints():

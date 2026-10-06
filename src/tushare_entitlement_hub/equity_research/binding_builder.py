@@ -169,6 +169,8 @@ def safe_row_reason(error: Exception) -> str:
         "binding_future_observation",
         "future_business_date",
         "invalid_effective_interval",
+        "not_yet_effective",
+        "no_longer_effective",
         "public_time_unverified",
         "source_pit_state_unverified",
         "invalid_timestamp_or_timezone",

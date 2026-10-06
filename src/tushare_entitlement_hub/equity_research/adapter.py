@@ -29,6 +29,7 @@ from ..reference_contract import ReferenceContract, load_reference_contracts
 from ..store import digest
 from .binding_rules import PUBLIC_FIELDS, period_visible
 from .consumption_registry import (
+    BOUNDED_EVENT_APIS,
     EVENT_APIS,
     TWO_PERIOD_APIS,
     load_consumption_registry,
@@ -216,6 +217,8 @@ def adapter_reason(error: Exception) -> str:
         "invalid_timestamp_or_timezone",
         "invalid_period",
         "invalid_effective_interval",
+        "not_yet_effective",
+        "no_longer_effective",
         "source_local_key_missing",
         "source_local_key_invalid",
         "business_variant_unresolved",
@@ -247,9 +250,9 @@ def retain_current(
     candidates = groups.setdefault(key, [])
     previous_count = len(candidates)
     candidates.append(row)
-    if row.source_api not in EVENT_APIS:
+    if row.source_api not in EVENT_APIS or row.source_api in BOUNDED_EVENT_APIS:
         periods = sorted({retention_period(item) for item in candidates}, reverse=True)
-        width = 2 if row.source_api in TWO_PERIOD_APIS else 1
+        width = 2 if row.source_api in TWO_PERIOD_APIS | BOUNDED_EVENT_APIS else 1
         chosen = set(periods[:width])
         candidates[:] = [item for item in candidates if retention_period(item) in chosen]
     if entity_counts is None:
@@ -405,12 +408,17 @@ def load_inputs(
     config: ResearchConfig,
     *,
     progress: ProgressCallback | None = None,
+    source_apis: frozenset[str] | None = None,
 ) -> tuple[ResearchInputs, dict[str, int]]:
     """只读按512行扫描已绑定来源，返回有限研究观察集与扫描账本。
 
-    例：无实体/时间绑定时scanned_rows=0；缺表输出原因而非虚构空市场。
+    例：source_apis={'daily'}时只扫描日线；缺实体/时间绑定时scanned_rows=0。
+    缺表输出原因而非虚构空市场；未知来源选择在打开数据库前失败关闭。
     任一来源超过全局容量则整个来源降级，决不使用被截断的精确总量。
     """
+    selected_apis = SOURCE_APIS if source_apis is None else source_apis
+    if not isinstance(selected_apis, frozenset) or not selected_apis <= SOURCE_APIS:
+        raise ValueError("input_source_selection_invalid")
     effective_config = visible_config(config, cutoff)
     contracts = load_reference_contracts(load_policies())
     registry = {entry.api: entry for entry in load_registry()}
@@ -428,8 +436,8 @@ def load_inputs(
         )
         if ("main", "catalog") not in tables:
             raise ValueError("reference_catalog_missing")
-        manifests = source_manifests(connection, SOURCE_APIS)
-        for api in sorted(SOURCE_APIS):
+        manifests = source_manifests(connection, selected_apis)
+        for api in sorted(selected_apis):
             entry = registry.get(api)
             if entry is None:
                 source_reasons[api] = ("source_not_registered",)

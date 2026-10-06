@@ -21,7 +21,7 @@ def test_unrelated_fund_holdings_never_expand_selected_parent_scope(tmp_path, mo
         raw=original.raw | {"symbol": "000002.SZ"},
         availability=replace(original.availability, report_period="2026-06-30"),
     )
-    config, context, _ = prepared_inputs(monkeypatch, (disclosure,))
+    config, context, _, _ = prepared_inputs(monkeypatch, (disclosure,))
     resolutions = []
     captured = []
 

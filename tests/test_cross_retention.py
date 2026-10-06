@@ -168,6 +168,13 @@ def test_large_complete_period_rejects_whole_group_at_capacity(tmp_path, monkeyp
         ) in result.source_reasons["fx_daily"]
 
 
+def test_default_byte_budgets_cover_one_partitioned_high_cardinality_product():
+    """场景：产品逐组加载高基数来源；预期：单源128MiB、单产品256MiB且仍低于输出预算。"""
+    assert adapter.MAX_SOURCE_BYTES == 128 * 1024 * 1024
+    assert adapter.MAX_RETAINED_BYTES == 256 * 1024 * 1024
+    assert adapter.MAX_SOURCE_BYTES < adapter.MAX_RETAINED_BYTES
+
+
 def test_bulk_history_eviction_releases_byte_budget_before_capacity_check(tmp_path, monkeypatch):
     """三个大日期桶依次到达；预期第三期替换第一期后按两期字节判断，不累计历史量。"""
     records = [

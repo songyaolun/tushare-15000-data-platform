@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import csv
 import re
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import duckdb
 
-from .key_index import DiskKeyIndex, DiskKeyMatcher
+from .key_index import DiskKeyIndex
 from .projection import RESEARCH_TABLES
 
 MAXIMUM_PARTITION_BYTES = 16 * 1024 * 1024
@@ -293,9 +295,11 @@ def validate_partition_layout(
 def verify_partition_keys(
     connection: duckdb.DuckDBPyConnection, table: str, run_id: str | None
 ) -> None:
-    """先全局精确去重，再核对物理行与窄键一一对应；例：跨run重复、键缺行或元数据变化均拒绝。
+    """先全局精确去重，再由DuckDB核对物理行与窄键一一对应。
 
-    仅三列元数据流式COPY到私有CSV，再以磁盘B-tree逐段精确核销；run_id=None覆盖全部历史行。
+    输入 ``table='result', run_id='run'`` 时只比较该批次的三列键；``run_id=None``
+    覆盖全部历史行。计数相等且窄键全局唯一时，任一窄键缺少完全相同的物理三元组，
+    都能同时检出物理缺行、多行、重复行或元数据变化，而不再逐行搬入SQLite删除。
     """
     duplicate = connection.execute(
         f'SELECT record_id FROM research."_keys_{table}" '
@@ -310,20 +314,30 @@ def verify_partition_keys(
     ).fetchone()
     if row is None or row[0]:
         raise ValueError("research_partition_keys_invalid")
-    with DiskKeyMatcher() as matcher:
-        path = Path(matcher.temporary.name) / "metadata.csv"
-        connection.execute(
-            f'COPY (SELECT record_id,run_id,result_id FROM research."_keys_{table}" '
-            "WHERE ($run IS NULL OR run_id=$run)) TO $destination "
-            "(FORMAT CSV, HEADER FALSE, FORCE_QUOTE *)",
-            {"run": run_id, "destination": str(path)},
-        )
-        matcher.load_csv(path)
-        for physical in partition_catalog(connection)[table]:
-            cursor = connection.execute(
-                f'SELECT record_id,run_id,result_id FROM research."{physical}" '
-                "WHERE (? IS NULL OR run_id=?)", [run_id, run_id],
+    with TemporaryDirectory(prefix="research-key-buckets-") as temporary:
+        roots = []
+        for label, source in (("expected", "_keys_" + table), ("stored", table)):
+            root = Path(temporary) / label
+            connection.execute(
+                f'COPY (SELECT record_id,run_id,result_id,hash(record_id)%256 AS bucket '
+                f'FROM research."{source}" WHERE ($run IS NULL OR run_id=$run)) '
+                "TO $destination (FORMAT CSV, HEADER FALSE, PARTITION_BY (bucket), "
+                "OVERWRITE_OR_IGNORE TRUE)",
+                {"run": run_id, "destination": str(root)},
             )
-            while batch := cursor.fetchmany(1024):
-                matcher.match(batch)
-        matcher.finish()
+            roots.append(root)
+        buckets = {item.name for root in roots for item in root.iterdir() if item.is_dir()}
+        for bucket in buckets:
+            sides = []
+            for root in roots:
+                records: list[tuple[str, ...]] = []
+                directory = root / bucket
+                if directory.is_dir():
+                    for path in directory.glob("*.csv"):
+                        with path.open(encoding="utf-8", newline="") as stream:
+                            records.extend(
+                                tuple(record) for record in csv.reader(stream, strict=True)
+                            )
+                sides.append(sorted(records))
+            if sides[0] != sides[1]:
+                raise ValueError("research_partition_keys_invalid")

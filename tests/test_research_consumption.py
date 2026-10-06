@@ -130,7 +130,7 @@ def test_registry_rule_version_prevents_reusing_original_v1_run_key(previous_ver
             sorted(selection),
         ]
     )
-    assert CONSUMPTION_VERSION == "equity-consumption/v12"
+    assert CONSUMPTION_VERSION == "equity-consumption/v13"
     assert run_identity("synthetic", NOW, config, selection) != previous_gate_key
     assert all(name.endswith("/v1") for name in PRODUCT_ALIASES.values())
 

@@ -42,6 +42,7 @@ from .binding_rules import (
     ROW_UNIT_VERSION,
     STOCK_APIS,
     cross_registry,
+    current_lifecycle_reason,
     entity_mapping,
     rules_fingerprint,
     time_registry,
@@ -137,6 +138,8 @@ def scan_source(
         scanned += 1
         try:
             fact = binding_availability(row, contract, mapping, cutoff, event_apis=EVENT_APIS)
+            if lifecycle_reason := current_lifecycle_reason(mapping.source_api, fact, cutoff):
+                raise ValueError(lifecycle_reason)
             eligible += 1
             units.add(row, fact, contract, names, entities)
             if row.get("currency") is not None or row.get("curr_type") is not None:
@@ -189,7 +192,7 @@ def build_config(
 ) -> BuildResult:
     """从只读reference生成206接口配置与逐源审计，旧99仍经过原构建器全部门禁。
 
-    输入含206个唯一清单的合成库，输出配置和all-products-bindings/v1报告；
+    输入含206个唯一清单的合成库，输出配置和all-products-bindings/v2报告；
     当前来源清单缺失、重复、契约不一致或容量溢出均拒绝，目录额外项不参与判断。
     """
     check_paths(reference)
@@ -271,7 +274,13 @@ def build_config(
             mapping = stock_mapping if api == "stock_basic" else mappings[api]
             for row in projected_rows(connection, api, fields, limits):
                 try:
-                    entities.add(row, binding_availability(row, contracts[api], mapping, cutoff))
+                    availability = binding_availability(
+                        row, contracts[api], mapping, cutoff
+                    )
+                    if current_lifecycle_reason(api, availability, cutoff) is not None:
+                        # scan_source 会按同一行记录一次精确原因；身份预扫描只负责跳过。
+                        continue
+                    entities.add(row, availability)
                 except (ValueError, TypeError, KeyError, OverflowError) as error:
                     if str(error) == "binding_entity_capacity_exceeded":
                         raise
@@ -326,6 +335,8 @@ def build_config(
             ),
             expected_data_as_of=dates,
         ),
+        maximum_source_rows=limits.maximum_source_rows,
+        maximum_total_rows=limits.maximum_total_rows,
         binding_audit_json="{}",
     )
     configuration_fingerprint = configuration_hash(config)

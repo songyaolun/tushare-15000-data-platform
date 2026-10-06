@@ -118,6 +118,13 @@ def test_partition_key_registry_matches_each_physical_row(segmented, change):
         partitions.verify_partition_keys(connection, "result", "run")
 
 
+def test_partition_key_verification_avoids_row_by_row_sqlite_matching(segmented):
+    """分区键校验应由DuckDB分桶导出，不能逐行搬到SQLite；完整匹配时正常返回。"""
+    connection, _ = segmented
+    assert not hasattr(partitions, "DiskKeyMatcher")
+    partitions.verify_partition_keys(connection, "result", "run")
+
+
 def test_partition_limits_and_missing_counts_fail_closed(segmented, monkeypatch):
     """未知表、非法序号、过大批及无法取得计数均有固定失败，不执行伪造SQL或忽略尾部。"""
     connection, _ = segmented
@@ -215,24 +222,15 @@ def test_balanced_view_builder_retains_odd_tail_and_empty_contract():
 
 
 def test_key_physical_read_missing_rows_is_rejected(segmented):
-    """键数量相等但驱动漏读全部物理元数据时仍失败，不能把空读取当作完整对账。"""
-    connection, _ = segmented
-
-    class MissingRows:
-        """仅丢弃物理元数据读取，其余查询和流式COPY仍使用真实库。"""
-
-        def execute(self, query, parameters=None):
-            """物理段模拟空游标；例：前置数量核对通过后仍必须完整核销登记。"""
-            if query.startswith('SELECT record_id,run_id,result_id FROM research."_part_'):
-                return self
-            return connection.execute(query, parameters)
-
-        def fetchmany(self, size):
-            """返回缺失物理行；例：磁盘登记无法全部核销，预期固定partition_keys_invalid。"""
-            return []
-
+    """物理行与窄键数量相等但三列集合不同时仍失败，不能只比较计数。"""
+    connection, expected = segmented
+    first = partitions.partition_catalog(connection)["result"][0]
+    connection.execute(
+        f'UPDATE research."{first}" SET result_id=? WHERE record_id=?',
+        ["wrong-result", expected[0][0]],
+    )
     with pytest.raises(ValueError, match="research_partition_keys_invalid"):
-        partitions.verify_partition_keys(MissingRows(), "result", "run")
+        partitions.verify_partition_keys(connection, "result", "run")
 
 
 def test_missing_view_definition_fails_closed(segmented):

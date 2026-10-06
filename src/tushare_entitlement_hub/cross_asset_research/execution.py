@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from ..equity_research.adapter import SOURCE_APIS as EQUITY_SOURCE_APIS
 from ..equity_research.adapter import load_inputs as load_equity_inputs
 from ..equity_research.candidates import build_candidates
 from ..equity_research.common import gate, make_result
@@ -17,11 +18,22 @@ from ..equity_research.flow import build_flow
 from ..equity_research.fundamental import build_fundamental
 from ..equity_research.governance import build_governance
 from ..equity_research.market import build_market
-from ..equity_research.models import MARKET_ENTITY, ResearchConfig, ResearchResult
+from ..equity_research.models import MARKET_ENTITY, ResearchConfig, ResearchInputs, ResearchResult
 from ..product_foundation.contracts import Truth
 from ..product_foundation.progress import ProgressCallback
 from .audit import ConsumptionAudit
-from .registry import HANDLERS, NEW_PRODUCTS, PRODUCTS, resolve_handler
+from .registry import HANDLERS, NEW_PRODUCTS, PRODUCTS, registrations, resolve_handler
+
+EQUITY_SUPPORT_APIS = {
+    "P01": frozenset({"daily", "stk_limit", "suspend_d"}),
+    "P02": frozenset({"daily"}),
+    "P03": frozenset({"daily", "daily_basic"}),
+    "P04": frozenset({"daily_basic"}),
+    "P06": frozenset({"daily_basic"}),
+    "P07": frozenset({"daily", "daily_basic", "stk_limit", "suspend_d"}),
+    "P08": frozenset({"index_daily"}),
+    "P13": frozenset({"daily"}),
+}
 
 
 @dataclass(frozen=True)
@@ -78,33 +90,105 @@ def execute(
     from .bindings import equity_config
     from .portfolio import holding_entity
 
-    equity, equity_counts = load_equity_inputs(reference, cutoff, run_id, equity_config(config))
-    cross, cross_counts = load_inputs(
-        reference,
-        cutoff,
-        run_id,
-        config,
-        progress=progress,
-        remaining_rows=max(0, config.maximum_total_rows - equity_counts["retained_rows"]),
-    )
-    state.processing = {
-        name: equity_counts.get(name, 0) + cross_counts.get(name, 0)
-        for name in sorted(equity_counts.keys() | cross_counts.keys())
+    legacy_config = equity_config(config)
+    all_registrations = registrations()
+    product_source_apis = {
+        product: frozenset(
+            item.spec.api for item in all_registrations if item.spec.product == product
+        )
+        for product in PRODUCTS
     }
-    cross = replace(
-        cross,
-        rows_by_api=equity.rows_by_api | cross.rows_by_api,
-        source_reasons=equity.source_reasons | cross.source_reasons,
-        entity_source_reasons=equity.entity_source_reasons | cross.entity_source_reasons,
+    shared_source_apis = frozenset().union(
+        *(EQUITY_SUPPORT_APIS.get(product, frozenset()) for product in products)
     )
+    shared_inputs = None
+    state.processing = {}
+
+    def record_processing(counts: dict[str, int]) -> None:
+        """把互不重叠的来源批次累计进运行账本；例：两批各保留2行得到4行。"""
+        for name, value in counts.items():
+            state.processing[name] = state.processing.get(name, 0) + value
+        if state.processing.get("retained_rows", 0) > config.maximum_total_rows:
+            raise ValueError("source_capacity_exceeded")
+
+    if shared_source_apis:
+        shared_inputs, shared_counts = load_equity_inputs(
+            reference,
+            cutoff,
+            run_id,
+            legacy_config,
+            progress=progress,
+            source_apis=shared_source_apis,
+        )
+        record_processing(shared_counts)
+    product_inputs: dict[str, tuple[ResearchInputs, tuple[ResearchInputs, ...]]] = {}
+
+    def load_product_inputs(product: str) -> ResearchInputs:
+        """按产品一次加载其独占来源并累计全局扫描预算，再合入共享旁证。
+
+        例如先加载 P02 后加载 P05，第二次剩余行数扣除 P02 已保留行；同一产品
+        重用缓存，不重复扫描参考库。返回上下文仅包含该产品来源和显式共享来源。
+        """
+        existing = product_inputs.get(product)
+        if existing is not None:
+            return existing[0]
+        contexts = [shared_inputs] if shared_inputs is not None else []
+        audit_contexts = []
+        equity_apis = (product_source_apis[product] & EQUITY_SOURCE_APIS) - shared_source_apis
+        if equity_apis:
+            selected_equity, equity_counts = load_equity_inputs(
+                reference,
+                cutoff,
+                run_id,
+                legacy_config,
+                progress=progress,
+                source_apis=frozenset(equity_apis),
+            )
+            record_processing(equity_counts)
+            contexts.append(selected_equity)
+            audit_contexts.append(selected_equity)
+        cross_apis = product_source_apis[product] - EQUITY_SOURCE_APIS
+        if cross_apis:
+            selected_cross, cross_counts = load_inputs(
+                reference,
+                cutoff,
+                run_id,
+                config,
+                progress=progress,
+                remaining_rows=max(
+                    0, config.maximum_total_rows - state.processing.get("retained_rows", 0)
+                ),
+                source_apis=frozenset(cross_apis),
+            )
+            record_processing(cross_counts)
+            contexts.append(selected_cross)
+            audit_contexts.append(selected_cross)
+        base = contexts[-1]
+        rows_by_api = {}
+        source_reasons = {}
+        entity_source_reasons = {}
+        for context in contexts:
+            rows_by_api.update(context.rows_by_api)
+            source_reasons.update(context.source_reasons)
+            entity_source_reasons.update(context.entity_source_reasons)
+        combined = replace(
+            base,
+            config=config if product in NEW_PRODUCTS else legacy_config,
+            rows_by_api=rows_by_api,
+            source_reasons=source_reasons,
+            entity_source_reasons=entity_source_reasons,
+        )
+        product_inputs[product] = combined, tuple(audit_contexts)
+        return combined
+
     parents: dict[str, tuple[ResearchResult, ...]] = {}
     portfolio_parents: list[ResearchResult] = []
     portfolio_entities = {str(item.get("entity_id", "")) for item in holdings}
     if "P12" in products and not holdings:
-        for row in cross.rows("fund_portfolio"):
+        for row in load_product_inputs("P12").rows("fund_portfolio"):
             symbol, period = row.text("symbol"), row.availability.report_period
             if symbol is not None and period is not None:
-                resolved = holding_entity(cross, symbol, period)
+                resolved = holding_entity(product_inputs["P12"][0], symbol, period)
                 if resolved is not None:
                     portfolio_entities.add(resolved)
     builders = {
@@ -114,24 +198,32 @@ def execute(
         "P07": build_flow,
     }
     with ConsumptionAudit(products, config.binding_audit) as audit:
-        audit.inputs(cross)
+        if shared_inputs is not None:
+            audit.inputs(shared_inputs)
+        for _, audit_contexts in product_inputs.values():
+            for current in audit_contexts:
+                audit.inputs(current)
         for product in products:
-            inputs = cross if product in NEW_PRODUCTS else equity
+            already_loaded = product in product_inputs
+            inputs = load_product_inputs(product)
+            if not already_loaded:
+                for current in product_inputs[product][1]:
+                    audit.inputs(current)
             if product in builders:
-                results = builders[product](equity)
+                results = builders[product](inputs)
             elif product == "P03":
-                results = build_candidates(equity, parents["P04"], parents["P06"], parents["P07"])
+                results = build_candidates(inputs, parents["P04"], parents["P06"], parents["P07"])
             elif product == "P13":
                 results = build_events(
-                    equity,
+                    inputs,
                     tuple(result for name in ("P04", "P06", "P07") for result in parents[name]),
                 )
             elif product == "P12":
                 results = resolve_handler(HANDLERS[product])(
-                    cross, parents=tuple(portfolio_parents), holdings=holdings
+                    inputs, parents=tuple(portfolio_parents), holdings=holdings
                 )
             else:
-                results = resolve_handler(HANDLERS[product])(cross)
+                results = resolve_handler(HANDLERS[product])(inputs)
             if not results:
                 results = (
                     make_result(
@@ -169,4 +261,5 @@ def execute(
                         "total_results": state.result_count,
                     }
                 )
+            product_inputs.pop(product, None)
         state.consumption = audit.summary()

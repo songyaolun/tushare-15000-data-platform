@@ -6,7 +6,11 @@ import pytest
 from test_research_shared import IDENTITY, NOW, inputs, source
 
 from tushare_entitlement_hub.cross_asset_research import adapter, execution
-from tushare_entitlement_hub.cross_asset_research.registry import PRODUCTS, select_products
+from tushare_entitlement_hub.cross_asset_research.registry import (
+    PRODUCTS,
+    registrations,
+    select_products,
+)
 from tushare_entitlement_hub.equity_research.common import make_result
 from tushare_entitlement_hub.equity_research.models import ResearchConfig
 
@@ -18,28 +22,29 @@ def prepared_inputs(monkeypatch, row_values=()):
     """
     config = ResearchConfig()
     context = inputs(row_values, config)
-    received = []
+    cross_calls, equity_calls = [], []
 
     def equity_loader(*args, **kwargs):
         """返回确定性股票输入计数；例：retained_rows=2参与全局剩余预算扣减。"""
+        equity_calls.append(kwargs)
         return context, {"retained_rows": 2, "equity_only": 1}
 
     def cross_loader(*args, **kwargs):
         """返回确定性跨资产输入并记录剩余预算；例：row_values不被复制或截断。"""
-        received.append(kwargs)
+        cross_calls.append(kwargs)
         return context, {"retained_rows": 1, "cross_only": 1}
 
     monkeypatch.setattr(execution, "load_equity_inputs", equity_loader)
     monkeypatch.setattr(adapter, "load_inputs", cross_loader)
-    return config, context, received
+    return config, context, cross_calls, equity_calls
 
 
 @pytest.mark.parametrize("selection", [("P03",), ("P13",), ("P03", "P13")])
 def test_dependency_builders_receive_real_parent_results_in_stable_order(
     tmp_path, monkeypatch, selection
 ):
-    """场景：候选、事件及联合选择；预期：三组父结果顺序稳定，进度和总计与实际一致。"""
-    config, context, received = prepared_inputs(monkeypatch)
+    """场景：只选旧产品及其依赖；预期：父结果顺序稳定且不扫描无关跨资产来源。"""
+    config, context, cross_calls, equity_calls = prepared_inputs(monkeypatch)
     seen = []
 
     def parent_builder(product):
@@ -92,15 +97,32 @@ def test_dependency_builders_receive_real_parent_results_in_stable_order(
     )
     assert seen == ["P04", "P06", "P07"]
     assert len(results) == state.result_count == len(products)
-    assert state.processing == {"cross_only": 1, "equity_only": 1, "retained_rows": 3}
-    assert received[0]["remaining_rows"] == config.maximum_total_rows - 2
+    equity_load_count = len(products) + 1
+    assert state.processing == {
+        "equity_only": equity_load_count,
+        "retained_rows": 2 * equity_load_count,
+    }
+    shared = frozenset().union(
+        *(execution.EQUITY_SUPPORT_APIS.get(product, frozenset()) for product in products)
+    )
+    expected_equity_calls = [shared] + [
+        (
+            frozenset(
+                item.spec.api for item in registrations() if item.spec.product == product
+            )
+            - shared
+        )
+        for product in products
+    ]
+    assert [call["source_apis"] for call in equity_calls] == expected_equity_calls
+    assert cross_calls == []
     assert [event["product"] for event in progress] == list(products)
     assert all(event["stage"] == "product_complete" for event in progress)
 
 
 def test_empty_builder_still_returns_explicit_degraded_result(tmp_path, monkeypatch):
     """场景：新产品构造器确实执行但返回空；预期：一条empty_input结果且执行账本有记录。"""
-    config, context, _ = prepared_inputs(monkeypatch)
+    config, context, _, _ = prepared_inputs(monkeypatch)
     monkeypatch.setattr(execution, "resolve_handler", lambda name: lambda current: ())
     state = execution.ExecutionState()
     results = tuple(
@@ -119,6 +141,69 @@ def test_empty_builder_still_returns_explicit_degraded_result(tmp_path, monkeypa
     assert results[0].details["reason"] == "empty_input"
     assert "empty_input" in results[0].envelope.gate_codes
     assert state.consumption["executed"] == 7 and state.consumption["observed"] == 0
+
+
+def test_cross_sources_are_loaded_once_per_selected_product(tmp_path, monkeypatch):
+    """场景：同时运行两个新产品；预期：各自只扫描所属接口且沿用同一全局行数预算。"""
+    config, context, received, _ = prepared_inputs(monkeypatch)
+
+    def resolve(name):
+        """按注册处理器反查产品并构造结果；例：themes处理器返回P02产品标识。"""
+        product = next(
+            product for product, handler in execution.HANDLERS.items() if handler == name
+        )
+
+        def builder(current):
+            """返回当前处理器的一条确定性结果；例：P05处理器得到预期产品标识。"""
+            return (make_result(current, PRODUCTS[product], IDENTITY),)
+
+        return builder
+
+    monkeypatch.setattr(execution, "resolve_handler", resolve)
+    state = execution.ExecutionState()
+    tuple(
+        execution.execute(
+            tmp_path / "reference",
+            NOW,
+            context.run_id,
+            config,
+            ("P02", "P05"),
+            (),
+            execution.RunLimits(),
+            state,
+        )
+    )
+    expected = {
+        product: frozenset(
+            item.spec.api for item in registrations() if item.spec.product == product
+        )
+        for product in ("P02", "P05")
+    }
+    assert [call["source_apis"] for call in received] == [expected["P02"], expected["P05"]]
+    assert [call["remaining_rows"] for call in received] == [
+        config.maximum_total_rows - 2,
+        config.maximum_total_rows - 3,
+    ]
+    assert state.processing == {"cross_only": 2, "equity_only": 1, "retained_rows": 4}
+
+
+def test_execution_rejects_accumulated_rows_over_persisted_limit(tmp_path, monkeypatch):
+    """场景：共享来源保留行超过配置总预算；预期：构造产品前立即拒绝，不能继续消费。"""
+    config, context, _, _ = prepared_inputs(monkeypatch)
+    constrained = replace(config, maximum_total_rows=1)
+    with pytest.raises(ValueError, match="source_capacity_exceeded"):
+        tuple(
+            execution.execute(
+                tmp_path / "reference",
+                NOW,
+                context.run_id,
+                constrained,
+                ("P01",),
+                (),
+                execution.RunLimits(),
+                execution.ExecutionState(),
+            )
+        )
 
 
 @pytest.mark.parametrize(
@@ -146,7 +231,9 @@ def test_portfolio_receives_only_relevant_parent_results(tmp_path, monkeypatch, 
         return None if mode == "unresolved" else IDENTITY
 
     monkeypatch.setattr(portfolio_module, "holding_entity", resolve_report_holding)
-    config, context, _ = prepared_inputs(monkeypatch, (row,) if mode != "holdings" else ())
+    config, context, _, _ = prepared_inputs(
+        monkeypatch, (row,) if mode != "holdings" else ()
+    )
     captured = []
 
     def theme(current):
@@ -192,7 +279,7 @@ def test_portfolio_receives_only_relevant_parent_results(tmp_path, monkeypatch, 
 
 def test_parent_budget_rejects_overflow_before_portfolio_invocation(tmp_path, monkeypatch):
     """场景：同持仓实体有两条父结果而容量1；预期：直接拒绝，不把部分父集合交给组合。"""
-    config, context, _ = prepared_inputs(monkeypatch)
+    config, context, _, _ = prepared_inputs(monkeypatch)
 
     def builder(current):
         """返回同实体两条不同profile研究；例：父集合超1时必须整体拒绝。"""

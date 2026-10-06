@@ -392,7 +392,7 @@ def test_quote_quality_units_currency_and_finite_conversion(patch, certificate_p
 
 
 def test_current_retention_releases_old_days_and_keeps_financial_profiles():
-    """场景：日线、宏观与不同报表口径混合历史；预期：当前日、最近两期和口径分别保留。"""
+    """场景：日线、宏观、披露日程与报表口径历史；预期：按各自当前窗口保留。"""
     groups = defaultdict(list)
     config = configured("daily")
     assert not retain_current(groups, row("daily", "old", day="2026-10-01"), config)
@@ -402,6 +402,13 @@ def test_current_retention_releases_old_days_and_keeps_financial_profiles():
     for period in ("2026-07", "2026-09", "2026-08"):
         retain_current(macro, row("cn_cpi", period, day=period), config)
     assert {item.availability.data_as_of for item in macro[(A, "", "")]} == {"2026-08", "2026-09"}
+    disclosures = defaultdict(list)
+    for period in ("2026-03-31", "2026-09-30", "2026-06-30"):
+        retain_current(disclosures, row("disclosure_date", period, day=period), config)
+    assert {item.availability.data_as_of for item in disclosures[(A, "", "")]} == {
+        "2026-06-30",
+        "2026-09-30",
+    }
     finance = defaultdict(list)
     for report_type in ("1", "2"):
         retain_current(
@@ -468,6 +475,19 @@ def test_total_capacity_does_not_publish_truncated_later_source(tmp_path):
     assert counts["retained_rows"] == 1 and len(result.rows("daily")) == 1
     assert result.rows("share_float") == ()
     assert "source_capacity_exceeded" in result.source_reasons["share_float"]
+
+
+def test_equity_source_subset_scans_only_requested_interfaces(tmp_path):
+    """场景：调用方只请求日线来源；预期：其他已配置接口不扫描也不进入来源结果。"""
+    path = reference_database(
+        tmp_path, {"daily": [source()], "share_float": [source("share_float")]}
+    )
+    config = configured("daily", "share_float")
+    result, counts = load_inputs(path, NOW, "run", config, source_apis=frozenset({"daily"}))
+    assert set(result.rows_by_api) == set(result.source_reasons) == {"daily"}
+    assert counts["scanned_rows"] == counts["retained_rows"] == 1
+    with pytest.raises(ValueError, match="input_source_selection_invalid"):
+        load_inputs(path, NOW, "run", config, source_apis=frozenset({"unknown"}))
 
 
 def test_entity_capacity_spans_financial_report_profiles(tmp_path):

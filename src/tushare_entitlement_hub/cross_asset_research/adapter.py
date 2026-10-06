@@ -39,6 +39,7 @@ from .binding_rules import (
     SECURITY_APIS,
     SOURCE_SNAPSHOT_APIS,
     cross_registry,
+    current_lifecycle_reason,
     entity_mapping,
 )
 from .bindings import projection_fields, verify_binding_audit
@@ -46,8 +47,8 @@ from .retention import RetentionGroup
 
 SOURCE_APIS = frozenset(entry.api for entry in cross_registry())
 UNRESOLVED_APIS = (SOURCE_APIS - SECURITY_APIS) | SOURCE_SNAPSHOT_APIS
-MAX_RETAINED_BYTES = 64 * 1024 * 1024
-MAX_SOURCE_BYTES = 16 * 1024 * 1024
+MAX_RETAINED_BYTES = 256 * 1024 * 1024
+MAX_SOURCE_BYTES = 128 * 1024 * 1024
 # 预期和财务修正需保留公告版本；其余来源按最近两期观察，而不是累计截断总量。
 VERSION_APIS = EVENT_APIS | frozenset({"express", "express_vip", "report_rc", "stk_surv"})
 MARKET_APIS = frozenset(
@@ -100,6 +101,8 @@ def adapt_row(
     }
     raw = restore_standard_numeric_text(raw, kinds, contract.policy)
     row = replace(row, raw=raw)
+    if lifecycle_reason := current_lifecycle_reason(row.source_api, row.availability, cutoff):
+        raise ValueError(lifecycle_reason)
     if row.entity_id is not None:
         return replace(row, raw={**raw, "entity_basis": "certified_alias"})
     mapping = entity_mapping(row.source_api)
@@ -202,10 +205,11 @@ def load_inputs(
     *,
     progress: ProgressCallback | None = None,
     remaining_rows: int | None = None,
+    source_apis: frozenset[str] | None = None,
 ) -> tuple[ResearchInputs, dict[str, int]]:
     """只读取新增107来源，以有限批扫描并记录排除、保留和历史释放数量。
 
-    例如空绑定scanned_rows=0；remaining_rows=0时仍扫描已绑定来源并拒绝整源。
+    例如source_apis={'fx_daily'}时只扫描该接口；remaining_rows=0时仍扫描并拒绝整源。
     内存字节与行数分别设门禁，任一实体或来源溢出均清空整组，不输出截断后的总量。
     """
     check_paths(reference_path)
@@ -224,7 +228,12 @@ def load_inputs(
     currency_fields = config.binding_audit.get("row_currency_fields", {})
     if currency_fields:
         verify_binding_audit(config, file_checksum(reference_path), cutoff)
-    entries = {entry.api: entry for entry in cross_registry()}
+    selected_apis = SOURCE_APIS if source_apis is None else source_apis
+    if not isinstance(selected_apis, frozenset) or not selected_apis <= SOURCE_APIS:
+        raise ValueError("input_source_selection_invalid")
+    entries = {
+        entry.api: entry for entry in cross_registry() if entry.api in selected_apis
+    }
     mappings = {item.source_api: item for item in effective.foundation.time_mappings}
     entity_apis = {item.source_api for item in effective.foundation.entity_mappings}
     rows_by_api: dict[str, tuple[ResearchRow, ...]] = {}
