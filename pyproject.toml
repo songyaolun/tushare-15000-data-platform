@@ -25,6 +25,9 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers"
+markers = [
+    "resource_intensive: production-scale offline validation that runs outside the bounded presubmit job",
+]
 
 [tool.coverage.run]
 source = ["tushare_entitlement_hub"]

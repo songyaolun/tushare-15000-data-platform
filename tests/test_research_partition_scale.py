@@ -5,10 +5,13 @@ from hashlib import md5, sha256
 from time import perf_counter
 
 import duckdb
+import pytest
 
 from tushare_entitlement_hub.equity_research import partitions, storage
 from tushare_entitlement_hub.equity_research.persistence_runtime import PersistenceProgress
 from tushare_entitlement_hub.equity_research.projection import EncodedRecord, accumulate_records
+
+pytestmark = pytest.mark.resource_intensive
 
 layout = {
     "result": (1, 32768),

@@ -4,6 +4,7 @@ from collections import Counter
 from dataclasses import replace
 
 import duckdb
+import pytest
 from test_research_candidates import AS_OF, research_row
 
 from tushare_entitlement_hub.equity_research import event_parents, events
@@ -27,6 +28,8 @@ from tushare_entitlement_hub.product_foundation.bindings import FoundationBindin
 from tushare_entitlement_hub.product_foundation.contracts import Truth
 from tushare_entitlement_hub.product_foundation.entities import Entity, EntityIdentity
 from tushare_entitlement_hub.store import encode
+
+pytestmark = pytest.mark.resource_intensive
 
 
 class CountedParents(tuple):

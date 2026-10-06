@@ -4,11 +4,14 @@ from hashlib import sha256
 from time import perf_counter
 
 import duckdb
+import pytest
 from research_fixture import AS_OF, DATABASE_CONFIG, write_reference
 
 from tushare_entitlement_hub.equity_research import pipeline, storage
 from tushare_entitlement_hub.equity_research.common import make_result
 from tushare_entitlement_hub.equity_research.models import PRODUCT_IDS, ResearchResult
+
+pytestmark = pytest.mark.resource_intensive
 
 
 def test_5911_full_consumption_results_validate_after_writer_close(tmp_path, monkeypatch):
