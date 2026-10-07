@@ -18,6 +18,7 @@ uv run --no-project bash scripts/demo.sh
 - [贡献指南](docs/贡献指南.md)
 - [接口目录与权益维护](docs/接口目录与权益维护.md)
 - [产品加工基础层](docs/产品加工基础层.md)
+- [产品说明书](docs/产品说明书.md)
 - [股票研究闭环](docs/股票研究闭环.md)
 - [全产品离线研究](docs/全产品离线研究.md)
 - [主题预期与基金研究](docs/主题预期与基金研究.md)
