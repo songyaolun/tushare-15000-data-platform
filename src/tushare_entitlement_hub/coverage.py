@@ -6,6 +6,7 @@ import json
 from datetime import date
 from typing import Any
 
+from .access import PRIVATE_APIS, WRITE_APIS
 from .models import ENABLED, LIFECYCLES, PRODUCTS, Policy
 from .store import Store
 
@@ -94,7 +95,9 @@ def coverage_report(store: Store, as_of_date: str, source: str = "fixture") -> d
     enabled = {
         entry.api_name: entry
         for entry in entries
-        if entry.permission_mode == "points" and entry.lifecycle in ENABLED
+        if (source != "live" and entry.permission_mode == "points" and entry.lifecycle in ENABLED)
+        or (source == "live" and entry.policy is not None
+            and entry.api_name not in WRITE_APIS | PRIVATE_APIS)
     }
     debt: list[dict[str, str]] = []
     registered = 0
@@ -215,6 +218,7 @@ def coverage_report(store: Store, as_of_date: str, source: str = "fixture") -> d
                 "contract_failure",
             )
         },
+        "access_note": "live分母包含公共只读独立权限、未知权限和历史接口；调用成功不等于完整采集。",
         "debt": debt,
         "gate_passed": bool(entries) and not debt,
         "note": "离线演示证据，不代表真实账户权限或真实市场数据"

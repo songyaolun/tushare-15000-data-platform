@@ -8,6 +8,8 @@ htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.loopx/
+.codex/
 data/
 !src/tushare_entitlement_hub/data/
 !src/tushare_entitlement_hub/data/**

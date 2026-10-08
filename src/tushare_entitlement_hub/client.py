@@ -123,9 +123,14 @@ class HttpTransport:
             raise ProviderError("contract_failure", "公开请求参数包含访问凭据")
         payload: Any = None
         error: tuple[ErrorKind, str] | None = None
+        requested_fields = params.get("fields", "")
+        if not isinstance(requested_fields, str):
+            raise ProviderError("contract_failure", "输出字段必须为逗号分隔字符串")
+        request_parameters = {name: value for name, value in params.items() if name != "fields"}
         try:
             response = self._client.post(self._base_url, json={
-                "api_name": api_name, "token": token, "params": params, "fields": "",
+                "api_name": api_name, "token": token,
+                "params": request_parameters, "fields": requested_fields,
             })
             if response.status_code == 429 or 500 <= response.status_code <= 599:
                 error = ("transient_failure", "提供方暂时不可用")
@@ -327,13 +332,14 @@ class Client:
             raise ProviderError("unauthorized", "接口访问未获授权")
         message = str(response.get("msg", "")).lower()
         if any(phrase in message for phrase in (
-            "每分钟最多访问", "访问频率超限", "rate limit exceeded", "too many requests",
+            "每分钟最多访问", "频率超限", "rate limit exceeded", "too many requests",
         )):
             raise ProviderError("transient_failure", "提供方明确报告访问频率超限")
         if any(word in message for word in ("权限", "积分", "token", "permission", "unauthorized")):
             raise ProviderError("unauthorized", "接口访问权限不足或凭据无效")
         if any(word in message for word in (
-            "接口不存在", "不支持", "deprecated", "unsupported", "api not found",
+            "接口不存在", "请指定正确的接口名", "不支持",
+            "deprecated", "unsupported", "api not found",
         )):
             raise ProviderError("unsupported", "接口不可用或不受支持")
         if any(word in message for word in ("参数", "parameter", "argument")):
@@ -350,6 +356,10 @@ class Client:
         observed_at 由调用方提供，不自动替换为系统时间或业务生效时间。
         """
         _safe_inputs(api_name, params)
+        if api_name == "pro_bar":
+            from .bars import compose_bars
+
+            return compose_bars(self, params, observed_at)
         response: dict[str, Any] = {}
         for attempt in range(self.retries + 1):
             failure: tuple[ErrorKind, str] | None = None

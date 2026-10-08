@@ -9,6 +9,7 @@ from typing import Any
 
 import duckdb
 
+from .access import bind_account, readable_policy, verified_policy
 from .client import Client, ProviderError
 from .models import ENABLED, CatalogEntry, Policy
 from .quality import audit_rows
@@ -21,16 +22,31 @@ class IngestionError(ValueError):
     """安全的采集门禁错误；异常文本只包含有限错误码，不含请求参数。"""
 
 
-def require_policy(entry: CatalogEntry, *, for_probe: bool = False) -> Policy:
-    """拒绝未知、独立权限和冲突政策；合格 daily 记录返回其 Policy。
+def require_policy(
+    entry: CatalogEntry, *, for_probe: bool = False, store: Store | None = None,
+    source: str = "fixture", account: str = "local",
+) -> Policy:
+    """只读探测不受文档权限标签阻挡；真实采集要求同账户同政策的成功证据。
 
-    参数为目录及是否用于探活；返回可执行 Policy，拒绝冲突、未知和独立权限。
-    示例：CatalogEntry('new_api') 尚未归类，调用时抛 interface_not_enabled。
+    输入目录、探测标记及可选数据库/来源/账户，返回可执行政策副本。
+    fixture 保留严格目录校验；live 不改文档事实，仍检查数据政策完整性。
+    示例：fund_nav 文档待复核但 live 探测成功时允许规划，尚无证据则明确拒绝。
     """
     from .coverage import policy_debt
 
-    states = ENABLED | {"blocked"} if for_probe else ENABLED
-    if entry.lifecycle not in states or entry.permission_mode != "points":
+    if for_probe:
+        try:
+            return readable_policy(entry)
+        except ValueError as error:
+            raise IngestionError(str(error)) from None
+    if source == "live":
+        if store is None:
+            raise IngestionError("live_evidence_store_required")
+        try:
+            return verified_policy(store, entry, account)
+        except ValueError as error:
+            raise IngestionError(str(error)) from None
+    if entry.lifecycle not in ENABLED or entry.permission_mode != "points":
         raise IngestionError("interface_not_enabled")
     if entry.minimum_points is None or entry.minimum_points > 15000 or entry.needs_review:
         raise IngestionError("entitlement_needs_review")
@@ -48,13 +64,14 @@ def plan_tasks(
     store: Store | None = None,
     source: str = "fixture",
     parameters: dict[str, Any] | None = None,
+    account: str = "local",
 ) -> list[dict[str, Any]]:
     """为指定日期区间生成稳定任务，增量从水位减回看窗口开始。
 
     示例：daily、2024-01-02 至 2024-01-03 → 两个交易日期分片；同一执行语义
     即使在不同 planned_at 重新规划也保持 ID 不变，规划时间仅用于审计。
     """
-    policy = require_policy(entry)
+    policy = require_policy(entry, store=store, source=source, account=account)
     observed_at = normalize_timestamp(observed_at)
     if mode not in {"initialize", "incremental", "lookback", "event", "backfill"}:
         raise IngestionError("invalid_mode")
@@ -83,6 +100,7 @@ def plan_tasks(
                             store,
                             source,
                             parameters,
+                            account,
                         )
                     )
         return result
@@ -114,7 +132,8 @@ def plan_tasks(
             task
             for security in securities
             for task in plan_tasks(
-                entry, start, end, mode, observed_at, store, source, {**params, "ts_code": security}
+                entry, start, end, mode, observed_at, store, source,
+                {**params, "ts_code": security}, account,
             )
         ]
     assert_public(params)
@@ -157,6 +176,8 @@ def plan_tasks(
             "planned_at": observed_at,
             "policy_hash": digest(asdict(policy)),
         }
+        if source == "live":
+            task["account"] = account
         task["task_id"] = task_identity(task)
         tasks.append(task)
         cursor = upper + timedelta(days=1)
@@ -164,7 +185,8 @@ def plan_tasks(
 
 
 def probe(
-    entry: CatalogEntry, client: Client, store: Store, observed_at: str, source: str = "fixture"
+    entry: CatalogEntry, client: Client, store: Store, observed_at: str, source: str = "fixture",
+    parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行政策最小请求并保存分类证据；成功零行是 empty，网络失败为 transient_failure。
 
@@ -173,15 +195,24 @@ def probe(
     两者不会混记，且失败证据不保存服务端原始错误正文。
     """
     policy = require_policy(entry, for_probe=True)
+    if source == "live":
+        bind_account(store, client.account)
     observed_at = normalize_timestamp(observed_at)
-    parameters = dict(policy.minimal_params)
+    parameters = {**policy.minimal_params, **(parameters or {})}
     if policy.supports_pagination:
         parameters.update(limit=1, offset=0)
-    evidence: dict[str, Any] = {"request_policy": digest(asdict(policy))}
+    evidence: dict[str, Any] = {
+        "request_policy": digest(asdict(entry.policy)) if entry.policy else "",
+        "account": client.account,
+        "parameters": parameters,
+    }
     try:
         page = client.fetch(entry.api_name, parameters, observed_at)
         status = "available" if page.rows else "empty"
-        evidence.update(response_hash=page.raw.response_hash, rows=len(page.rows))
+        evidence.update(
+            response_hash=page.raw.response_hash, rows=len(page.rows), fields=page.fields,
+            raw_path=str(page.raw.path),
+        )
     except ProviderError as error:
         status = error.kind
         evidence["error_code"] = status
@@ -213,7 +244,10 @@ def run_task(
     首批须显式提供完整 previous_fields 基线，后续优先使用历史成功字段；任何必需
     not_checked 都阻断提交。成功行的 quality_reference 保留所用字段基线及来源。
     """
-    policy = require_policy(entry)
+    account = str(task.get("account", "local"))
+    if task.get("source") == "live" and client.account != account:
+        raise IngestionError("live_account_mismatch")
+    policy = require_policy(entry, store=store, source=str(task["source"]), account=account)
     observed_at = normalize_timestamp(observed_at)
     assert_public(task)
     if task["api_name"] != entry.api_name or task["policy_hash"] != digest(asdict(policy)):

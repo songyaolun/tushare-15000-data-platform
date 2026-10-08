@@ -18,12 +18,18 @@ import typer
 from .catalog import fetch_documentation, sync_catalog
 from .client import Client, FakeTransport, HttpTransport, ProviderError
 from .coverage import coverage_report
+from .credentials import configured_credential
+from .cross_asset_research.cli import all_products_app
+from .equity_research.cli import research_app
 from .ingest import plan_tasks, probe, run_task
 from .models import CatalogEntry
+from .product_foundation.cli import foundation_app
 from .products import build_products
 from .quality import audit_rows
 from .raw import RawStore, assert_public
+from .reference import build_reference, rebuild_reference
 from .store import Store, encode
+from .survey import survey
 
 app = typer.Typer(help="Tushare 权益总账、离线采集与信息产品。", no_args_is_help=True)
 catalog_app = typer.Typer(help="发现接口并管理权益总账。")
@@ -33,6 +39,7 @@ backfill_app = typer.Typer(help="制定历史回填计划。")
 quality_app = typer.Typer(help="审计已存标准数据。")
 coverage_app = typer.Typer(help="展示权益利用率和覆盖债务。")
 products_app = typer.Typer(help="构建可审计的 Markdown/JSON 产品。")
+reference_app = typer.Typer(help="正式采集并发布独立于产品的本地数据参考。")
 for command_name, application in (
     ("catalog", catalog_app),
     ("capability", capability_app),
@@ -41,6 +48,10 @@ for command_name, application in (
     ("quality", quality_app),
     ("coverage", coverage_app),
     ("products", products_app),
+    ("reference", reference_app),
+    ("product-foundation", foundation_app),
+    ("research", research_app),
+    ("research-all", all_products_app),
 ):
     app.add_typer(application, name=command_name)
 
@@ -129,7 +140,7 @@ def credential_prompt() -> str:
 
     示例：调用方显式执行 live 请求时，安全输入的值仅返回给当前 HTTPS 发送步骤。
     """
-    return getpass.getpass("Tushare 凭据（输入不回显）：")
+    return configured_credential() or getpass.getpass("Tushare 凭据（输入不回显）：")
 
 
 @contextmanager
@@ -139,6 +150,7 @@ def open_client(
     fixture: Path | None,
     live: bool,
     account: str = "local",
+    credential_file: Path | None = None,
 ) -> Iterator[Client]:
     """选择互斥的 fixture 或显式 live 传输；fixture daily.json 产生零网络 Client。
 
@@ -153,7 +165,13 @@ def open_client(
         responses = content[entry.api_name] if isinstance(content, dict) else content
         yield Client(FakeTransport(responses), raw, account="fixture")
     else:
-        with HttpTransport(credential_prompt, live=True) as transport:
+        def credential_provider() -> str:
+            """在实际发送时读取显式凭据文件或既有环境；例如未指定文件则使用交互回调。"""
+            if credential_file is not None:
+                return configured_credential(credential_file) or ""
+            return credential_prompt()
+
+        with HttpTransport(credential_provider, live=True) as transport:
             yield Client(
                 transport, raw, account=account, rate_per_minute=entry.frequency_per_minute or 60
             )
@@ -225,6 +243,8 @@ def capability_probe(
     observed_at: str | None = None,
     account: str = "local",
     raw_directory: Path = Path("data/raw"),
+    credential_file: Path | None = None,
+    parameters: Path | None = None,
 ) -> None:
     """按政策探活；capability probe daily --fixture responses.json 仅记录离线证据。
 
@@ -233,14 +253,95 @@ def capability_probe(
     """
     with open_store(ctx) as store:
         entry = find_entry(store, api_name)
-        with open_client(entry, raw_directory, fixture, live, account) as client:
+        with open_client(entry, raw_directory, fixture, live, account, credential_file) as client:
             typer.echo(
                 encode(
                     probe(
-                        entry, client, store, timestamp(observed_at), "live" if live else "fixture"
+                        entry, client, store, timestamp(observed_at), "live" if live else "fixture",
+                        read_json(parameters) if parameters else None,
                     )
                 )
             )
+
+
+@capability_app.command("survey")
+def capability_survey(
+    ctx: typer.Context,
+    live: bool = False,
+    credential_file: Path | None = None,
+    output: Path = Path("data/capability-survey"),
+    parameters: Path | None = None,
+    account: str = "local",
+    refresh: bool = False,
+    apis: str | None = None,
+) -> None:
+    """实测公共只读目录并保存样本和结果；须显式 --live，写接口始终排除。
+
+    参数含既有凭据路径、样本输出目录、按API参数映射及可选逗号分隔接口列表。
+    示例：capability survey --live --apis trade_cal,namechange 输出逐项状态及 report.json。
+    默认复用同账户同政策的成功证据；--refresh 强制重新请求。
+    """
+    with open_store(ctx) as store:
+        if not live:
+            raise ValueError("live_opt_in_required")
+        entries = store.catalog()
+        if not entries:
+            raise ValueError("catalog_required")
+        selected = apis.split(",") if apis else None
+        if selected and set(selected) - {entry.api_name for entry in entries}:
+            raise ValueError("unknown_api")
+        with open_client(
+            entries[0], output / "raw", None, True, account, credential_file
+        ) as client:
+            report = survey(
+                store, client, output, lambda: timestamp(None),
+                parameters=read_json(parameters) if parameters else None,
+                refresh=refresh, api_names=selected,
+            )
+            typer.echo(encode({"counts": report["counts"], "report": str(output / "report.json")}))
+
+
+@reference_app.command("build")
+def reference_build(
+    ctx: typer.Context, live: bool = False, credential_file: Path | None = None,
+    output: Path = Path("data/reference"), parameters: Path | None = None,
+    account: str = "local", refresh: bool = False, apis: str | None = None,
+) -> None:
+    """显式执行完整声明范围采集并导出通用本地数据；不依赖十类产品。
+
+    输入凭据路径、输出位置、完整参数映射和可选接口列表，返回None并输出发布摘要。
+    示例：reference build --live --apis daily --parameters ranges.json 生成Parquet和DuckDB。
+    参数映射完整替换政策样例，清单始终保留实际请求范围，不声明未知历史覆盖。
+    """
+    if not live:
+        raise typer.BadParameter("live_opt_in_required")
+    with open_store(ctx) as store:
+        entries = store.catalog()
+        if not entries:
+            raise ValueError("catalog_required")
+        selected = apis.split(",") if apis else None
+        if selected and set(selected) - {entry.api_name for entry in entries}:
+            raise ValueError("unknown_api")
+        with open_client(
+            entries[0], output / "raw", None, True, account, credential_file
+        ) as client:
+            result = build_reference(
+                store, client, output, lambda: timestamp(None),
+                read_json(parameters) if parameters else None, selected, refresh,
+            )
+            typer.echo(encode({"counts": result["counts"], "database": result["database"]}))
+
+
+@reference_app.command("rebuild")
+def reference_rebuild(
+    output: Path = Path("data/reference"), apis: str | None = None,
+) -> None:
+    """校验已有原始页并离线重建通用数据；例如reference rebuild --output data/reference。
+
+    输入发布目录，返回None并输出计数。不会读取凭据、发起网络请求或更新观察时间。
+    """
+    result = rebuild_reference(output, api_names=apis.split(",") if apis else None)
+    typer.echo(encode({"counts": result["counts"], "database": result["database"]}))
 
 
 @ingest_app.command("plan")
@@ -254,6 +355,7 @@ def ingest_plan(
     observed_at: str | None = None,
     live: bool = False,
     parameters: Path | None = None,
+    account: str = "local",
 ) -> None:
     """生成可复用任务计划；ingest plan daily 2024-01-02 2024-01-03 输出两个日期任务。
 
@@ -270,6 +372,7 @@ def ingest_plan(
             store,
             "live" if live else "fixture",
             read_json(parameters) if parameters else None,
+            account,
         )
         store.save_plan(plans, timestamp(observed_at))
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -304,6 +407,7 @@ def ingest_run(
     observed_at: str | None = None,
     references: Path | None = None,
     account: str = "local",
+    credential_file: Path | None = None,
 ) -> None:
     """执行已保存任务；ingest run plan.json --fixture responses.json 可从失败任务恢复。
 
@@ -323,7 +427,7 @@ def ingest_run(
                 entry = find_entry(store, task["api_name"])
                 if entry.api_name not in clients:
                     clients[entry.api_name] = stack.enter_context(
-                        open_client(entry, raw_directory, fixture, live, account)
+                        open_client(entry, raw_directory, fixture, live, account, credential_file)
                     )
                 results.append(
                     run_task(

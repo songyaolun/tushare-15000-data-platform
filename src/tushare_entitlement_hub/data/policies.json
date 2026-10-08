@@ -194,7 +194,7 @@
     },
     "minimal_params": {
       "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "period": "20251231"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -284,8 +284,7 @@
       "best_sell_yield": "%"
     },
     "minimal_params": {
-      "ts_code": "200013.BC",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -325,8 +324,7 @@
       "sell_yield": "%"
     },
     "minimal_params": {
-      "ts_code": "200013.BC",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -370,8 +368,7 @@
       "amount": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -412,8 +409,7 @@
       "amount": "万元"
     },
     "minimal_params": {
-      "ts_code": "113001.SH",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -458,8 +454,7 @@
       "amount": "万元"
     },
     "minimal_params": {
-      "ts_code": "113001.SH",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -568,7 +563,7 @@
     },
     "minimal_params": {
       "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "period": "20251231"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -690,8 +685,8 @@
       "call_amount": "万元"
     },
     "minimal_params": {
-      "ts_code": "113001.SH",
-      "ann_date": "20240430"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -740,8 +735,7 @@
       "cb_over_rate": "%"
     },
     "minimal_params": {
-      "ts_code": "113001.SH",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -781,8 +775,7 @@
       "amount": "万元"
     },
     "minimal_params": {
-      "ts_code": "113001.SH",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 10000,
@@ -820,8 +813,8 @@
       "offl_deposit": "%"
     },
     "minimal_params": {
-      "ts_code": "113001.SH",
-      "ann_date": "20240430"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -973,8 +966,7 @@
       "issue_size": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "113001.SH",
-      "ann_date": "20240430"
+      "ts_code": "113001.SH"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -1046,8 +1038,7 @@
       "amount": "万元"
     },
     "minimal_params": {
-      "ts_code": "000300.SH",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 4000,
@@ -1290,7 +1281,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "m": "202401"
+      "m": "202609"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -1503,8 +1494,7 @@
       "tr": "％"
     },
     "minimal_params": {
-      "ts_code": "000300.SH",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 4000,
@@ -1542,8 +1532,7 @@
       "amount": "元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -1581,8 +1570,7 @@
       "rank": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -1617,8 +1605,7 @@
       "total_mv": "万元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 5000,
@@ -1651,8 +1638,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "BK1184.DC",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 5000,
@@ -1683,10 +1669,7 @@
       "ann_date"
     ],
     "units": {},
-    "minimal_params": {
-      "ts_code": "000001.SZ",
-      "ann_date": "20240430"
-    },
+    "minimal_params": {},
     "supports_pagination": false,
     "page_size": 6000,
     "max_pages": 100,
@@ -1724,8 +1707,7 @@
       "stk_div": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "600848.SH",
-      "ann_date": "20240430"
+      "ts_code": "000001.SZ"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -1863,9 +1845,7 @@
     "units": {
       "bp": "文档未说明，保留源值，禁止跨源换算"
     },
-    "minimal_params": {
-      "ts_code": "159915.SZ"
-    },
+    "minimal_params": {},
     "supports_pagination": false,
     "page_size": 5000,
     "max_pages": 100,
@@ -1975,8 +1955,7 @@
       "rdr": "%"
     },
     "minimal_params": {
-      "ts_code": "517030.SH",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -2051,8 +2030,7 @@
       "rdr": "%"
     },
     "minimal_params": {
-      "ts_code": "159051.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -2092,8 +2070,8 @@
       "total_assets": "元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "ts_code": "600853.SH",
+      "period": "20251231"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -2135,8 +2113,7 @@
       "total_assets": "元"
     },
     "minimal_params": {
-      "period": "20231231",
-      "ts_code": "000001.SZ"
+      "period": "20251231"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -2241,7 +2218,7 @@
     },
     "minimal_params": {
       "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "period": "20251231"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -2304,7 +2281,7 @@
     },
     "minimal_params": {
       "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "period": "20251231"
     },
     "supports_pagination": false,
     "page_size": 100,
@@ -2409,9 +2386,8 @@
     },
     "minimal_params": {
       "ts_code": "000001.SZ",
-      "type": "P",
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "period": "20251231",
+      "type": "P"
     },
     "supports_pagination": false,
     "page_size": 100,
@@ -2493,8 +2469,9 @@
       "net_profit_max": "万元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "ts_code": "002594.SZ",
+      "start_date": "20240101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3500,
@@ -2537,8 +2514,7 @@
       "net_profit_max": "万元"
     },
     "minimal_params": {
-      "period": "20231231",
-      "ts_code": "000001.SZ"
+      "period": "20251231"
     },
     "supports_pagination": false,
     "page_size": 3500,
@@ -2800,8 +2776,7 @@
       "ear_amount": "元"
     },
     "minimal_params": {
-      "ts_code": "159915.SZ",
-      "ann_date": "20240430"
+      "ann_date": "20181018"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -2877,8 +2852,6 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "150018.SZ",
-      "ann_date": "20240430",
       "limit": 1
     },
     "supports_pagination": true,
@@ -2960,7 +2933,7 @@
     },
     "minimal_params": {
       "ts_code": "001753.OF",
-      "ann_date": "20240430"
+      "period": "20251231"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -2995,8 +2968,7 @@
       "fd_share": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "150018.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -3108,8 +3080,7 @@
       "oi": "手"
     },
     "minimal_params": {
-      "ts_code": "IF2406.CFX",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -3183,8 +3154,9 @@
       "amount": "千元"
     },
     "minimal_params": {
-      "ts_code": "IF2406.CFX",
-      "trade_date": "20240102"
+      "ts_code": "CU.NH",
+      "start_date": "20181101",
+      "end_date": "20181130"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -3225,8 +3197,7 @@
       "pre_total": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "IF2406.CFX",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -3256,8 +3227,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "IF2406.CFX",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -3292,8 +3262,7 @@
       "cur_month": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "IF2406.CFX",
-      "trade_date": "20240102"
+      "trade_date": "20260904"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -3326,8 +3295,7 @@
       "settle": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "IF2406.CFX",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1600,
@@ -3396,7 +3364,7 @@
       "price_limit": "%"
     },
     "minimal_params": {
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -3441,9 +3409,8 @@
       "close_wow": "%"
     },
     "minimal_params": {
-      "week": "202401",
-      "prd": "IF",
-      "exchange": "CFFEX"
+      "week": "202011",
+      "prd": "CU"
     },
     "supports_pagination": false,
     "page_size": 4000,
@@ -3481,8 +3448,8 @@
     },
     "minimal_params": {
       "freq": "week",
-      "ts_code": "IF2406.CFX",
-      "trade_date": "20240102"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 6000,
@@ -3591,9 +3558,7 @@
     "units": {
       "min_unit": "文档未说明，保留源值，禁止跨源换算"
     },
-    "minimal_params": {
-      "ts_code": "000001.SZ"
-    },
+    "minimal_params": {},
     "supports_pagination": false,
     "page_size": 1000,
     "max_pages": 100,
@@ -3623,7 +3588,8 @@
       "d10_rate": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "date": "20240102"
+      "start_date": "20180101",
+      "end_date": "20181231"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -3724,8 +3690,8 @@
     },
     "minimal_params": {
       "ts_code": "00700.HK",
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "start_date": "20250101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 10000,
@@ -3755,9 +3721,7 @@
     "units": {
       "trade_unit": "文档未说明，保留源值，禁止跨源换算"
     },
-    "minimal_params": {
-      "ts_code": "000001.SZ"
-    },
+    "minimal_params": {},
     "supports_pagination": false,
     "page_size": 1000,
     "max_pages": 100,
@@ -3792,8 +3756,8 @@
     },
     "minimal_params": {
       "ts_code": "00700.HK",
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "start_date": "20250101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 10000,
@@ -3935,8 +3899,8 @@
     },
     "minimal_params": {
       "ts_code": "00700.HK",
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "start_date": "20250101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 200,
@@ -3972,8 +3936,8 @@
     },
     "minimal_params": {
       "ts_code": "00700.HK",
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "start_date": "20250101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 10000,
@@ -4083,8 +4047,7 @@
       "net_amount": "元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -4312,7 +4275,7 @@
     },
     "minimal_params": {
       "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "period": "20251231"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -4617,7 +4580,8 @@
     },
     "minimal_params": {
       "ts_code": "000001.SH",
-      "trade_date": "20240102"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -4656,7 +4620,8 @@
     },
     "minimal_params": {
       "ts_code": "000001.SH",
-      "trade_date": "20240102"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -4693,7 +4658,8 @@
     },
     "minimal_params": {
       "index_code": "000300.SH",
-      "trade_date": "20240102"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -4799,8 +4765,7 @@
       "hot_num": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -4837,8 +4802,7 @@
       "bid_amount": "元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 8000,
@@ -4871,7 +4835,9 @@
       "on": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "date": "20240102"
+      "start_date": "20180101",
+      "end_date": "20180131",
+      "curr_type": "USD"
     },
     "supports_pagination": false,
     "page_size": 4000,
@@ -4905,8 +4871,7 @@
       "days": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -4942,8 +4907,7 @@
       "amount": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2500,
@@ -4980,8 +4944,7 @@
       "sum_float": "亿元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 4000,
@@ -5012,8 +4975,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -5045,8 +5007,8 @@
     ],
     "units": {},
     "minimal_params": {
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "start_date": "2026-09-30 00:00:00",
+      "end_date": "2026-09-30 01:00:00"
     },
     "supports_pagination": false,
     "page_size": 400,
@@ -5309,8 +5271,7 @@
       "net_amount": "亿元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -5398,8 +5359,7 @@
       "buy_sm_amount": "元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -5436,8 +5396,7 @@
       "net_amount": "亿元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -5518,8 +5477,7 @@
       "buy_sm_amount_rate": "%"
     },
     "minimal_params": {
-      "ts_code": "002149.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 6000,
@@ -5558,7 +5516,8 @@
     },
     "minimal_params": {
       "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 4500,
@@ -5592,9 +5551,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "600848.SH",
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "ts_code": "000001.SZ"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -5731,9 +5688,7 @@
     "units": {
       "exercise_price": "文档未说明，保留源值，禁止跨源换算"
     },
-    "minimal_params": {
-      "ts_code": "000001.SZ"
-    },
+    "minimal_params": {},
     "supports_pagination": false,
     "page_size": 1000,
     "max_pages": 100,
@@ -5772,8 +5727,7 @@
       "oi": "手"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 15000,
@@ -5976,8 +5930,8 @@
       "pledged_amount": "万股"
     },
     "minimal_params": {
-      "ts_code": "000014.SZ",
-      "ann_date": "20240430"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -6028,24 +5982,38 @@
   {
     "api_name": "pro_bar",
     "category": "market",
-    "lifecycle": "blocked",
+    "lifecycle": "research",
     "consumers": [
-      "archive:复权行情SDK组合方法"
+      "market",
+      "security"
     ],
-    "primary_key": [],
-    "date_field": "",
-    "shard_by": "snapshot",
+    "primary_key": [
+      "ts_code",
+      "trade_date"
+    ],
+    "date_field": "trade_date",
+    "shard_by": "ts_code",
     "lookback_days": 0,
-    "required_fields": [],
+    "required_fields": [
+      "ts_code",
+      "trade_date",
+      "close"
+    ],
     "units": {},
-    "minimal_params": {},
+    "minimal_params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20240102",
+      "end_date": "20240102",
+      "asset": "E",
+      "freq": "D"
+    },
     "supports_pagination": false,
-    "page_size": 1000,
+    "page_size": 6000,
     "max_pages": 100,
     "freshness_days": 7,
     "pit_fields": [],
-    "collection_mode": "snapshot",
-    "purpose": "文档定义的是SDK组合方法，需按asset/freq/adj拆解到底层行情接口；不可直接作为HTTP API调用。缺少独立输出契约，保留政策债务。"
+    "collection_mode": "incremental",
+    "purpose": "通过HTTPS组合底层行情、固定锚点复权及均线；原始底层响应和派生来源均保留，使用范围以适配器支持的资产和频率为准。"
   },
   {
     "api_name": "repo_daily",
@@ -6080,8 +6048,7 @@
       "num": "笔"
     },
     "minimal_params": {
-      "ts_code": "113001.SH",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -6129,8 +6096,7 @@
       "eps": "元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "report_date": "20240102"
+      "report_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -6457,7 +6423,7 @@
       "amount": "元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ"
+      "ts_code": "00700.HK"
     },
     "supports_pagination": false,
     "page_size": 5000,
@@ -6820,8 +6786,7 @@
       "amount": "元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -6862,8 +6827,8 @@
       "float_ratio": "%"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 6000,
@@ -6927,7 +6892,8 @@
       "1y": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "date": "20240102"
+      "start_date": "20180101",
+      "end_date": "20181130"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -7031,8 +6997,8 @@
       "end_bal": "万元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "start_date": "20230101",
+      "end_date": "20231231"
     },
     "supports_pagination": false,
     "page_size": 5000,
@@ -7143,9 +7109,7 @@
       "st_type"
     ],
     "units": {},
-    "minimal_params": {
-      "ts_code": "000001.SZ"
-    },
+    "minimal_params": {},
     "supports_pagination": false,
     "page_size": 1000,
     "max_pages": 100,
@@ -7178,7 +7142,8 @@
       "weekly_new": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "date": "20240102"
+      "start_date": "20180101",
+      "end_date": "20181231"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -7210,8 +7175,8 @@
       "new_sh": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "start_date": "20140101",
+      "end_date": "20141231"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -7247,8 +7212,7 @@
       "close": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -7283,8 +7247,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "001896.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -7524,8 +7487,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "002015.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -7561,8 +7523,8 @@
       "holder_num": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "300199.SZ",
-      "ann_date": "20240430"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -7608,8 +7570,8 @@
       "after_ratio": "%"
     },
     "minimal_params": {
-      "ts_code": "002149.SZ",
-      "ann_date": "20240430"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -7683,8 +7645,8 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -7912,8 +7874,8 @@
       "list_circ_qty": "股"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -7950,8 +7912,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "002015.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -7986,8 +7947,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "002223.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 400,
@@ -8026,8 +7986,9 @@
     },
     "minimal_params": {
       "freq": "week",
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "start_date": "20260901",
+      "end_date": "20260930",
+      "ts_code": "000001.SZ"
     },
     "supports_pagination": false,
     "page_size": 6000,
@@ -8066,8 +8027,9 @@
     },
     "minimal_params": {
       "freq": "week",
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "start_date": "20260901",
+      "end_date": "20260930",
+      "ts_code": "000001.SZ"
     },
     "supports_pagination": false,
     "page_size": 6000,
@@ -8199,8 +8161,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -8235,8 +8196,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 5000,
@@ -8278,8 +8238,7 @@
       "total_mv": "万元"
     },
     "minimal_params": {
-      "ts_code": "000300.SH",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 4000,
@@ -8396,8 +8355,7 @@
       "bm_buy_net": "元"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -8431,8 +8389,7 @@
       "idx_count": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -8465,8 +8422,7 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "880728.TDX",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -8544,8 +8500,7 @@
       "rank": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 2000,
@@ -8577,8 +8532,7 @@
       "count": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "exchange": "A",
-      "ts_code": "000001.SZ"
+      "exchange": "A"
     },
     "supports_pagination": false,
     "page_size": 5000,
@@ -8654,9 +8608,9 @@
       "hold_ratio": "%"
     },
     "minimal_params": {
-      "ts_code": "000001.SZ",
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "ts_code": "113052.SH",
+      "start_date": "20240101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 3000,
@@ -8697,7 +8651,8 @@
     },
     "minimal_params": {
       "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "start_date": "20240101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -8740,7 +8695,8 @@
     },
     "minimal_params": {
       "ts_code": "000001.SZ",
-      "ann_date": "20240430"
+      "start_date": "20240101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 1000,
@@ -8784,8 +8740,7 @@
       "net_buy": "元"
     },
     "minimal_params": {
-      "trade_date": "20240102",
-      "ts_code": "000592.SZ"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 10000,
@@ -8821,8 +8776,7 @@
       "close": "文档未说明，保留源值，禁止跨源换算"
     },
     "minimal_params": {
-      "trade_date": "20240102",
-      "ts_code": "002219.SZ"
+      "trade_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 10000,
@@ -8930,8 +8884,8 @@
     },
     "minimal_params": {
       "ts_code": "AAPL",
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "start_date": "20240101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 10000,
@@ -8959,7 +8913,6 @@
     ],
     "units": {},
     "minimal_params": {
-      "ts_code": "000001.SZ",
       "limit": 1
     },
     "supports_pagination": true,
@@ -9000,8 +8953,8 @@
     },
     "minimal_params": {
       "ts_code": "AAPL",
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "start_date": "20240101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 10000,
@@ -9127,8 +9080,8 @@
     },
     "minimal_params": {
       "ts_code": "AAPL",
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "start_date": "20240101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 200,
@@ -9168,8 +9121,8 @@
     },
     "minimal_params": {
       "ts_code": "AAPL",
-      "start_date": "20240102",
-      "end_date": "20240102"
+      "start_date": "20240101",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 10000,
@@ -9424,7 +9377,8 @@
     },
     "minimal_params": {
       "ts_code": "000001.SZ",
-      "trade_date": "20240102"
+      "start_date": "20260901",
+      "end_date": "20260930"
     },
     "supports_pagination": false,
     "page_size": 6000,

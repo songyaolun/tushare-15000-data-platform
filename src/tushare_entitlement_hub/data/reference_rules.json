@@ -1,0 +1,392 @@
+{
+  "bak_basic": {
+    "null_sentinels": {
+      "list_date": [
+        "0"
+      ]
+    },
+    "note": "提供方以0表示上市日期尚未确定，标准层转为空值并保留原始字段"
+  },
+  "bak_daily": {
+    "zero_volume_reference_close": true
+  },
+  "cb_daily": {
+    "zero_volume_reference_close": true
+  },
+  "cb_factor_pro": {
+    "zero_volume_reference_close": true
+  },
+  "ci_daily": {
+    "zero_volume_reference_close": true
+  },
+  "fut_daily": {
+    "zero_volume_reference_close": true
+  },
+  "fut_daily_adj": {
+    "zero_volume_reference_close": true
+  },
+  "fut_weekly_monthly": {
+    "zero_volume_reference_close": true
+  },
+  "idx_factor_pro": {
+    "zero_volume_reference_close": true
+  },
+  "opt_daily": {
+    "zero_volume_reference_close": true
+  },
+  "bc_otcqt": {
+    "aliases": {
+      "bid_bank": "bank"
+    }
+  },
+  "fut_rcpt_mat": {
+    "primary_key": [
+      "trade_date",
+      "exchange",
+      "fut_name"
+    ],
+    "note": "官方响应按期货品种名称区分到期量，无ts_code字段；仓库和厂库名称分别保留"
+  },
+  "hm_detail": {
+    "primary_key": [
+      "ts_code",
+      "trade_date",
+      "hm_name",
+      "hm_orgs"
+    ]
+  },
+  "ths_member": {
+    "primary_key": [
+      "ts_code",
+      "con_code"
+    ],
+    "text_fields": [
+      "in_date",
+      "out_date"
+    ],
+    "snapshot": true
+  },
+  "sge_basic": {
+    "text_fields": [
+      "trade_time"
+    ],
+    "snapshot": true
+  },
+  "stk_shock": {
+    "text_fields": [
+      "period"
+    ]
+  },
+  "stk_high_shock": {
+    "text_fields": [
+      "period"
+    ]
+  },
+  "stk_mins": {
+    "timestamp_fields": [
+      "trade_time"
+    ],
+    "timezone": "Asia/Shanghai",
+    "rate_per_minute": 0.016666666666666666,
+    "cooldown_seconds": 3600,
+    "partition_strategy": "security_trade_day",
+    "note": "真实服务端先返回每分钟1次，随后明确返回每小时1次；正式请求采用已观察到的更严格频率"
+  },
+  "rt_min": {
+    "timestamp_fields": [
+      "time"
+    ],
+    "timezone": "Asia/Shanghai"
+  },
+  "stk_nineturn": {
+    "timestamp_fields": [
+      "trade_date"
+    ],
+    "timezone": "Asia/Shanghai"
+  },
+  "major_news": {
+    "timestamp_fields": [
+      "pub_time"
+    ],
+    "timezone": "Asia/Shanghai"
+  },
+  "fut_inv_weekly": {
+    "nullable_keys": [
+      "area",
+      "warehouse",
+      "grade"
+    ],
+    "primary_key": [
+      "ts_code",
+      "trade_date",
+      "exchange",
+      "area",
+      "warehouse",
+      "grade",
+      "fut_name"
+    ],
+    "note": "品种名称区分同代码的仓库和厂库，不能把两类库存合并"
+  },
+  "fut_wsr": {
+    "nullable_keys": [
+      "year",
+      "grade",
+      "brand",
+      "place",
+      "is_ct",
+      "warehouse",
+      "area",
+      "fut_name"
+    ],
+    "primary_key": [
+      "trade_date",
+      "symbol",
+      "warehouse",
+      "year",
+      "grade",
+      "brand",
+      "place",
+      "is_ct",
+      "exchange",
+      "fut_name",
+      "area"
+    ],
+    "null_reasons": {
+      "fut_name": "provider_optional_description"
+    },
+    "note": "仓库合计按交易所、品种及地区区分，仓库和厂库分别保存；郑商所部分行不提供品种名称"
+  },
+  "pledge_detail": {
+    "nullable_keys": [
+      "start_date",
+      "pledgor"
+    ],
+    "null_reasons": {
+      "pledgor": "provider_not_disclosed"
+    },
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "is_release",
+      "release_date",
+      "end_date",
+      "pledge_amount",
+      "pledged_amount"
+    ]
+  },
+  "repurchase": {
+    "nullable_keys": [
+      "end_date"
+    ],
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "vol",
+      "amount",
+      "low_limit",
+      "high_limit"
+    ]
+  },
+  "share_float": {
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "float_share",
+      "float_ratio"
+    ]
+  },
+  "stk_holdertrade": {
+    "nullable_keys": [
+      "begin_date",
+      "close_date"
+    ],
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "change_vol",
+      "after_share",
+      "after_ratio",
+      "total_share"
+    ]
+  },
+  "top_inst": {
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "buy",
+      "sell",
+      "net_buy",
+      "buy_rate",
+      "sell_rate"
+    ],
+    "note": "同名机构专用席位可能代表多个匿名席位，按业务组保留来源变体"
+  },
+  "us_basic": {
+    "identity_policy": "preserve_source_variants",
+    "variant_fields": [
+      "list_date",
+      "delist_date",
+      "classify",
+      "name",
+      "enname"
+    ],
+    "note": "美股代码会跨证券生命周期复用，代码作为业务组，上市日期和名称等作为生命周期变体"
+  },
+  "stk_managers": {
+    "nullable_keys": [
+      "begin_date"
+    ]
+  },
+  "stk_rewards": {
+    "nullable_keys": [
+      "title"
+    ]
+  },
+  "suspend_d": {
+    "nullable_keys": [
+      "suspend_timing"
+    ]
+  },
+  "fund_div": {
+    "primary_key": [
+      "ts_code",
+      "ann_date",
+      "ex_date",
+      "div_proc",
+      "base_date"
+    ]
+  },
+  "fina_mainbz": {
+    "snapshot": true
+  },
+  "fina_mainbz_vip": {
+    "snapshot": true
+  },
+  "us_income": {
+    "snapshot": true
+  },
+  "us_balancesheet": {
+    "snapshot": true
+  },
+  "us_cashflow": {
+    "snapshot": true
+  },
+  "hk_fina_indicator": {
+    "snapshot": true,
+    "primary_key": [
+      "ts_code",
+      "end_date",
+      "report_type"
+    ],
+    "note": "提供方即使显式请求仍不返回ind_type，按证券、报告期和实际报告类型区分"
+  },
+  "us_fina_indicator": {
+    "text_fields": [
+      "financial_date"
+    ],
+    "note": "financial_date是年结月日，如9-26，不是完整日期"
+  },
+  "income": {
+    "primary_key": [
+      "ts_code",
+      "end_date",
+      "ann_date",
+      "f_ann_date",
+      "report_type",
+      "comp_type",
+      "update_flag"
+    ],
+    "note": "官方update_flag区分同时返回的原始/更新报表；保留两个版本，不自动挑选历史可见版本"
+  },
+  "income_vip": {
+    "primary_key": [
+      "ts_code",
+      "end_date",
+      "ann_date",
+      "f_ann_date",
+      "report_type",
+      "comp_type",
+      "update_flag"
+    ],
+    "note": "官方update_flag区分同时返回的原始/更新报表；保留两个版本，不自动挑选历史可见版本"
+  },
+  "balancesheet": {
+    "primary_key": [
+      "ts_code",
+      "end_date",
+      "ann_date",
+      "f_ann_date",
+      "report_type",
+      "comp_type",
+      "update_flag"
+    ],
+    "note": "官方update_flag区分同时返回的原始/更新报表；保留两个版本，不自动挑选历史可见版本"
+  },
+  "balancesheet_vip": {
+    "primary_key": [
+      "ts_code",
+      "end_date",
+      "ann_date",
+      "f_ann_date",
+      "report_type",
+      "comp_type",
+      "update_flag"
+    ],
+    "note": "官方update_flag区分同时返回的原始/更新报表；保留两个版本，不自动挑选历史可见版本"
+  },
+  "cashflow": {
+    "primary_key": [
+      "ts_code",
+      "end_date",
+      "ann_date",
+      "f_ann_date",
+      "report_type",
+      "comp_type",
+      "update_flag"
+    ],
+    "note": "官方update_flag区分同时返回的原始/更新报表；保留两个版本，不自动挑选历史可见版本"
+  },
+  "cashflow_vip": {
+    "primary_key": [
+      "ts_code",
+      "end_date",
+      "ann_date",
+      "f_ann_date",
+      "report_type",
+      "comp_type",
+      "update_flag"
+    ],
+    "note": "官方update_flag区分同时返回的原始/更新报表；保留两个版本，不自动挑选历史可见版本"
+  },
+  "disclosure_date": {
+    "date_list_fields": [
+      "modify_date"
+    ],
+    "note": "官方定义为披露日期修正记录，提供方以逗号分隔多个日期，标准层保留全部修正日期"
+  },
+  "fina_indicator": {
+    "primary_key": [
+      "ts_code",
+      "ann_date",
+      "end_date",
+      "update_flag"
+    ],
+    "note": "更新标识区分同一公告和报告期的指标版本，完整保留，不自动选择历史可见版本"
+  },
+  "fina_indicator_vip": {
+    "primary_key": [
+      "ts_code",
+      "ann_date",
+      "end_date",
+      "update_flag"
+    ],
+    "note": "更新标识区分同一公告和报告期的指标版本，完整保留，不自动选择历史可见版本"
+  },
+  "fund_manager": {
+    "nullable_keys": [
+      "begin_date"
+    ],
+    "note": "任职日期可能未披露，保留空值，以基金、经理、公告日及实际任职日区分；冲突仍隔离"
+  },
+  "hk_daily": {
+    "rate_per_minute": 0.016666666666666666,
+    "cooldown_seconds": 3600,
+    "partition_strategy": "trade_date_full_market",
+    "note": "真实服务端先返回每分钟1次，随后明确返回每小时1次；正式请求采用已观察到的更严格频率"
+  }
+}

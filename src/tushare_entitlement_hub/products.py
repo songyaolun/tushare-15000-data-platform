@@ -7,6 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from .access import readable_policy
 from .coverage import coverage_report
 from .models import ENABLED, PRODUCTS
 from .pit import as_of
@@ -86,9 +87,17 @@ def build_products(
     destination.mkdir(parents=True, exist_ok=True)
     grouped: dict[str, dict[str, list[dict[str, Any]]]] = {key: {} for key in PRODUCTS}
     for entry in store.catalog():
-        if entry.lifecycle not in ENABLED or entry.policy is None:
+        if entry.policy is None or (source != "live" and entry.lifecycle not in ENABLED):
             continue
-        visible = as_of(store.rows(entry.api_name, source), cutoff, entry.policy.primary_key)
+        if source == "live":
+            try:
+                readable_policy(entry)
+            except ValueError:
+                continue
+        records = store.rows(entry.api_name, source)
+        if not records:
+            continue
+        visible = as_of(records, cutoff, entry.policy.primary_key)
         if not visible:
             continue
         for consumer in entry.policy.consumers:

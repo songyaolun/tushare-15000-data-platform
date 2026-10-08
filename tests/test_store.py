@@ -26,23 +26,30 @@ def test_model_serialization(entry, policy):
 
 
 def test_catalog_merge_and_probe_lifecycle(store, entry):
-    """场景：重复发现与探活结果；预期：不丢证据，fixture不变权限。例：live拒绝 → blocked。"""
+    """场景：文档同步和账户探测；预期：运行结果不改文档生命周期，历史证据保留。"""
     entry.evidence = [{"source": "old"}]
     store.save_catalog([entry])
     store.record_probe(entry.api_name, OBS, "fixture", "unauthorized", {})
     assert store.catalog()[0].lifecycle == "production"
     store.record_probe(entry.api_name, OBS, "live", "unauthorized", {})
-    assert store.catalog()[0].lifecycle == "blocked"
+    assert store.catalog()[0].lifecycle == "production"
     newer = replace(entry, evidence=[{"source": "new"}], minimum_points=3000)
     store.save_catalog([newer])
     saved = store.catalog()[0]
-    assert saved.lifecycle == "blocked" and saved.needs_review
+    assert saved.lifecycle == "production" and saved.needs_review
     assert saved.evidence == [{"source": "new"}, {"source": "old"}]
     store.record_probe(entry.api_name, OBS, "live", "available", {})
     assert store.catalog()[0].lifecycle == "production"
+
+
+def test_explicit_scope_block_survives_catalog_refresh(store, entry):
+    """场景：既有明确范围阻断后同步研究政策；预期：不会静默解除原始范围决策。"""
+    store.save_catalog([replace(entry, lifecycle="blocked")])
+    store.save_catalog([entry])
+    assert store.catalog()[0].lifecycle == "blocked"
     store.record_probe("missing", OBS, "live", "empty", {})
     store.record_probe(entry.api_name, OBS, "live", "transient_failure", {})
-    assert store.catalog()[0].lifecycle == "production"
+    assert store.catalog()[0].lifecycle == "blocked"
 
 
 def test_transactions_versions_watermarks_and_export(store, entry, policy, tmp_path):
