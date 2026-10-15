@@ -108,6 +108,24 @@ def test_research_config_requires_object_audit(encoded):
         ResearchConfig(binding_audit_json=encoded)
 
 
+def test_scope_certificates_require_json_list_and_match_exact_dates():
+    """场景：证书 JSON 非列表、通过日期及旧接口级范围；预期：拒绝坏结构并精确匹配。"""
+    with pytest.raises(ValueError, match="invalid_binding_audit"):
+        ResearchConfig(scope_certificates_json="{}")
+    config = ResearchConfig(
+        scope_certificates_json=(
+            '[{"api_name":"daily","parameter_dates":{"trade_date":["2026-10-09"]},'
+            '"status":"certified"}]'
+        ),
+        complete_scopes=("trade_cal",),
+    )
+    assert config.scope_complete("daily")
+    assert config.scope_complete("daily", data_as_of="2026-10-09")
+    assert not config.scope_complete("daily", data_as_of="2026-10-08")
+    assert config.scope_complete("trade_cal")
+    assert not config.scope_complete("trade_cal", data_as_of="2026-10-09")
+
+
 def test_index_listing_date_is_public_time_evidence():
     """指数上市日兼作公开日期证据，防止尚未上市指数提前使用。
 

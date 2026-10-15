@@ -12,6 +12,7 @@ from .access import PRIVATE_APIS, WRITE_APIS, bind_account, latest_probe, readab
 from .client import Client
 from .ingest import probe
 from .quality import audit_rows
+from .raw import read_raw_envelope
 from .standard import normalize_rows
 from .store import Store, encode
 
@@ -23,7 +24,7 @@ def sample_product(record: dict[str, Any], store: Store, destination: Path) -> d
     示例：返回了数据但缺少必需字段时，原始样本可读、quality 状态仍为待处理。
     """
     entry = next(entry for entry in store.catalog() if entry.api_name == record["api_name"])
-    envelope = json.loads(Path(record["evidence"]["raw_path"]).read_text(encoding="utf-8"))
+    envelope = read_raw_envelope(Path(record["evidence"]["raw_path"]))
     data = envelope["response"]["data"]
     rows = [dict(zip(data["fields"], values, strict=True)) for values in data["items"]]
     policy = readable_policy(entry)

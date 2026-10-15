@@ -28,7 +28,7 @@ from ..equity_research.models import ResearchConfig
 from ..product_foundation.bindings import TimeMapping
 from ..product_foundation.registry import ConsumerSpec
 from ..reference_contract import ReferenceContract, load_reference_contracts
-from ..reference_storage import file_checksum
+from ..reference_storage import reference_fingerprint
 from ..standard import is_standard_numeric_field, normalize_timestamp
 from ..store import digest, encode
 from .binding_rules import (
@@ -312,7 +312,7 @@ def build_config(
             if expected is not None:
                 dates[api] = expected
     check_paths(reference)
-    if file_checksum(reference) != before:
+    if reference_fingerprint(reference) != before:
         raise ValueError("reference_changed_during_read")
     all_entities = {item.identity.entity_id: item for item in legacy.config.foundation.entities}
     all_entities.update({item.identity.entity_id: item for item in entities.entities})
@@ -337,6 +337,16 @@ def build_config(
         ),
         maximum_source_rows=limits.maximum_source_rows,
         maximum_total_rows=limits.maximum_total_rows,
+        scope_certificates_json=encode(
+            [
+                *legacy.config.scope_certificates,
+                *(
+                certificate
+                for api in sorted(manifests)
+                for certificate in manifests[api].get("scope_certificates", [])
+                ),
+            ]
+        ),
         binding_audit_json="{}",
     )
     configuration_fingerprint = configuration_hash(config)

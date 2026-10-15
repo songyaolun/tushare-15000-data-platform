@@ -1251,7 +1251,7 @@ def test_initialization_detects_source_file_change_during_read(tmp_path, monkeyp
 
     reference = reference_fixture(tmp_path)
     output = tmp_path / "products.duckdb"
-    original_checksum = reference_module.file_checksum
+    original_checksum = reference_module.reference_fingerprint
     calls = 0
 
     def checksum_after_external_change(path):
@@ -1263,7 +1263,7 @@ def test_initialization_detects_source_file_change_during_read(tmp_path, monkeyp
                 handle.write(b"external-change")
         return original_checksum(path)
 
-    monkeypatch.setattr(reference_module, "file_checksum", checksum_after_external_change)
+    monkeypatch.setattr(reference_module, "reference_fingerprint", checksum_after_external_change)
     with pytest.raises(ValueError, match="reference_changed_during_read"):
         initialize_library(reference, output, NOW, FoundationPolicy(version="v1"))
     assert calls == 2

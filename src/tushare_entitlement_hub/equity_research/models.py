@@ -52,6 +52,7 @@ class ResearchConfig(Model):
     peer_paths: dict[EntityId, tuple[Identifier, ...]] = field(default_factory=dict)
     certified_report_types: tuple[Identifier, ...] = ()
     complete_scopes: tuple[Identifier, ...] = ()
+    scope_certificates_json: str = "[]"
     confirmed_relations: tuple[EntityRelation, ...] = ()
     maximum_rows_per_entity_source: Count = 512
     maximum_source_rows: Count = 32768
@@ -64,7 +65,12 @@ class ResearchConfig(Model):
         输入合法配置得到不可变认证边界，complete_scopes须使用API名称。
         """
         super().__post_init__()
-        if not isinstance(json.loads(self.binding_audit_json), dict):
+        certificates = json.loads(self.scope_certificates_json)
+        if (
+            not isinstance(json.loads(self.binding_audit_json), dict)
+            or not isinstance(certificates, list)
+            or any(not isinstance(item, dict) for item in certificates)
+        ):
             raise ValueError("invalid_binding_audit")
         if (
             self.version != RULE_VERSION
@@ -108,6 +114,33 @@ class ResearchConfig(Model):
         """
         result: dict[str, Any] = json.loads(self.binding_audit_json)
         return result
+
+    @property
+    def scope_certificates(self) -> tuple[dict[str, Any], ...]:
+        """返回逐请求范围证书的独立副本，不把接口名当成完整范围。
+
+        输入配置内规范 JSON，输出证书元组；默认配置返回空元组。调用方修改返回字典不会
+        改变已序列化配置。示例：一个 daily 证书得到长度为 1 的元组。
+        """
+        return tuple(dict(item) for item in json.loads(self.scope_certificates_json))
+
+    def scope_complete(
+        self, api_name: str, *, data_as_of: str | None = None, date_field: str = "trade_date",
+    ) -> bool:
+        """判断接口的明确请求范围是否已有认证，日期存在时要求证书覆盖该日。
+
+        ``scope_complete('daily', data_as_of='2026-10-09')`` 只在某张 certified 证书的
+        ``trade_date`` 列表含该日时返回 True。无日期请求不得借接口名推断全历史完整；
+        旧 ``complete_scopes`` 只在未指定日期时保留兼容语义。
+        """
+        for certificate in self.scope_certificates:
+            if certificate.get("api_name") != api_name or certificate.get("status") != "certified":
+                continue
+            if data_as_of is None:
+                return True
+            if data_as_of in certificate.get("parameter_dates", {}).get(date_field, []):
+                return True
+        return data_as_of is None and api_name in self.complete_scopes
 
 
 @dataclass(frozen=True, kw_only=True)

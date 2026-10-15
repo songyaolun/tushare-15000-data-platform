@@ -421,7 +421,7 @@ def test_changed_reference_and_undeclared_public_field_fail_build(tmp_path, monk
     reference = write_all_reference(
         tmp_path, {"fund_share": [{"ts_code": "F", "trade_date": "20261002", "fd_share": 1}]}
     )
-    monkeypatch.setattr(bindings, "file_checksum", Mock(return_value="changed"))
+    monkeypatch.setattr(bindings, "reference_fingerprint", Mock(return_value="changed"))
     with pytest.raises(ValueError, match="reference_changed_during_read"):
         build_config(reference, AS_OF)
     monkeypatch.undo()

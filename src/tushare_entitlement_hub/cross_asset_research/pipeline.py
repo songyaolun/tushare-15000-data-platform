@@ -15,7 +15,7 @@ from ..equity_research.projection import RESEARCH_TABLES, accumulate_records
 from ..equity_research.staging import _version, research_snapshot
 from ..equity_research.storage import _stored_records, initialize_tables, save_results
 from ..product_foundation.progress import ProgressCallback
-from ..reference_storage import file_checksum
+from ..reference_storage import reference_fingerprint
 from ..standard import normalize_timestamp
 from ..store import encode
 from .execution import ExecutionState, RunLimits, execute
@@ -52,7 +52,7 @@ def run(
     cutoff = normalize_timestamp(as_of)
     products = select_products(selection)
     validate_handlers()
-    reference_hash = file_checksum(reference)
+    reference_hash = reference_fingerprint(reference)
     verify_binding_audit(config, reference_hash, cutoff)
     run_id = identity(reference_hash, cutoff, config, products, holdings, limits)
     saved_bytes = 0
@@ -142,7 +142,7 @@ def run(
             str(work.path), read_only=True, config={"threads": 1, "memory_limit": "512MB"}
         ) as connection:
             summary = verify_saved(connection, metadata)
-        if file_checksum(reference) != reference_hash:
+        if reference_fingerprint(reference) != reference_hash:
             raise ValueError("reference_changed_during_read")
         if unchanged_current:
             if _version(work.output) != work.version or (

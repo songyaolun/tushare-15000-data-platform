@@ -20,7 +20,7 @@ from ..equity_research.projection import (
     project_result,
 )
 from ..equity_research.storage import _stored_records, _verify_keys
-from ..reference_storage import file_checksum
+from ..reference_storage import reference_fingerprint
 from ..store import digest
 from .execution import ExecutionState, RunLimits, execute
 from .registry import NEW_PRODUCTS, PRODUCTS, VERSION, fingerprint, select_products
@@ -198,7 +198,7 @@ def validate(reference: Path, output: Path) -> dict[str, Any]:
     try:
         if reference.resolve() == output.resolve():
             raise ValueError("input_output_path_collision")
-        reference_hash = file_checksum(reference)
+        reference_hash = reference_fingerprint(reference)
         summaries = []
         with duckdb.connect(
             str(output), read_only=True, config={"threads": 1, "memory_limit": "512MB"}
@@ -235,7 +235,7 @@ def validate(reference: Path, output: Path) -> dict[str, Any]:
                 ).fetchone()
                 if orphan is None or orphan[0]:
                     raise ValueError("all_products_orphan_record")
-        if file_checksum(reference) != reference_hash:
+        if reference_fingerprint(reference) != reference_hash:
             raise ValueError("all_products_reference_changed")
         return {
             "valid": True,

@@ -12,7 +12,7 @@ import duckdb
 
 from ..product_foundation.config import validate_batch_size
 from ..product_foundation.progress import ProgressCallback
-from ..reference_storage import file_checksum
+from ..reference_storage import reference_fingerprint
 from ..store import digest, encode
 from .consumption import count_consumption, summarize_consumption, validate_result_consumption
 from .consumption_registry import (
@@ -539,7 +539,7 @@ def validate_research(reference_path: Path, product_path: Path) -> dict[str, Any
     try:
         if reference_path.resolve() == product_path.resolve():
             raise ValueError("input_output_path_collision")
-        reference_hash = file_checksum(reference_path)
+        reference_hash = reference_fingerprint(reference_path)
         with duckdb.connect(
             str(product_path), read_only=True, config={"threads": 1, "memory_limit": "512MB"}
         ) as connection:

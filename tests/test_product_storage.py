@@ -57,7 +57,7 @@ def reference_fixture(tmp_path, *, quarantined=False):
         "quality": quality,
         **published,
     }
-    return publish_library(root, [manifest])
+    return publish_library(root, [manifest], materialize=True)
 
 
 def bindings():
