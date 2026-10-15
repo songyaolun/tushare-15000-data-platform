@@ -20,10 +20,47 @@ from .execution import RunLimits
 from .pipeline import run as run_products
 from .registry import PRODUCTS
 from .storage import validate as validate_products
+from .theme_release import build_theme_release, publish_theme_release, validate_theme_release
 
-all_products_app = typer.Typer(
-    help="离线运行默认十三产品，并支持P03S/P03M/P03L三个显式独立排名。"
-)
+all_products_app = typer.Typer(help="离线运行默认十三产品，并支持P03S/P03M/P03L三个显式独立排名。")
+
+
+@all_products_app.command("p02-build")
+def p02_build(
+    reference: Annotated[Path, typer.Option(help="只读 reference 数据库")],
+    output: Annotated[Path, typer.Option(help="P02 不可变 release 根目录")],
+    trade_date: Annotated[str | None, typer.Option(help="不晚于该日的最新交易日")] = None,
+) -> None:
+    """构建七因子主题主榜、价格扩散榜和证据关系，并原子更新 current 指针。
+
+    示例：``research-all p02-build --reference reference.duckdb --output data/p02
+    --trade-date 2026-10-09``。范围未就绪时正常发布空主榜和辅助榜，退出码为 2。
+    """
+    try:
+        release = build_theme_release(reference, trade_date)
+        manifest = publish_theme_release(output, release)
+    except (ValueError, OSError, duckdb.Error, KeyError, TypeError):
+        typer.echo(encode({"status": "failed", "reason_codes": ["p02_build_failed"]}))
+        raise typer.Exit(1) from None
+    typer.echo(encode(manifest))
+    if manifest["readiness"]["status"] != "ready":
+        raise typer.Exit(2)
+
+
+@all_products_app.command("p02-validate")
+def p02_validate(
+    reference: Annotated[Path, typer.Option(help="构建 release 使用的统一 reference")],
+    output: Annotated[Path, typer.Option(help="P02 release 根目录")],
+) -> None:
+    """复核 P02 当前 release 的文件、来源、排名门禁和证据关系。
+
+    示例：``research-all p02-validate --reference ref.duckdb --output data/p02``；
+    全部通过返回退出码 0，任一检查失败返回 1。
+    """
+    result = validate_theme_release(reference, output)
+    typer.echo(encode(result))
+    if not result["valid"]:
+        raise typer.Exit(1)
 
 
 @all_products_app.command("build-config")
@@ -34,9 +71,7 @@ def build_config(
     audit: Annotated[Path | None, typer.Option(help="独立逐接口审计 JSON")] = None,
     maximum_source_rows: Annotated[int, typer.Option()] = 2_000_000,
     maximum_total_rows: Annotated[int, typer.Option()] = 5_000_000,
-    maximum_entities: Annotated[
-        int, typer.Option(help="跨市场主数据实体条数硬上限")
-    ] = 500_000,
+    maximum_entities: Annotated[int, typer.Option(help="跨市场主数据实体条数硬上限")] = 500_000,
 ) -> None:
     """只读生成 206 接口绑定，先写审计再原子替换配置，配置作为提交标记。
 

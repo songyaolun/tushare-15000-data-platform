@@ -364,6 +364,7 @@ def source_manifests(
         'contract_hash', manifest::JSON->>'contract_hash',
         'observed_at', manifest::JSON->>'observed_at',
         'collection_status', manifest::JSON->>'collection_status',
+        'scope_certificates', coalesce(manifest::JSON->'scope_certificates', '[]'::JSON),
         'quality', json_object(
             'source_rows', manifest::JSON->'quality'->'source_rows',
             'accepted_rows', manifest::JSON->'quality'->'accepted_rows',

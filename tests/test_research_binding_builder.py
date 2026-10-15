@@ -365,7 +365,7 @@ def test_builder_detects_reference_change_before_any_output(tmp_path, monkeypatc
 
     reference = write_reference(tmp_path)
     checksum = Mock(side_effect=["first", "second"])
-    monkeypatch.setattr(binding_builder, "file_checksum", checksum)
+    monkeypatch.setattr(binding_builder, "reference_fingerprint", checksum)
     output = tmp_path / "unwritten/config.json"
     with pytest.raises(ValueError, match="reference_changed_during_read"):
         binding_builder.write_research_config(reference, output, AS_OF)
@@ -508,7 +508,7 @@ def test_write_checks_reference_again_after_finished_build(tmp_path, monkeypatch
 
     reference = write_reference(tmp_path)
     checksum = Mock(side_effect=["first", "first", "changed"])
-    monkeypatch.setattr(binding_builder, "file_checksum", checksum)
+    monkeypatch.setattr(binding_builder, "reference_fingerprint", checksum)
     output = tmp_path / "unwritten/config.json"
     with pytest.raises(ValueError, match="reference_changed_during_read"):
         binding_builder.write_research_config(reference, output, AS_OF)

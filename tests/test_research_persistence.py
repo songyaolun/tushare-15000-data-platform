@@ -199,12 +199,12 @@ def test_reference_contract_damage_is_visible(libraries, scenario):
 def test_read_change_and_transaction_failure_leave_no_partial_results(libraries, monkeypatch):
     """场景：扫描时输入改变或写事务后校验失败；预期：拒绝快照并回滚所有本次写入。"""
     reference, output, config = libraries
-    original_checksum = pipeline.file_checksum
+    original_checksum = pipeline.reference_fingerprint
     checks = iter(["first", "changed"])
-    monkeypatch.setattr(pipeline, "file_checksum", lambda _: next(checks))
+    monkeypatch.setattr(pipeline, "reference_fingerprint", lambda _: next(checks))
     with pytest.raises(ValueError, match="reference_changed_during_read"):
         run_research(reference, output, AS_OF, config, ("P01",))
-    monkeypatch.setattr(pipeline, "file_checksum", original_checksum)
+    monkeypatch.setattr(pipeline, "reference_fingerprint", original_checksum)
 
     def reject_saved_run(*args, **kwargs):
         """模拟事务内校验失败；例：写入后抛出ValueError，验证ROLLBACK的实际数据状态。"""

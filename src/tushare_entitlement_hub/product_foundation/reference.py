@@ -12,7 +12,7 @@ import duckdb
 from ..catalog import load_policies
 from ..pit import time_boundary
 from ..reference_contract import ReferenceContract, load_reference_contracts
-from ..reference_storage import file_checksum
+from ..reference_storage import reference_fingerprint
 from ..standard import normalize_timestamp
 from ..store import digest, encode
 from .bindings import FoundationBindings
@@ -126,7 +126,7 @@ def initialize_library(
     validate_registry(entries, contracts)
     inputs = FoundationBindings() if bindings is None else bindings
     processing.emit("reference_fingerprint")
-    reference_hash = file_checksum(reference_path)
+    reference_hash = reference_fingerprint(reference_path)
     run_id = digest([reference_hash, cutoff, policy.to_dict(), inputs.to_dict(), REGISTRY_VERSION])
     binding_sources = {
         "entity_mapping_missing": {item.source_api for item in inputs.entity_mappings},
@@ -248,7 +248,7 @@ def initialize_library(
                 batch_size=policy.fact_batch_size,
             )
             processing.emit("verify_reference_fingerprint")
-            if file_checksum(reference_path) != reference_hash:
+            if reference_fingerprint(reference_path) != reference_hash:
                 raise ValueError("reference_changed_during_read")
             summary = {
                 "schema_version": "product-foundation/v1",

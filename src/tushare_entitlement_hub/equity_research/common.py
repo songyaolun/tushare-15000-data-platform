@@ -137,11 +137,13 @@ def make_result(
     predicate_results: dict[str, Truth] | None = None,
     entry_conditions: tuple[Predicate, ...] = (),
     invalidation_conditions: tuple[Predicate, ...] = (),
+    readiness_certified: bool = False,
 ) -> ResearchResult:
     """构造统一研究信封与业务扩展，硬失败或未知均禁用研究资格。
 
     例：无价格门禁为FALSE时state=blocked；缺财务特征时state=incomplete。
-    所有结果默认只供观察；P03可在完成分组排名与门禁后显式开启人工研究。
+    所有结果默认只供观察；调用方只有持有逐产品完整范围证书时才可将
+    ``readiness_certified`` 设为 True，使无其他缺口的结果进入 READY。
     """
     values, checks, components = tuple(metrics), tuple(gates), tuple(contributions)
     evidence = unique_evidence(
@@ -161,7 +163,13 @@ def make_result(
     state = (
         ProductState.BLOCKED
         if blocked
-        else (ProductState.INCOMPLETE if incomplete else ProductState.ANNOTATED)
+        else (
+            ProductState.INCOMPLETE
+            if incomplete
+            else ProductState.READY
+            if readiness_certified
+            else ProductState.ANNOTATED
+        )
     )
     codes.add("historical_pit_uncertified")
     used_records = {(ref.source_api, ref.source_record_id) for ref in evidence}

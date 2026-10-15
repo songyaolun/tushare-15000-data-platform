@@ -377,7 +377,7 @@ def test_reference_mutation_during_run_prevents_publication(tmp_path, monkeypatc
     config = build_config(reference, AS_OF).config
     actual = file_checksum(reference)
     calls = iter((actual, "changed"))
-    monkeypatch.setattr(pipeline, "file_checksum", lambda path: next(calls))
+    monkeypatch.setattr(pipeline, "reference_fingerprint", lambda path: next(calls))
     output = tmp_path / "products.duckdb"
     with pytest.raises(ValueError, match="reference_changed_during_read"):
         pipeline.run(reference, output, AS_OF, config, ("P05",))

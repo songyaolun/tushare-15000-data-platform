@@ -29,7 +29,7 @@ from ..product_foundation.entities import resolve_alias
 from ..product_foundation.numeric import UnitCertification
 from ..product_foundation.progress import ProgressCallback
 from ..reference_contract import ReferenceContract, load_reference_contracts
-from ..reference_storage import file_checksum
+from ..reference_storage import reference_fingerprint
 from ..standard import restore_standard_numeric_text
 from ..store import digest, encode
 from .binding_rules import (
@@ -227,7 +227,7 @@ def load_inputs(
     contracts = load_reference_contracts(load_policies())
     currency_fields = config.binding_audit.get("row_currency_fields", {})
     if currency_fields:
-        verify_binding_audit(config, file_checksum(reference_path), cutoff)
+        verify_binding_audit(config, reference_fingerprint(reference_path), cutoff)
     selected_apis = SOURCE_APIS if source_apis is None else source_apis
     if not isinstance(selected_apis, frozenset) or not selected_apis <= SOURCE_APIS:
         raise ValueError("input_source_selection_invalid")

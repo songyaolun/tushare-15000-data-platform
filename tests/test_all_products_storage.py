@@ -202,5 +202,5 @@ def test_validate_rechecks_reference_after_replay(stored, monkeypatch):
     """场景：重放之后来源文件指纹改变；预期：不将读到两个快照的验证记为成功。"""
     reference, output, metadata = stored
     checks = iter((metadata["reference_sha256"], "changed"))
-    monkeypatch.setattr(storage, "file_checksum", lambda path: next(checks))
+    monkeypatch.setattr(storage, "reference_fingerprint", lambda path: next(checks))
     assert not storage.validate(reference, output)["valid"]

@@ -357,6 +357,17 @@ def test_result_without_evidence_is_incomplete():
     assert result.envelope.score is None
 
 
+def test_result_becomes_ready_only_with_explicit_readiness_certificate():
+    """场景：完整证据分别未声明和已声明产品就绪；预期：前者 annotated、后者 ready。"""
+    references = source().evidence("amount")
+    annotated = make_result(inputs(), "test/v1", IDENTITY, references=references)
+    ready = make_result(
+        inputs(), "test/v1", IDENTITY, references=references, readiness_certified=True
+    )
+    assert annotated.envelope.state is ProductState.ANNOTATED
+    assert ready.envelope.state is ProductState.READY
+
+
 def test_result_contributions_lineage_and_json_roundtrip():
     """场景：带贡献、三值谓词、父结果、来源缺口的完整结果；预期：加总正确且可无损回放。"""
     row = source()

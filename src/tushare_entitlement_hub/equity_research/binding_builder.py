@@ -17,7 +17,7 @@ from ..product_foundation.numeric import UnitCertification
 from ..product_foundation.reference_scan import map_availability
 from ..product_foundation.temporal import AvailabilityFact
 from ..reference_contract import ReferenceContract, load_reference_contracts
-from ..reference_storage import file_checksum
+from ..reference_storage import reference_fingerprint
 from ..standard import normalize_timestamp
 from ..store import digest, encode
 from .adapter import inspect_research_source
@@ -291,7 +291,7 @@ def build_research_config(
     """
     check_paths(reference_path)
     cutoff = normalize_timestamp(analysis_as_of)
-    before = file_checksum(reference_path)
+    before = reference_fingerprint(reference_path)
     contracts = load_reference_contracts(load_policies())
     mappings = time_registry(contracts)
     by_api = {mapping.source_api: mapping for mapping in mappings}
@@ -330,6 +330,7 @@ def build_research_config(
             'contract_hash', manifest::JSON->>'contract_hash',
             'observed_at', manifest::JSON->>'observed_at',
             'collection_status', manifest::JSON->>'collection_status',
+            'scope_certificates', coalesce(manifest::JSON->'scope_certificates', '[]'::JSON),
             'quality', json_object(
                 'source_rows', manifest::JSON->'quality'->'source_rows',
                 'accepted_rows', manifest::JSON->'quality'->'accepted_rows',
@@ -399,7 +400,7 @@ def build_research_config(
             if expected is not None:
                 expected_dates[api] = expected
     check_paths(reference_path)
-    if file_checksum(reference_path) != before:
+    if reference_fingerprint(reference_path) != before:
         raise ValueError("reference_changed_during_read")
     for api, entity_reasons in entities.reasons.items():
         sources[api]["reason_counts"] = dict(
@@ -417,6 +418,13 @@ def build_research_config(
         ),
         peer_paths=entities.peers,
         confirmed_relations=tuple(entities.relations),
+        scope_certificates_json=encode(
+            [
+                certificate
+                for api in sorted(manifests)
+                for certificate in manifests[api].get("scope_certificates", [])
+            ]
+        ),
     )
     audit = {
         "version": BINDING_VERSION,
@@ -499,7 +507,7 @@ def write_research_config(
     check_paths(reference_path, output_path, report_path)
     result = build_research_config(reference_path, analysis_as_of, limits=limits)
     check_paths(reference_path, output_path, report_path)
-    if file_checksum(reference_path) != result.audit["reference_sha256"]:
+    if reference_fingerprint(reference_path) != result.audit["reference_sha256"]:
         raise ValueError("reference_changed_during_read")
     publish_files(
         ((report_path, encode(result.audit) + "\n"), (output_path, result.config.to_json() + "\n"))

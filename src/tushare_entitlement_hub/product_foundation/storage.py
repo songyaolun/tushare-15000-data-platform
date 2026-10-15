@@ -12,7 +12,7 @@ from typing import Any, Self
 import duckdb
 
 from ..pit import time_boundary
-from ..reference_storage import file_checksum
+from ..reference_storage import reference_fingerprint
 from ..store import digest, encode
 from .batch_io import (
     batches,
@@ -528,7 +528,7 @@ def validate_library(reference_path: Path, product_path: Path) -> dict[str, Any]
         ):
             raise ValueError("input_output_path_collision")
         with ProductStore(product_path, read_only=True) as store:
-            if store.metadata("reference_sha256") != file_checksum(reference_path):
+            if store.metadata("reference_sha256") != reference_fingerprint(reference_path):
                 raise ValueError("reference_changed")
             store.verify_contents()
             summary = store.verify_snapshot({entry.api for entry in entries})

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -96,6 +97,23 @@ def canonical_json(value: Any) -> str:
     return result
 
 
+def read_raw_envelope(path: Path) -> dict[str, Any]:
+    """读取旧 JSON 或新 gzip 原始信封，并重新执行公开数据检查。
+
+    输入 ``raw/daily/response.json`` 或 ``response.json.gz``，输出原始信封字典；
+    压缩内容损坏、顶层不是对象或含凭据字段时抛出异常，不返回部分数据。
+    示例：``read_raw_envelope(Path("page.json.gz"))["api_name"]`` 返回 ``daily``。
+    """
+    encoded = path.read_bytes()
+    if path.suffix == ".gz":
+        encoded = gzip.decompress(encoded)
+    decoded = json.loads(encoded)
+    if not isinstance(decoded, dict):
+        raise ValueError("原始响应信封必须是 JSON 对象")
+    assert_public(decoded)
+    return decoded
+
+
 @dataclass(frozen=True)
 class RawRecord:
     """一次经读回校验的观测，response 保留提供方原始字段和单位。"""
@@ -110,12 +128,16 @@ class RawRecord:
 class RawStore:
     """基于内容哈希路径保存响应；相同观测可幂等重放，不覆盖其他观测。"""
 
-    def __init__(self, root: Path) -> None:
-        """设置原始响应根目录，构造时不创建文件。
+    def __init__(self, root: Path, *, compression: str = "none") -> None:
+        """设置原始响应根目录和持久化压缩格式，构造时不创建文件。
 
-        示例：RawStore(Path('/tmp/raw')).root 返回 Path('/tmp/raw')。
+        ``compression='gzip'`` 使用确定性 gzip 保存，``none`` 兼容旧 JSON。
+        示例：``RawStore(Path('/tmp/raw'), compression='gzip').compression`` 返回 ``gzip``。
         """
+        if compression not in {"none", "gzip"}:
+            raise ValueError("原始响应压缩格式无效")
         self.root = Path(root)
+        self.compression = compression
 
     def write(
         self, api_name: str, params: dict[str, Any], response: dict[str, Any], observed_at: str
@@ -146,7 +168,13 @@ class RawStore:
         content_hash = hashlib.sha256(encoded).hexdigest()
         directory = self.root / api_name / request_id
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"{content_hash}.json"
+        suffix = ".json.gz" if self.compression == "gzip" else ".json"
+        path = directory / f"{content_hash}{suffix}"
+        persisted = (
+            gzip.compress(encoded, compresslevel=6, mtime=0)
+            if self.compression == "gzip"
+            else encoded
+        )
         temporary: Path | None = None
         try:
             if not path.exists():
@@ -154,7 +182,7 @@ class RawStore:
                     dir=directory, suffix=".tmp", delete=False
                 ) as stream:
                     temporary = Path(stream.name)
-                    stream.write(encoded)
+                    stream.write(persisted)
                     stream.flush()
                     os.fsync(stream.fileno())
                 os.replace(temporary, path)
@@ -162,9 +190,11 @@ class RawStore:
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
-        if stored != encoded or hashlib.sha256(stored).hexdigest() != content_hash:
+        if stored != persisted:
             raise ValueError("原始响应读回校验失败")
-        decoded: dict[str, Any] = json.loads(stored)
+        decoded = read_raw_envelope(path)
+        if hashlib.sha256(canonical_json(decoded).encode()).hexdigest() != content_hash:
+            raise ValueError("原始响应信封哈希不一致")
         stored_response: dict[str, Any] = decoded["response"]
         if hashlib.sha256(canonical_json(stored_response).encode()).hexdigest() != response_hash:
             raise ValueError("原始响应内容哈希不一致")

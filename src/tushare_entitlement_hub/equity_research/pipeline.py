@@ -11,7 +11,7 @@ import duckdb
 
 from ..product_foundation.contracts import Truth
 from ..product_foundation.progress import ProgressCallback
-from ..reference_storage import file_checksum
+from ..reference_storage import reference_fingerprint
 from ..standard import normalize_timestamp
 from ..store import encode
 from .adapter import load_inputs
@@ -101,7 +101,7 @@ def run_research(
     configured = config or ResearchConfig()
     validate_consumption_registry()
     requested, products = select_products(selection)
-    reference_hash = file_checksum(reference_path)
+    reference_hash = reference_fingerprint(reference_path)
     verify_binding_audit(configured, reference_hash, cutoff)
     run_id = run_identity(reference_hash, cutoff, configured, requested)
     if progress is not None:
@@ -147,7 +147,7 @@ def run_research(
 
             trace = PersistenceProgress("publish", progress, run_id)
             trace.operation = "reference_fingerprint"
-            if file_checksum(reference_path) != reference_hash:
+            if reference_fingerprint(reference_path) != reference_hash:
                 raise ValueError("reference_changed_during_read")
             work.publish(trace)
         except PersistenceError:
@@ -247,7 +247,7 @@ def _prepare_run(
         produced[product] = results
         if progress is not None:
             progress({"stage": "product_complete", "product_id": product, "results": len(results)})
-    if file_checksum(reference_path) != reference_hash:
+    if reference_fingerprint(reference_path) != reference_hash:
         raise ValueError("reference_changed_during_read")
     all_results = tuple(result for name in products for result in produced[name])
     consumption_counts: dict[str, Counter[str]] = {}

@@ -27,7 +27,7 @@ from .product_foundation.cli import foundation_app
 from .products import build_products
 from .quality import audit_rows
 from .raw import RawStore, assert_public
-from .reference import build_reference, rebuild_reference
+from .reference import build_reference, compose_reference, rebuild_reference
 from .store import Store, encode
 from .survey import survey
 
@@ -159,7 +159,7 @@ def open_client(
     """
     if live == (fixture is not None):
         raise ValueError("choose_exactly_one_fixture_or_live")
-    raw = RawStore(raw_directory)
+    raw = RawStore(raw_directory, compression="gzip")
     if fixture is not None:
         content = read_json(fixture)
         responses = content[entry.api_name] if isinstance(content, dict) else content
@@ -341,6 +341,20 @@ def reference_rebuild(
     输入发布目录，返回None并输出计数。不会读取凭据、发起网络请求或更新观察时间。
     """
     result = rebuild_reference(output, api_names=apis.split(",") if apis else None)
+    typer.echo(encode({"counts": result["counts"], "database": result["database"]}))
+
+
+@reference_app.command("compose")
+def reference_compose(
+    output: Annotated[Path, typer.Option(help="统一轻量 reference 根目录")],
+    source: Annotated[list[Path], typer.Option("--source", help="可重复指定来源 reference 根目录")],
+) -> None:
+    """零复制组合多个已校验参考库，生成统一 Parquet 视图和范围证书。
+
+    示例：``reference compose --source base --source p02-inputs --output unified``。
+    来源明细保持不可变，输出库只保存目录、视图和小型派生表。
+    """
+    result = compose_reference(output, source)
     typer.echo(encode({"counts": result["counts"], "database": result["database"]}))
 
 
