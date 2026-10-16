@@ -22,7 +22,7 @@ from .registry import PRODUCTS
 from .storage import validate as validate_products
 
 all_products_app = typer.Typer(
-    help="离线运行默认十三产品，并支持P03S/P03M/P03L三个显式独立排名。"
+    help="离线运行十三产品，P03提供统一右侧交易候选排名。"
 )
 
 

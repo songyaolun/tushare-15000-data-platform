@@ -12,17 +12,9 @@ from tushare_entitlement_hub.product_foundation.config import FoundationPolicy
 from tushare_entitlement_hub.product_foundation.features import PeerObservation, percentile_ranks
 
 
-@pytest.mark.parametrize(
-    "scenario,expected_calls,expected_fingerprint",
-    [
-        ("missing_risk", 4, "e4eca4ec886ed0c944735f0be374e4c1b96c9f156f6f2c01c6479f01487976af"),
-        ("zero_quality", 6, "3e5b9b90bb5a8fc304c94411dfa9d40b8d1b81ab57a49eb7a78dc3b45189effe"),
-    ],
-)
-def test_leave_one_factor_reuses_only_identical_populations(
-    monkeypatch, scenario, expected_calls, expected_fingerprint
-):
-    """真实P03中全缺失和零贡献场景少算相同输入，完整JSON与cb4e879保持一致，场景名称不丢失。"""
+@pytest.mark.parametrize("scenario", ["missing_risk", "zero_quality"])
+def test_unified_ranking_computes_five_factors_once_and_replays(monkeypatch, scenario):
+    """场景：统一P03证据缺失；预期：五因子和最终分位各算一次，不沿用旧删因子排名。"""
     context = research_inputs(4, minimum=2)
     groups = list(research_parents(context, quality=0 if scenario == "zero_quality" else 80))
     if scenario == "missing_risk":
@@ -31,27 +23,20 @@ def test_leave_one_factor_reuses_only_identical_populations(
     calls = []
 
     def counted(inputs, values, profile, **kwargs):
-        """记录真实分位调用输入并透传；例：基线与删除零贡献因子的值相同时只计算一次。"""
-        calls.append((profile, tuple(values.items())))
+        """记录每个真实同行分位调用；例：单档统一排名固定五个因子加一次最终分位。"""
+        calls.append(profile)
         return original(inputs, values, profile, **kwargs)
 
     monkeypatch.setattr(candidates, "percentiles", counted)
     results = candidates.build_candidates(context, *groups)
-    assert len(calls) == expected_calls
-    # 前三次分别生成PE、PB、amount分位；之后是基线及删因子场景。
-    assert len(calls[3:]) == len(set(calls[3:]))
-    assert candidate_fingerprint(results) == expected_fingerprint
-    for result in results:
-        assert set(result.details["leave_one_factor_ranks"]) == {
-            "quality_score",
-            "value_score",
-            "liquidity_score",
-        }
-    # 同一函数重入仍重新计算本次输入，不跨构建保留排名结果。
+    assert len(calls) == len(set(calls)) == 6
+    assert all("leave_one_factor_ranks" not in result.details for result in results)
+    assert all(result.envelope.score is None for result in results)
+    first_fingerprint = candidate_fingerprint(results)
     calls.clear()
     repeated = candidates.build_candidates(context, *groups)
-    assert len(calls) == expected_calls
-    assert [result.to_json() for result in repeated] == [result.to_json() for result in results]
+    assert len(calls) == 6
+    assert candidate_fingerprint(repeated) == first_fingerprint
 
 
 @pytest.mark.parametrize("lower_is_better", [False, True])

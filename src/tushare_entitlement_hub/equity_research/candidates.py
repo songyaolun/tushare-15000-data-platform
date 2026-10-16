@@ -1,50 +1,36 @@
-"""P03 当前截面候选排序；风险门禁、缺失档位与评分分别解释。"""
+"""统一 P03：只对已确认且入场不过度延伸的右侧候选排序。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from math import ceil, fsum, isfinite, log1p
-from typing import cast
+from dataclasses import replace
+from math import fsum, isfinite
 
 from ..product_foundation.contracts import (
     ActionState,
-    EvidenceRef,
     FeatureContribution,
     Predicate,
     ProductState,
-    QualityGateResult,
     Truth,
 )
-from ..product_foundation.numeric import price_gate
 from ..store import encode
-from .common import gate, latest, make_result, metric, percentiles, unique_evidence
-from .models import RULE_VERSION, ResearchInputs, ResearchResult
+from .common import gate, latest, make_result, metric, percentiles
+from .models import PRODUCT_IDS, RULE_VERSION, ResearchInputs, ResearchResult
+from .right_side_structure import observe_structure
+
+FACTORS = (
+    ("entry_risk", 0.30, True),
+    ("structural_reward_risk", 0.30, False),
+    ("amount_confirmation_ratio", 0.20, False),
+    ("large_flow_ratio", 0.10, False),
+    ("quality_score", 0.10, False),
+)
+PRICE_METRICS = frozenset(
+    {"entry_price", "confirmation_price", "invalidation_price", "historical_resistance"}
+)
 
 
-@dataclass(frozen=True)
-class _Candidate:
-    """计算中的候选证据集；例如 eligible=False 的证券不会进入因子分母。"""
-
-    profile: str
-    quality: float | None
-    pe: float | None
-    pb: float | None
-    amount: float | None
-    checks: tuple[QualityGateResult, ...]
-    references: tuple[EvidenceRef, ...]
-    parents: tuple[ResearchResult, ...]
-    eligible: bool
-    problem_flags: tuple[str, ...]
-    exclusion_reason: str | None
-
-
-def _index_parents(results: tuple[ResearchResult, ...]) -> dict[str, ResearchResult | None]:
-    """一次索引全部父结果，只保留每实体的唯一对象，重复实体标记为无效。
-
-    先判同实体条数，再由调用方校验截止；不去重相同对象，也不预先丢弃错截止父结果。
-    例：输入[A当前、A未来、B当前]返回{A: None, B: B当前}，A不能任选当前版本。
-    扫描时间与父条数成正比，后续查找为常量时间，不序列化或复制父模型。
-    """
+def index_parents(results: tuple[ResearchResult, ...]) -> dict[str, ResearchResult | None]:
+    """一次索引父结果，重复实体失败关闭；例：A出现两次返回{'A': None}。"""
     indexed: dict[str, ResearchResult | None] = {}
     for result in results:
         identity = result.envelope.entity_id
@@ -52,167 +38,23 @@ def _index_parents(results: tuple[ResearchResult, ...]) -> dict[str, ResearchRes
     return indexed
 
 
-def _parent_context(
-    inputs: ResearchInputs,
-    identity: str,
-    groups: tuple[dict[str, ResearchResult | None], ...],
-) -> tuple[tuple[ResearchResult, ...], tuple[QualityGateResult, ...], float | None, str]:
-    """选择同实体、同截止的唯一父结果，风险和可行性缺失均保留未知。
-
-    例如缺少 P06 时返回 governance_parent=unknown；P04 缺质量分允许市场档，
-    P04 已知硬失败仍传播，避免负面审计被缺财务降级掩盖。
-    """
-    parents, checks = [], []
-    quality = None
-    company_type = "unknown"
-    for index, (name, results) in enumerate(
-        zip(("fundamental", "governance", "flow"), groups, strict=True)
-    ):
-        parent = results.get(identity)
-        if parent is None or parent.envelope.analysis_as_of != inputs.analysis_as_of:
-            if index:
-                checks.append(gate(name + "_parent", Truth.UNKNOWN, name + "_parent_unavailable"))
-            continue
-        parents.append(parent)
-        if index == 0:
-            raw_type = parent.details.get("comp_type")
-            company_type = (
-                raw_type
-                if isinstance(raw_type, str) and raw_type in {"1", "2", "3", "4", "7"}
-                else "unknown"
-            )
-            quality = parent.metric("quality_score")
-            if company_type != "1" or any(
-                check.hard and not check.passed for check in parent.envelope.quality_gates
-            ):
-                quality = None
-            checks.extend(
-                replace(check, gate_id=name + "/" + check.gate_id)
-                for check in parent.envelope.quality_gates
-                if check.hard and check.result is Truth.FALSE
-            )
-        else:
-            checks.append(gate(name + "_parent", Truth.TRUE, ""))
-            checks.extend(
-                replace(check, gate_id=name + "/" + check.gate_id)
-                for check in parent.envelope.quality_gates
-            )
-            if not parent.envelope.quality_gates:
-                checks.append(gate(name + "_checks", Truth.UNKNOWN, name + "_checks_missing"))
-    return tuple(parents), tuple(checks), quality, company_type
-
-
-def _rank_and_explain(
-    inputs: ResearchInputs,
-    drafts: tuple[ResearchResult, ...],
-) -> tuple[ResearchResult, ...]:
-    """只对同档且通过硬门禁的评分排名，并逐个删因子重排名。
-
-    例如完整档 30 只、市场档 29 只，后者名次全部未知；删因子后保留其余权重
-    相对比例，输出包含基线的最小和最大名次。完整档前 20% 才能进入优先研究。
-    同一分组内实体及数值完全相同的场景复用分位，场景名称仍独立保留；
-    例如全为None的基线与三个删因子输入只计算一次。缓存最多包含基线加三个场景，
-    不跨同行分组、档位或构建调用复用，也不把仅排序相同的不同数值当成相同输入。
-    """
-    finished = []
-    groups: dict[tuple[str, tuple[str, ...]], list[ResearchResult]] = {}
-    for result in drafts:
-        key = (result.envelope.feature_profile, tuple(result.details["factor_peer_path"]))
-        groups.setdefault(key, []).append(result)
-    for (profile, _), group in sorted(groups.items()):
-        scores = {result.envelope.entity_id: result.envelope.score for result in group}
-        ranked = percentiles(inputs, scores, profile)
-        ranking_cache = {tuple(scores.items()): ranked}
-        scenarios: dict[str, dict[str, float]] = {}
-        for factor in sorted(
-            {
-                component.feature_id
-                for result in group
-                for component in result.envelope.contributions
-            }
-        ):
-            remaining = {
-                result.envelope.entity_id: fsum(
-                    component.contribution or 0
-                    for component in result.envelope.contributions
-                    if component.feature_id != factor
-                )
-                if result.envelope.score is not None
-                else None
-                for result in group
-            }
-            population = tuple(remaining.items())
-            if population not in ranking_cache:
-                ranking_cache[population] = percentiles(inputs, remaining, profile)
-            scenarios[factor] = {
-                identity: 1 + (1 - item.percentile) * (item.peer_count - 1)
-                for identity, item in ranking_cache[population].items()
-                if item.percentile is not None
-            }
-        for result in group:
-            identity = result.envelope.entity_id
-            position = ranked[identity]
-            rank = (
-                1 + (1 - position.percentile) * (position.peer_count - 1)
-                if position.percentile is not None
-                else None
-            )
-            intervals = (
-                ([rank] + [values[identity] for values in scenarios.values() if identity in values])
-                if rank is not None
-                else []
-            )
-            capacity = min(inputs.config.thresholds.top_k, ceil(position.peer_count * 0.2))
-            priority = (
-                profile.startswith("fundamental_complete/")
-                and rank is not None
-                and rank <= capacity
-            )
-            eligible = rank is not None and all(
-                check.passed for check in result.envelope.quality_gates if check.hard
-            )
-            details = result.details
-            details.update(
-                {
-                    "rank_peer_level": position.peer_level,
-                    "rank_reason_codes": list(position.reason_codes),
-                    "rank_interval_without_one_factor": [min(intervals), max(intervals)]
-                    if intervals
-                    else None,
-                    "leave_one_factor_ranks": {
-                        name: values.get(identity) for name, values in scenarios.items()
-                    },
-                    "research_capacity": capacity,
-                    "rank_distance_to_capacity": rank - capacity if rank is not None else None,
-                }
-            )
-            checks = result.envelope.quality_gates + (
-                gate(
-                    "ranking_sample",
-                    Truth.TRUE if rank is not None else Truth.UNKNOWN,
-                    "insufficient_rank_sample",
-                ),
-            )
-            envelope = replace(
-                result.envelope,
-                rank=rank,
-                peer_count=position.peer_count,
-                quality_gates=checks,
-                action_state=ActionState.RESEARCH_FIRST
-                if priority and eligible
-                else ActionState.NO_CONCLUSION
-                if rank is None and result.envelope.state is not ProductState.BLOCKED
-                else result.envelope.action_state,
-                decision_allowed=bool(priority and eligible),
-                state=ProductState.INCOMPLETE
-                if rank is None and result.envelope.state is not ProductState.BLOCKED
-                else result.envelope.state,
-                gate_codes=tuple(
-                    sorted(set(result.envelope.gate_codes) | set(position.reason_codes))
-                ),
-            )
-            finished.append(replace(result, envelope=envelope, details_json=encode(details)))
-    return tuple(sorted(finished, key=lambda item: item.envelope.entity_id))
+def parent_metric(parent: ResearchResult | None, name: str) -> float | None:
+    """读取唯一且有限的比例/分数；例：缺quality_score、错误单位或未知值返回None。"""
+    if parent is None:
+        return None
+    matches = [item for item in parent.metrics if item.name == name and item.status == "available"]
+    if len(matches) != 1:
+        return None
+    item = matches[0]
+    return (
+        item.value
+        if (
+            item.value is not None
+            and isfinite(item.value)
+            and item.unit in {"ratio", "fraction", "score"}
+        )
+        else None
+    )
 
 
 def build_candidates(
@@ -221,276 +63,313 @@ def build_candidates(
     governance: tuple[ResearchResult, ...],
     flow: tuple[ResearchResult, ...],
 ) -> tuple[ResearchResult, ...]:
-    """构造证据可复算的 P03 候选，完全不使用历史动量或供应商技术信号。
+    """先验证结构、财务、风险和交易门禁，再按入场条件评分，绝不奖励历史涨幅。
 
-    例如 Q0=80、V0=L0=0.5 得到完整档 63.5 分；缺 Q0 时市场档为 50 分。
-    PE/PB 非正值进入 problem_research，缺风险检查不会被任何高分抵消。
-    三类父集合各索引一次；例如5911实体和三类各5911父结果只扫描17733条父记录。
+    输入回调后突破且风险<=8%、结构空间/风险>=2的可比实体输出独立名次；
+    继续下跌、突破过远、缺证据或风险门禁失败的实体保留诊断且分数/名次为空。
+    初始规则未经回测，仅用于人工复核，decision_allowed始终为False。
     """
-    parent_indexes = tuple(_index_parents(group) for group in (fundamental, governance, flow))
-    facts: dict[str, _Candidate] = {}
+    indexes = tuple(index_parents(group) for group in (fundamental, governance, flow))
     selected_date = max(
         (row.availability.data_as_of or "" for row in inputs.rows("daily")), default=""
     )
+    drafts = []
     for identity in inputs.entity_ids:
-        parents, parent_gates, quality, company_type = _parent_context(
-            inputs,
-            identity,
-            parent_indexes,
-        )
-        daily = latest(inputs.rows("daily", identity))
+        parents, checks = [], []
+        for label, product_id, indexed in zip(
+            ("fundamental", "governance", "flow"), PRODUCT_IDS[1:4], indexes, strict=True
+        ):
+            parent = indexed.get(identity)
+            if (
+                parent is None
+                or parent.envelope.analysis_as_of != inputs.analysis_as_of
+                or parent.envelope.product_id != product_id
+            ):
+                checks.append(gate(label + "_parent", Truth.UNKNOWN, label + "_parent_unavailable"))
+                continue
+            parents.append(parent)
+            checks.append(gate(label + "_parent", Truth.TRUE, ""))
+            checks.extend(
+                replace(check, gate_id=label + "/" + check.gate_id)
+                for check in parent.envelope.quality_gates
+            )
+            if not parent.envelope.quality_gates:
+                checks.append(gate(label + "_checks", Truth.UNKNOWN, label + "_checks_missing"))
+        by_product = {parent.envelope.product_id: parent for parent in parents}
+        financial = by_product.get(PRODUCT_IDS[1])
+        funding = by_product.get(PRODUCT_IDS[3])
+        quality = parent_metric(financial, "quality_score")
+        large_flow = parent_metric(funding, "large_flow_ratio")
+        problem_flags = financial.details.get("problem_research_flags", ()) if financial else ()
+        company_type = financial.details.get("comp_type") if financial else None
+        observation = observe_structure(inputs, identity)
         valuation = latest(inputs.rows("daily_basic", identity))
-        pe = valuation.number("pe_ttm", "ratio") if valuation else None
-        pb = valuation.number("pb", "ratio") if valuation else None
-        amount = daily.number("amount", "元") if daily else None
-        amount = (
-            amount
-            if daily and daily.numeric.get("amount") and daily.numeric["amount"].currency == "CNY"
-            else None
-        )
-        problem_flags = tuple(
-            sorted(
-                {
-                    flag
-                    for parent in parents
-                    if parent.envelope.product_id == "fundamental_dossier/v1"
-                    for flag in parent.details.get("problem_research_flags", ())
-                    if flag in {"negative_equity", "negative_earnings"}
-                }
-            )
-        )
-        nonpositive = any(value is not None and value <= 0 for value in (pe, pb))
-        problem = nonpositive or bool(problem_flags)
-        exclusion_reason = (
-            "nonpositive_valuation"
-            if nonpositive
-            else "financial_problem_research"
-            if problem_flags
-            else None
-        )
-        profile = (
+        price_to_earnings_ratio = valuation.number("pe_ttm", "ratio") if valuation else None
+        price_to_book_ratio = valuation.number("pb", "ratio") if valuation else None
+        valuation_refs = valuation.evidence("pe_ttm", "pb", "trade_date") if valuation else ()
+        history_reason = inputs.reasons("daily", identity)
+        flow_date = funding.envelope.source_as_of.get("moneyflow") if funding else None
+        checks.extend(
             (
-                "problem_research"
-                if problem
-                else "fundamental_complete"
-                if quality is not None
-                else "market_only"
+                gate(
+                    "right_side_structure",
+                    Truth.TRUE
+                    if observation.reason is None
+                    else Truth.FALSE
+                    if observation.values
+                    else Truth.UNKNOWN,
+                    observation.reason or "right_side_unconfirmed",
+                    references=observation.references,
+                ),
+                gate(
+                    "right_side_history_scope",
+                    Truth.UNKNOWN if history_reason else Truth.TRUE,
+                    "right_side_source_incomplete",
+                    references=observation.references,
+                ),
+                gate(
+                    "financial_quality",
+                    Truth.TRUE if quality is not None and company_type == "1" else Truth.UNKNOWN,
+                    "financial_quality_unavailable",
+                ),
+                gate(
+                    "financial_problem",
+                    Truth.FALSE if problem_flags else Truth.TRUE,
+                    "financial_problem_research",
+                ),
+                gate(
+                    "valuation_positive",
+                    Truth.UNKNOWN
+                    if price_to_earnings_ratio is None or price_to_book_ratio is None
+                    else Truth.TRUE
+                    if price_to_earnings_ratio > 0 and price_to_book_ratio > 0
+                    else Truth.FALSE,
+                    "valuation_nonpositive_or_missing",
+                    references=valuation_refs,
+                ),
+                gate(
+                    "aligned_market_date",
+                    Truth.TRUE
+                    if valuation
+                    and selected_date
+                    and observation.details.get("data_as_of")
+                    == valuation.availability.data_as_of
+                    == selected_date
+                    else Truth.UNKNOWN,
+                    "market_date_mismatch",
+                ),
+                gate(
+                    "flow_date",
+                    Truth.TRUE if flow_date == selected_date and selected_date else Truth.UNKNOWN,
+                    "flow_date_unaligned",
+                ),
+                gate(
+                    "flow_support",
+                    Truth.UNKNOWN
+                    if large_flow is None
+                    else Truth.TRUE
+                    if large_flow > 0
+                    else Truth.FALSE,
+                    "right_side_flow_not_positive",
+                ),
             )
-            + "/comp_type_"
-            + company_type
         )
-        references = unique_evidence(
-            (daily.evidence("close", "vol", "amount", "trade_date") if daily else ())
-            + (valuation.evidence("pe_ttm", "pb", "trade_date") if valuation else ())
+        references = (
+            observation.references
+            + valuation_refs
             + tuple(ref for parent in parents for ref in parent.envelope.evidence_refs)
         )
-        checks = parent_gates + (
-            replace(
-                price_gate(daily.raw, "price_rank"),
-                evidence_refs=daily.evidence("close", "vol", "amount"),
+        values = observation.values | {"quality_score": quality, "large_flow_ratio": large_flow}
+        metrics = tuple(
+            metric(
+                name,
+                value,
+                "元" if name in PRICE_METRICS else "score" if name == "quality_score" else "ratio",
+                references,
             )
-            if daily
-            else gate("price_price_rank", Truth.UNKNOWN, "price_unavailable"),
-            gate(
-                "valuation_positive",
-                Truth.FALSE
-                if problem
-                else Truth.TRUE
-                if pe is not None and pb is not None
-                else Truth.UNKNOWN,
-                exclusion_reason or "valuation_unavailable",
-            ),
-            gate(
-                "valuation_inverse_finite",
-                Truth.TRUE
-                if all(
-                    value is not None and value > 0 and isfinite(1 / value) for value in (pe, pb)
-                )
-                else Truth.UNKNOWN,
-                "valuation_inverse_unavailable",
-            ),
-            gate(
-                "amount_cny",
-                Truth.UNKNOWN if amount is None else Truth.TRUE if amount > 0 else Truth.FALSE,
-                "amount_cny_unavailable",
-            ),
-            gate(
-                "aligned_market_date",
-                Truth.UNKNOWN
-                if daily is None or valuation is None
-                else Truth.TRUE
-                if daily.availability.data_as_of
-                == valuation.availability.data_as_of
-                == selected_date
-                else Truth.FALSE,
-                "market_date_mismatch",
-            ),
+            for name, value in sorted(values.items())
         )
-        eligible = all(check.passed for check in checks if check.hard)
-        facts[identity] = _Candidate(
-            profile,
-            quality,
-            pe,
-            pb,
-            amount,
-            checks,
-            references,
-            parents,
-            eligible,
-            problem_flags,
-            exclusion_reason,
+        # 缺结构时仍声明全部评分因子，未知值不进入分位分母。
+        metrics += tuple(
+            metric(name, None, "ratio", (), ("right_side_history_incomplete",))
+            for name, _, _ in FACTORS
+            if name not in values
         )
-    drafts = []
-    for profile in sorted({values.profile for values in facts.values()}):
-        score_profile = profile.split("/", 1)[0]
-        group = {
-            identity: values for identity, values in facts.items() if values.profile == profile
+        conditions: tuple[Predicate, ...] = ()
+        invalidations: tuple[Predicate, ...] = ()
+        if observation.values:
+            conditions = (
+                Predicate(
+                    predicate_id="entry_near_confirmation",
+                    version=RULE_VERSION,
+                    operator="le",
+                    feature_id="breakout_extension",
+                    threshold=inputs.config.right_side.maximum_breakout_extension,
+                ),
+                Predicate(
+                    predicate_id="manual_right_side_review", version=RULE_VERSION, operator="manual"
+                ),
+            )
+            invalidations = (
+                Predicate(
+                    predicate_id="structure_price_failure",
+                    version=RULE_VERSION,
+                    operator="lt",
+                    feature_id="entry_price",
+                    threshold=observation.values["invalidation_price"],
+                ),
+            )
+        drafts.append(
+            make_result(
+                inputs,
+                PRODUCT_IDS[4],
+                identity,
+                metrics=metrics,
+                gates=checks,
+                references=references,
+                contrary=(
+                    ref for check in checks if not check.passed for ref in check.evidence_refs
+                ),
+                parents=(parent.envelope.result_id for parent in parents),
+                profile="right_side/comp_type_" + str(company_type or "unknown"),
+                entry_conditions=conditions,
+                invalidation_conditions=invalidations,
+                details=observation.details
+                | {
+                    "strategy": "confirmed_pullback_right_side",
+                    "policy": inputs.config.right_side.to_dict(),
+                    "historical_returns_scored": False,
+                    "initial_policy_unvalidated": True,
+                    "problem_research_flags": list(problem_flags),
+                    "structure_reason": observation.reason,
+                    "next_research_question": "复核催化与盈利预期、结构失效及入场价格",
+                },
+            )
+        )
+    return rank_candidates(inputs, tuple(drafts))
+
+
+def rank_candidates(
+    inputs: ResearchInputs, drafts: tuple[ResearchResult, ...]
+) -> tuple[ResearchResult, ...]:
+    """只在相同类型与同行回退层内排列通过全部门禁的候选。
+
+    例如两只完整同值候选在最小样本2时均50分、1.5名；缺样本或任一门禁失败不评分。
+    历史涨幅没有贡献项，名次也不被解释为收益预测。
+    """
+    eligible = {
+        item.envelope.entity_id: all(
+            check.passed for check in item.envelope.quality_gates if check.hard
+        )
+        for item in drafts
+    }
+    profiles = sorted({item.envelope.feature_profile for item in drafts})
+    scored = []
+    for profile in profiles:
+        group = [item for item in drafts if item.envelope.feature_profile == profile]
+        ranks = {
+            name: percentiles(
+                inputs,
+                {
+                    item.envelope.entity_id: item.metric(name)
+                    if eligible[item.envelope.entity_id]
+                    else None
+                    for item in group
+                },
+                profile + "/" + name,
+                lower_is_better=lower,
+            )
+            for name, _, lower in FACTORS
         }
-        pe_ranks = percentiles(
-            inputs,
-            {
-                identity: 1 / cast(float, values.pe) if values.eligible else None
-                for identity, values in group.items()
-            },
-            profile,
-        )
-        pb_ranks = percentiles(
-            inputs,
-            {
-                identity: 1 / cast(float, values.pb) if values.eligible else None
-                for identity, values in group.items()
-            },
-            profile,
-        )
-        amount_ranks = percentiles(
-            inputs,
-            {
-                identity: log1p(cast(float, values.amount)) if values.eligible else None
-                for identity, values in group.items()
-            },
-            profile,
-        )
-        for identity, values in group.items():
-            quality, pe, pb, amount = values.quality, values.pe, values.pb, values.amount
-            checks, references, parents = values.checks, values.references, values.parents
-            pe_rank, pb_rank = pe_ranks[identity], pb_ranks[identity]
-            path = inputs.config.peer_paths.get(identity, ())
-            peer_path = (
-                path[: path.index(pe_rank.peer_level) + 1] if pe_rank.peer_level in path else ()
-            )
-            liquidity = amount_ranks[identity].percentile
-            value = (
-                (pe_rank.percentile + pb_rank.percentile) / 2
-                if pe_rank.percentile is not None and pb_rank.percentile is not None
-                else None
-            )
+        for item in group:
             components = []
-            weights = (
-                (
-                    ("quality_score", quality, 0.45),
-                    ("value_score", value, 0.35),
-                    ("liquidity_score", liquidity, 0.20),
-                )
-                if score_profile == "fundamental_complete"
-                else (("value_score", value, 0.6), ("liquidity_score", liquidity, 0.4))
-            )
-            for name, observed, weight in weights:
-                normalized = (
-                    observed / 100 if observed is not None and name == "quality_score" else observed
-                )
+            identity = item.envelope.entity_id
+            for name, weight, lower in FACTORS:
+                position = ranks[name][identity]
                 components.append(
                     FeatureContribution(
                         feature_id=name,
-                        raw_value=observed,
-                        unit="score" if name == "quality_score" else "fraction",
-                        transformed_value=normalized,
+                        raw_value=item.metric(name),
+                        unit="score" if name == "quality_score" else "ratio",
+                        transformed_value=position.percentile,
                         weight=weight,
-                        contribution=100 * weight * normalized if normalized is not None else None,
-                        transform="quality_divide_100"
-                        if name == "quality_score"
-                        else "positive_inverse_pe_pb_mean_percentile"
-                        if name == "value_score"
-                        else "log1p_amount_cny_percentile",
-                        peer_level=pe_rank.peer_level,
-                        missing_reason="candidate_factor_unavailable" if observed is None else None,
-                        evidence_refs=references if observed is not None else (),
+                        contribution=round(100 * weight * position.percentile, 12)
+                        if position.percentile is not None
+                        else None,
+                        transform="lower_peer_percentile" if lower else "peer_percentile",
+                        peer_level=position.peer_level,
+                        missing_reason="right_side_factor_unavailable"
+                        if position.percentile is None
+                        else None,
+                        reason_codes=position.reason_codes,
+                        evidence_refs=item.envelope.evidence_refs,
                     )
                 )
-            contrary = tuple(
-                ref for check in checks if not check.passed for ref in check.evidence_refs
-            ) + tuple(ref for parent in parents for ref in parent.envelope.contrary_evidence)
-            drafts.append(
-                make_result(
-                    inputs,
-                    "equity_research_candidates/v1",
-                    identity,
-                    profile=profile,
-                    metrics=(
-                        metric(
-                            "quality_score",
-                            quality,
-                            "score",
-                            references,
-                            ("financial_quality_not_available",) if quality is None else (),
-                            not_applicable=score_profile != "fundamental_complete"
-                            and quality is None,
-                        ),
-                        metric(
-                            "value_score",
-                            100 * value if value is not None else None,
-                            "score",
-                            references,
-                        ),
-                        metric(
-                            "liquidity_score",
-                            100 * liquidity if liquidity is not None else None,
-                            "score",
-                            references,
-                        ),
-                    ),
-                    gates=checks,
-                    contributions=components,
-                    references=references,
-                    contrary=contrary,
-                    parents=(parent.envelope.result_id for parent in parents),
-                    entry_conditions=(
-                        Predicate(
-                            predicate_id="manual_candidate_review",
-                            version=RULE_VERSION,
-                            operator="manual",
-                        ),
-                    ),
-                    details={
-                        "formula": "0.45*Q0+35*V0+20*L0"
-                        if score_profile == "fundamental_complete"
-                        else "100*(0.6*V0+0.4*L0)"
-                        if score_profile == "market_only"
-                        else None,
-                        "selected_market_date": selected_date or None,
-                        "pe_ttm": pe,
-                        "pb": pb,
-                        "amount_cny": amount,
-                        "factor_peer_count": pe_rank.peer_count,
-                        "factor_peer_path": list(peer_path),
-                        "score_profile": score_profile,
-                        "comp_type": profile.split("comp_type_", 1)[1],
-                        "risk_flags": sorted(
-                            {
-                                reason
-                                for check in checks
-                                if not check.passed
-                                for reason in check.reason_codes
-                            }
-                        ),
-                        "exclusion_reason": values.exclusion_reason,
-                        "problem_research_flags": list(values.problem_flags),
-                        "next_research_question": "核查亏损或负净资产的原因及持续性"
-                        if score_profile == "problem_research"
-                        else "补齐财务质量证据并复核风险门禁"
-                        if score_profile == "market_only"
-                        else "复核现金支持及未来股权供给能否改变当前判断",
-                        "historical_features": "not_enabled",
-                    },
+            score: float | None = round(
+                fsum(component.contribution or 0 for component in components), 12
+            )
+            score = (
+                score
+                if all(component.contribution is not None for component in components)
+                else None
+            )
+            level = ranks[FACTORS[0][0]][identity].peer_level
+            path = inputs.config.peer_paths.get(identity, ())
+            peer_path = path[: path.index(level) + 1] if level in path else ()
+            details = item.details | {
+                "factor_peer_path": list(peer_path),
+                "factor_weights": {name: weight for name, weight, _ in FACTORS},
+            }
+            scored.append(
+                replace(
+                    item,
+                    envelope=replace(item.envelope, score=score, contributions=tuple(components)),
+                    details_json=encode(details),
                 )
             )
-    return _rank_and_explain(inputs, tuple(drafts))
+    groups: dict[tuple[str, tuple[str, ...]], list[ResearchResult]] = {}
+    for item in scored:
+        key = (item.envelope.feature_profile, tuple(item.details["factor_peer_path"]))
+        groups.setdefault(key, []).append(item)
+    finished = []
+    for (profile, _), group in sorted(groups.items()):
+        final_ranks = percentiles(
+            inputs,
+            {item.envelope.entity_id: item.envelope.score for item in group},
+            profile + "/final",
+        )
+        for item in group:
+            position = final_ranks[item.envelope.entity_id]
+            rank = (
+                1 + (1 - position.percentile) * (position.peer_count - 1)
+                if (position.percentile is not None)
+                else None
+            )
+            checks = item.envelope.quality_gates + (
+                gate(
+                    "ranking_sample",
+                    Truth.TRUE if rank is not None else Truth.UNKNOWN,
+                    "insufficient_rank_sample",
+                ),
+            )
+            envelope = replace(
+                item.envelope,
+                rank=rank,
+                peer_count=position.peer_count,
+                score=item.envelope.score if rank is not None else None,
+                quality_gates=checks,
+                state=ProductState.INCOMPLETE
+                if rank is None and item.envelope.state is not ProductState.BLOCKED
+                else item.envelope.state,
+                decision_allowed=False,
+                action_state=ActionState.WATCH if rank is not None else ActionState.NO_CONCLUSION,
+                gate_codes=tuple(
+                    sorted(
+                        set(item.envelope.gate_codes)
+                        | set(position.reason_codes)
+                        | {reason for check in checks for reason in check.reason_codes}
+                    )
+                ),
+            )
+            finished.append(replace(item, envelope=envelope))
+    return tuple(sorted(finished, key=lambda item: item.envelope.entity_id))

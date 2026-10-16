@@ -40,9 +40,7 @@ def assert_persisted_portfolio_parent_digest(results, portfolio):
     输入同时含旧消费父与P05新父的结果列表和对应P12；摘要相等时返回
     matches_persisted_parents=True，例如两条父结果均保留时返回两条父ID；不等则断言失败。
     """
-    by_identity = {
-        (item.envelope.run_id, item.envelope.result_id): item for item in results
-    }
+    by_identity = {(item.envelope.run_id, item.envelope.result_id): item for item in results}
     parents = [
         by_identity[(portfolio.envelope.run_id, result_id)]
         for result_id in portfolio.parent_result_ids
@@ -51,10 +49,13 @@ def assert_persisted_portfolio_parent_digest(results, portfolio):
     assert len(parents) == len(set(portfolio.parent_result_ids))
     assert any("consumption" in parent.details for parent in parents)
     assert any(parent.envelope.product_id == PRODUCTS["P05"] for parent in parents)
-    recomputed = sum(
-        int(sha256(encode(parent.to_dict()).encode("utf-8")).hexdigest(), 16)
-        for parent in parents
-    ) % 2**256
+    recomputed = (
+        sum(
+            int(sha256(encode(parent.to_dict()).encode("utf-8")).hexdigest(), 16)
+            for parent in parents
+        )
+        % 2**256
+    )
     declared = portfolio.details["parent_multiset_sha256"]
     assert declared == f"{recomputed:064x}"
     return {
@@ -204,8 +205,8 @@ def test_build_run_validate_cli_has_nonempty_metrics_and_exact_replay(tmp_path):
     )
 
 
-def test_explicit_candidate_horizons_are_independent_and_replayable(tmp_path):
-    """场景：显式运行三套 P03 排名；预期：产品身份独立、依赖闭包准确且可完整重放。"""
+def test_unified_right_side_candidates_are_replayable(tmp_path):
+    """场景：显式运行统一 P03 排名；预期：产品身份统一、依赖闭包准确且可完整重放。"""
     reference = write_reference(tmp_path)
     output, config_path = tmp_path / "rankings.duckdb", tmp_path / "config.json"
     runner = CliRunner()
@@ -237,11 +238,7 @@ def test_explicit_candidate_horizons_are_independent_and_replayable(tmp_path):
             "--as-of",
             AS_OF,
             "--product",
-            "P03S",
-            "--product",
-            "P03M",
-            "--product",
-            "P03L",
+            "P03",
         ],
     )
     assert run.exit_code == 2, run.output
@@ -250,22 +247,20 @@ def test_explicit_candidate_horizons_are_independent_and_replayable(tmp_path):
         "P04",
         "P06",
         "P07",
-        "P03S",
-        "P03M",
-        "P03L",
+        "P03",
     }
     results, _ = saved_results(output)
-    ranking_products = {PRODUCTS[name] for name in ("P03S", "P03M", "P03L")}
+    ranking_products = {PRODUCTS[name] for name in ("P03",)}
     ranking_results = [
         result for result in results if result.envelope.product_id in ranking_products
     ]
     assert {result.envelope.product_id for result in ranking_results} == ranking_products
-    assert {result.details["ranking_horizon"] for result in ranking_results} == {
-        "short_term",
-        "medium_term",
-        "long_term",
-    }
-    for alias in ("P03S", "P03M", "P03L"):
+    assert all(
+        result.details.get("strategy") == "confirmed_pullback_right_side"
+        for result in ranking_results
+    )
+    assert all(result.envelope.rank is None for result in ranking_results)
+    for alias in ("P03",):
         selected = runner.invoke(
             app,
             [
@@ -282,9 +277,7 @@ def test_explicit_candidate_horizons_are_independent_and_replayable(tmp_path):
         assert selected.exit_code == 0, selected.output
         payloads = [json.loads(line) for line in selected.stdout.splitlines()]
         assert payloads
-        assert {payload["envelope"]["product_id"] for payload in payloads} == {
-            PRODUCTS[alias]
-        }
+        assert {payload["envelope"]["product_id"] for payload in payloads} == {PRODUCTS[alias]}
     validated = runner.invoke(
         app,
         ["research-all", "validate", "--reference", str(reference), "--output", str(output)],

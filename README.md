@@ -34,6 +34,6 @@ uv run pytest --cov=tushare_entitlement_hub --cov-report=term-missing --cov-fail
 
 通用本地数据层支持正式采集、标准化、逐行验收以及 JSONL、Parquet、DuckDB 导出。后续产品可直接复用数据，不受既有产品分类限制。运行方式和质量边界见[本地数据参考](docs/本地数据参考.md)。
 
-共享产品基础层通过 `product-foundation initialize/validate` 离线读取参考库，提供实体、时间、单位和覆盖审计。`research initialize/run/validate` 保留原六产品的 99 个真实消费者，并可显式运行 P03S 短期交易、P03M 中期基本面、P03L 长期配置三套独立排名。旧 P03 的公式、标识和默认行为继续兼容。
+共享产品基础层通过 `product-foundation initialize/validate` 离线读取参考库，提供实体、时间、单位和覆盖审计。`research initialize/run/validate` 保留原六产品的 99 个真实消费者，P03统一识别回调后的右侧突破/回踩，按入场风险和结构空间排序，不再按短中长拆榜。
 
-`research-all build-config/run/validate` 增加 P02、P05、P08、P09、P10、P11、P12 的 107 个消费者，默认统一运行原十三产品；P03S、P03M、P03L 需显式选择，不会悄悄改变既有默认批次。结果保留业务指标、证据、门禁和血缘，逐接口区分注册、分配、执行、可读取、已配置、已观测与未解析。缺失历史或证据会明确降级，历史 PIT 不自动认证。正式数据的 observed 数量须以本地全量运行和缺口审计为准；命令与容量边界见[全产品离线研究](docs/全产品离线研究.md)。
+`research-all build-config/run/validate` 增加 P02、P05、P08、P09、P10、P11、P12 的 107 个消费者，默认统一运行原十三产品；统一P03默认运行，旧周期入口拒绝，新产品与指纹隔离旧批次。结果保留业务指标、证据、门禁和血缘，逐接口区分注册、分配、执行、可读取、已配置、已观测与未解析。缺失历史或证据会明确降级，历史 PIT 不自动认证。正式数据的 observed 数量须以本地全量运行和缺口审计为准；命令与容量边界见[全产品离线研究](docs/全产品离线研究.md)。

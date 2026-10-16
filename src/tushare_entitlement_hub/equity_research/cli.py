@@ -16,7 +16,7 @@ from .pipeline import run_research
 from .storage import RESULT_PAYLOAD_CAPACITY_ERROR, validate_research
 
 research_app = typer.Typer(
-    help="离线运行六个默认股票产品，并支持P03S/P03M/P03L三个显式独立排名。"
+    help="离线运行六个股票产品，P03提供统一右侧交易候选排名。"
 )
 
 

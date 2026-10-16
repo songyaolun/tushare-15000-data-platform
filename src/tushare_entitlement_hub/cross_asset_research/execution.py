@@ -10,11 +10,6 @@ from typing import Any
 
 from ..equity_research.adapter import SOURCE_APIS as EQUITY_SOURCE_APIS
 from ..equity_research.adapter import load_inputs as load_equity_inputs
-from ..equity_research.candidate_horizons import (
-    build_long_term_candidates,
-    build_medium_term_candidates,
-    build_short_term_candidates,
-)
 from ..equity_research.candidates import build_candidates
 from ..equity_research.common import gate, make_result
 from ..equity_research.consumption import attach_consumption
@@ -196,7 +191,7 @@ def execute(
         return combined
 
     parents: dict[str, tuple[ResearchResult, ...]] = {}
-    parent_consumers = {"P03", "P03S", "P03M", "P03L", "P13"}.intersection(products)
+    parent_consumers = {"P03", "P13"}.intersection(products)
     portfolio_parents: list[ResearchResult] = []
     portfolio_entities = {str(item.get("entity_id", "")) for item in holdings}
     if "P12" in products and not holdings:
@@ -228,14 +223,6 @@ def execute(
                 results = builders[product](inputs)
             elif product == "P03":
                 results = build_candidates(inputs, parents["P04"], parents["P06"], parents["P07"])
-            elif product == "P03S":
-                results = build_short_term_candidates(
-                    inputs, parents["P04"], parents["P06"], parents["P07"]
-                )
-            elif product == "P03M":
-                results = build_medium_term_candidates(inputs, parents["P04"], parents["P06"])
-            elif product == "P03L":
-                results = build_long_term_candidates(inputs, parents["P04"], parents["P06"])
             elif product == "P13":
                 results = build_events(
                     inputs,

@@ -11,7 +11,7 @@ from ..reference_storage import file_checksum
 
 REGISTRY_VERSION = "product-consumers/v1"
 EXPECTED_API_COUNT = 206
-SOURCE_SHA256 = "8f493369a00af8ed461fb74330bd22f7bf1cb14c3a1702993ad82d9d2096bceb"
+SOURCE_SHA256 = "6e6142cb11322e955b935de2c6a4ff4b6d22ab7d093d7dc458ad0be892e2587a"
 REGISTRY_PATH = Path(__file__).parents[1] / "data" / "product_consumers.csv"
 
 
@@ -34,7 +34,7 @@ def load_registry(path: Path | None = None) -> tuple[ConsumerSpec, ...]:
     """完全离线加载矩阵并按接口排序；显式路径不存在时不回退默认文件。
 
     输入 None，输出 206 项 ConsumerSpec；数组字段恢复为 tuple，单位恢复为字典。
-    默认打包文件必须匹配原附件摘要，防止悄悄改写事实集合。
+    默认打包文件必须匹配当前矩阵摘要，显式字段迁移需同步更新摘要。
     """
     selected = REGISTRY_PATH if path is None else path
     if path is None and file_checksum(selected) != SOURCE_SHA256:

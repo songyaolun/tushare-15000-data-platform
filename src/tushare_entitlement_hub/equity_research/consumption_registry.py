@@ -9,27 +9,19 @@ from typing import Any
 
 from ..product_foundation.registry import ConsumerSpec, load_registry
 from ..store import digest
-from .models import CANDIDATE_RANKING_PRODUCT_IDS, PRODUCT_IDS, ResearchInputs, ResearchRow
+from .models import PRODUCT_IDS, ResearchInputs, ResearchRow
 
-CONSUMPTION_VERSION = "equity-consumption/v14"
+CONSUMPTION_VERSION = "equity-consumption/v15"
 PRODUCT_ALIASES = {
     **dict(zip(("P01", "P04", "P06", "P07", "P03", "P13"), PRODUCT_IDS, strict=True)),
-    **dict(zip(("P03S", "P03M", "P03L"), CANDIDATE_RANKING_PRODUCT_IDS, strict=True)),
-}
-CANDIDATE_SOURCE_PRODUCTS = {
-    product_id: "P03" for product_id in CANDIDATE_RANKING_PRODUCT_IDS
 }
 
 
 def source_product(product_id: str) -> str:
-    """返回结果产品对应的原始消费归属。
-
-    例如短期榜产品标识返回 ``P03``，普通 P04 产品标识也返回 ``P04``；未知
-    产品标识返回空字符串，供后续契约校验失败关闭。
-    """
-    if product_id in CANDIDATE_SOURCE_PRODUCTS:
-        return CANDIDATE_SOURCE_PRODUCTS[product_id]
+    """返回结果的来源消费归属；例：统一右侧结果返回P03，未知产品返回空字符串。"""
     return next((alias for alias, value in PRODUCT_ALIASES.items() if value == product_id), "")
+
+
 CONTEXT_APIS = frozenset(
     {
         "trade_cal",

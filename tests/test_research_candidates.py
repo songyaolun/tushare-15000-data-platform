@@ -13,11 +13,10 @@ from tushare_entitlement_hub.equity_research.models import (
 )
 from tushare_entitlement_hub.product_foundation.bindings import FoundationBindings
 from tushare_entitlement_hub.product_foundation.config import FoundationPolicy
-from tushare_entitlement_hub.product_foundation.contracts import ActionState, ProductState, Truth
+from tushare_entitlement_hub.product_foundation.contracts import ProductState, Truth
 from tushare_entitlement_hub.product_foundation.entities import Entity, EntityIdentity, EntityKind
 from tushare_entitlement_hub.product_foundation.numeric import UnitCertification, adapt_numeric
 from tushare_entitlement_hub.product_foundation.temporal import AvailabilityFact
-from tushare_entitlement_hub.store import encode
 
 AS_OF = "2026-10-03T00:00:00Z"
 
@@ -44,9 +43,15 @@ def research_row(identity, api, fields, *, day="2026-09-30", record="row", curre
     row = ResearchRow(entity_id=identity, source_api=api, raw=raw, availability=availability)
     numeric = {}
     for name in fields:
-        if name not in {"pe_ttm", "pb", "amount", "pct_chg"}:
+        if name not in {"pe_ttm", "pb", "amount", "pct_chg", "close", "high", "low"}:
             continue
-        unit = "元" if name == "amount" else "fraction" if name == "pct_chg" else "ratio"
+        unit = (
+            "元"
+            if name in {"amount", "close", "high", "low"}
+            else "fraction"
+            if name == "pct_chg"
+            else "ratio"
+        )
         raw.setdefault("source_units", {})[name] = unit
         certificate = UnitCertification(
             version="unit/v1",
@@ -54,8 +59,12 @@ def research_row(identity, api, fields, *, day="2026-09-30", record="row", curre
             field=name,
             source_unit=unit,
             target_unit=unit,
-            dimension="money" if name == "amount" else "ratio",
-            currency=currency if name == "amount" else None,
+            dimension="money"
+            if name == "amount"
+            else "price"
+            if name in {"close", "high", "low"}
+            else "ratio",
+            currency=currency if unit == "元" else None,
             multiplier=1,
             evidence_refs=row.evidence(name),
         )
@@ -143,244 +152,203 @@ def research_parents(inputs, *, quality=None, checks=None):
     return tuple(tuple(group) for group in groups)
 
 
-def test_complete_formula_ties_and_research_capacity():
-    """场景：30 只完全同值且 Q0=80；预期：63.5 分、15.5 名且不跨越前20%容量。"""
-    inputs = research_inputs(flat=True)
-    results = build_candidates(inputs, *research_parents(inputs, quality=80))
-    assert len(results) == 30
+def test_confirmed_candidates_rank_without_historical_return_rewards():
+    """场景：两只同值回调突破且父门禁齐备；预期：50分、1.5名，历史收益不参与贡献。"""
+    from right_side_fixture import right_side_inputs, right_side_parents
+
+    inputs = right_side_inputs()
+    results = build_candidates(inputs, *right_side_parents(inputs))
     for result in results:
-        assert result.envelope.feature_profile == "fundamental_complete/comp_type_1"
-        assert result.envelope.score == 63.5
-        assert result.envelope.rank == 15.5
-        assert result.details["rank_interval_without_one_factor"] == [15.5, 15.5]
-        assert result.details["research_capacity"] == 6
-        assert result.envelope.action_state is ActionState.WATCH
+        assert result.envelope.product_id == "equity_right_side_candidates/v1"
+        assert result.envelope.score == 50
+        assert result.envelope.rank == 1.5
         assert not result.envelope.decision_allowed
+        assert result.details["historical_returns_scored"] is False
+        assert result.details["strategy"] == "confirmed_pullback_right_side"
+        assert not any("return" in item.feature_id for item in result.envelope.contributions)
+        assert result.envelope.entry_conditions
+        assert result.envelope.invalidation_conditions[0].threshold == result.metric(
+            "invalidation_price"
+        )
         assert len(result.parent_result_ids) == 3
-        assert result.metric("momentum_12_1") is None
 
 
-def test_complete_high_rank_enables_only_manual_research():
-    """场景：完整档单调因子且硬门禁通过；预期：首名允许人工研究并保留删因子区间。"""
-    inputs = research_inputs()
-    results = build_candidates(inputs, *research_parents(inputs, quality=80))
-    best = results[-1]
-    assert best.envelope.rank == 1
-    assert best.envelope.decision_allowed
-    assert best.envelope.action_state is ActionState.RESEARCH_FIRST
-    assert best.envelope.entry_conditions[0].operator == "manual"
-    assert best.details["rank_interval_without_one_factor"] == [1, 1]
-    assert (
-        sum(component.contribution for component in best.envelope.contributions)
-        == best.envelope.score
-    )
+@pytest.mark.parametrize("pattern", ["left_side", "extended", "late"])
+def test_left_side_extended_and_insufficient_headroom_never_rank(pattern):
+    """场景：仍下跌、突破过远或接近历史阻力；预期：无评分名次且保留结构失败原因。"""
+    from right_side_fixture import right_side_inputs, right_side_parents
 
-
-def test_market_formula_and_profile_isolation():
-    """场景：同批30只完整档、29只市场档；预期：不混排，市场档没有足够分位或名次。"""
-    inputs = research_inputs(59, flat=True)
-    quality = {identity: 80 for identity in inputs.entity_ids[:30]}
-    results = build_candidates(inputs, *research_parents(inputs, quality=quality))
-    assert results[0].envelope.score == 63.5
-    assert results[-1].envelope.feature_profile == "market_only/comp_type_1"
-    assert results[-1].envelope.score is None
-    assert results[-1].envelope.rank is None
-    assert results[-1].details["rank_interval_without_one_factor"] is None
-    market_inputs = research_inputs(flat=True)
-    market = build_candidates(market_inputs, *research_parents(market_inputs))
-    assert market[0].envelope.score == 50
-    assert market[0].metric("quality_score") is None
-    assert market[0].metrics[0].status == "not_applicable"
-    assert not market[0].envelope.decision_allowed
+    inputs = right_side_inputs(pattern=pattern)
+    for result in build_candidates(inputs, *right_side_parents(inputs)):
+        assert result.envelope.score is None and result.envelope.rank is None
+        assert result.details["structure_reason"] is not None
+        assert not result.envelope.decision_allowed
 
 
 @pytest.mark.parametrize("truth", [Truth.FALSE, Truth.UNKNOWN])
-def test_hard_risk_removes_candidate_before_ranking(truth):
-    """场景：31只中一只风险失败或未知；预期：该股票无分数，剩余30只可排名。"""
-    inputs = research_inputs(31)
-    references = inputs.rows("daily", inputs.entity_ids[0])[0].evidence("amount")
-    parents = research_parents(
-        inputs,
-        quality=100,
-        checks=(gate("governance_st", truth, "risk_unresolved", references=references),),
-    )
-    result, *others = build_candidates(inputs, *parents)
-    assert result.envelope.score is None
-    assert result.envelope.rank is None
-    assert not result.envelope.decision_allowed
-    assert result.envelope.contrary_evidence
-    assert all(other.envelope.rank is not None for other in others)
+def test_hard_parent_risk_cannot_be_compensated_by_confirmed_structure(truth):
+    """场景：右侧结构已确认但治理风险失败或未知；预期：高质量与资金不能抵消门禁。"""
+    from right_side_fixture import right_side_inputs, right_side_parents
 
-
-@pytest.mark.parametrize(
-    "changes, expected",
-    [
-        ({"pe_ttm": -1}, "problem_research"),
-        ({"pb": 0}, "problem_research"),
-        ({"pe_ttm": None}, "market_only"),
-        ({"pe_ttm": 1e-320}, "market_only"),
-    ],
-)
-def test_nonpositive_and_missing_valuation_stays_unscored(changes, expected):
-    """场景：负PE、零PB或缺估值；预期：问题档或缺口档，不把无效估值当便宜。"""
-    inputs = research_inputs(1)
-    identity = inputs.entity_ids[0]
-    valuation = research_row(identity, "daily_basic", {"pe_ttm": 10, "pb": 2, **changes})
-    inputs = replace(inputs, rows_by_api={**inputs.rows_by_api, "daily_basic": (valuation,)})
-    result = build_candidates(inputs, *research_parents(inputs))[0]
-    assert result.details["score_profile"] == expected
-    assert result.envelope.score is None
-    assert result.details["next_research_question"]
-
-
-@pytest.mark.parametrize(
-    "kind",
-    [
-        "missing_daily",
-        "missing_valuation",
-        "date_mismatch",
-        "older_daily",
-        "currency",
-        "missing_amount",
-        "zero_amount",
-    ],
-)
-def test_market_input_failures_are_explicit(kind):
-    """场景：行情缺失、日期错配或金额认证不合格；预期：核心门禁不通过且无分数。"""
-    inputs = research_inputs(2)
-    parents = research_parents(inputs)
-    daily = inputs.rows("daily")[0]
-    basic = inputs.rows("daily_basic")[0]
-    rows = dict(inputs.rows_by_api)
-    if kind == "missing_daily":
-        rows["daily"] = ()
-    elif kind == "missing_valuation":
-        rows["daily_basic"] = ()
-    elif kind in {"date_mismatch", "older_daily"}:
-        target = basic if kind == "date_mismatch" else daily
-        changed = replace(
-            target, availability=replace(target.availability, data_as_of="2026-09-29")
-        )
-        rows[target.source_api] = (changed, rows[target.source_api][1])
-    else:
-        changed = research_row(
-            inputs.entity_ids[0],
-            "daily",
-            {
-                "close": 10,
-                "vol": 10,
-                "amount": None if kind == "missing_amount" else 0 if kind == "zero_amount" else 100,
-            },
-            currency="USD" if kind == "currency" else "CNY",
-        )
-        rows["daily"] = (changed, rows["daily"][1])
-    result = build_candidates(replace(inputs, rows_by_api=rows), *parents)[0]
-    assert result.envelope.score is None
-    assert any(not check.passed for check in result.envelope.quality_gates)
-
-
-def test_missing_and_conflicting_parent_results_fail_closed():
-    """场景：父结果缺失、多版本、错截止或缺门禁；预期：不能以高质量分取得研究资格。"""
-    inputs = research_inputs(2, minimum=2)
-    fundamental, governance, flow = research_parents(inputs, quality=100)
-    conflicts = (fundamental[0], fundamental[0], fundamental[1])
-    wrong_time = replace(
-        flow[0],
-        envelope=replace(
-            flow[0].envelope,
-            analysis_as_of="2026-10-03T01:00:00Z",
-            generated_at="2026-10-03T01:00:00Z",
-        ),
-    )
-    empty_checks = replace(
-        governance[1], envelope=replace(governance[1].envelope, quality_gates=())
-    )
-    results = build_candidates(inputs, conflicts, (empty_checks,), (wrong_time, flow[1]))
-    assert results[0].envelope.feature_profile == "market_only/comp_type_unknown"
-    assert results[0].envelope.score is None
-    assert results[1].envelope.score is None
-
-
-def test_fundamental_unknown_downgrades_but_hard_false_still_blocks():
-    """场景：财务未知和审计硬失败；预期：前者可用市场档，后者仍进入复核队列。"""
-    inputs = research_inputs(2, minimum=2)
-    fundamental, governance, flow = research_parents(inputs, quality=80)
-    missing = replace(
-        fundamental[0],
-        envelope=replace(
-            fundamental[0].envelope,
-            quality_gates=(gate("statement", Truth.UNKNOWN, "statement_missing"),),
-        ),
-    )
+    inputs = right_side_inputs(3)
+    fundamental, governance, funding = right_side_parents(inputs)
     bad = replace(
-        fundamental[1],
+        governance[0],
         envelope=replace(
-            fundamental[1].envelope, quality_gates=(gate("audit", Truth.FALSE, "audit_adverse"),)
+            governance[0].envelope,
+            quality_gates=(
+                gate(
+                    "risk",
+                    truth,
+                    "risk_unresolved",
+                    references=governance[0].envelope.evidence_refs,
+                ),
+            ),
         ),
     )
-    results = build_candidates(inputs, (missing, bad), governance, flow)
-    assert results[0].envelope.feature_profile == "market_only/comp_type_1"
-    assert results[1].envelope.state is ProductState.BLOCKED
-    assert "audit_adverse" in results[1].envelope.gate_codes
+    first, *others = build_candidates(inputs, fundamental, (bad, *governance[1:]), funding)
+    assert first.envelope.score is None and first.envelope.rank is None
+    assert "risk_unresolved" in first.envelope.gate_codes
+    assert first.envelope.contrary_evidence
+    assert all(item.envelope.rank is not None for item in others)
 
 
-def test_empty_inputs_produce_no_fabricated_security():
-    """场景：没有登记任何股票；预期：P03返回空股票集合，不虚构可排名实体。"""
+@pytest.mark.parametrize("index", [0, 1, 2])
+@pytest.mark.parametrize(
+    "failure", ["missing", "duplicate", "future", "wrong_product", "empty_gates"]
+)
+def test_parent_identity_time_uniqueness_and_checks_are_required(index, failure):
+    """场景：各父结果缺失、重复、未来、错误产品或无门禁；预期：受影响实体不评分。"""
+    from right_side_fixture import right_side_inputs, right_side_parents
+
+    inputs = right_side_inputs(3)
+    groups = list(right_side_parents(inputs))
+    first, *others = groups[index]
+    if failure == "missing":
+        groups[index] = tuple(others)
+    elif failure == "duplicate":
+        groups[index] = (first, first, *others)
+    else:
+        envelope = first.envelope
+        if failure == "future":
+            envelope = replace(
+                envelope, analysis_as_of="2026-10-04T00:00:00Z", generated_at="2026-10-04T00:00:00Z"
+            )
+        elif failure == "wrong_product":
+            envelope = replace(envelope, product_id="wrong/v1")
+        else:
+            envelope = replace(envelope, quality_gates=())
+        groups[index] = (replace(first, envelope=envelope), *others)
+    result = build_candidates(inputs, *groups)[0]
+    assert result.envelope.rank is None and result.envelope.score is None
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing_pe",
+        "negative_pb",
+        "stale_valuation",
+        "stale_flow",
+        "negative_flow",
+        "unknown_quality",
+        "problem",
+        "source_gap",
+        "financial_type",
+    ],
+)
+def test_valuation_flow_quality_and_source_gaps_fail_closed(case):
+    """场景：估值、资金、财务类型或来源存在反证/缺口；预期：结构确认也不取得名次。"""
+    from right_side_fixture import right_side_inputs, right_side_parents
+
+    from tushare_entitlement_hub.store import encode
+
+    inputs = right_side_inputs()
+    groups = list(
+        right_side_parents(
+            inputs,
+            quality=None if case == "unknown_quality" else 80,
+            flow_ratio=-0.1 if case == "negative_flow" else 0.05,
+        )
+    )
+    identity = inputs.entity_ids[0]
+    if case in {"missing_pe", "negative_pb", "stale_valuation"}:
+        row = research_row(
+            identity,
+            "daily_basic",
+            {
+                "pe_ttm": None if case == "missing_pe" else 10,
+                "pb": -1 if case == "negative_pb" else 2,
+            },
+            day="2026-09-29" if case == "stale_valuation" else "2026-09-30",
+        )
+        inputs = replace(
+            inputs,
+            rows_by_api=inputs.rows_by_api | {"daily_basic": (row, inputs.rows("daily_basic")[1])},
+        )
+    elif case == "stale_flow":
+        first = groups[2][0]
+        groups[2] = (
+            replace(
+                first, envelope=replace(first.envelope, source_as_of={"moneyflow": "2026-09-29"})
+            ),
+            groups[2][1],
+        )
+    elif case in {"problem", "financial_type"}:
+        first = groups[0][0]
+        details = {
+            "comp_type": "2" if case == "financial_type" else "1",
+            "problem_research_flags": ["negative_equity"] if case == "problem" else [],
+        }
+        groups[0] = (replace(first, details_json=encode(details)), groups[0][1])
+    elif case == "source_gap":
+        inputs = replace(
+            inputs, entity_source_reasons={"daily/" + identity: ("capacity_exceeded",)}
+        )
+    result = build_candidates(inputs, *groups)[0]
+    assert result.envelope.rank is None and result.envelope.score is None
+
+
+def test_missing_window_and_small_sample_do_not_fabricate_scores():
+    """场景：窗口不足或完整候选少于最小样本；预期：保留未知原因，分数名次均为空。"""
+    from right_side_fixture import right_side_inputs, right_side_parents
+
+    missing = research_inputs(2, minimum=2)
+    assert all(
+        item.envelope.score is None
+        for item in build_candidates(missing, *research_parents(missing))
+    )
+    inputs = right_side_inputs(1)
+    result = build_candidates(inputs, *right_side_parents(inputs))[0]
+    assert result.envelope.score is None and result.envelope.rank is None
+    assert "insufficient_rank_sample" in result.envelope.gate_codes
+    assert result.envelope.state is ProductState.INCOMPLETE
     assert build_candidates(research_inputs(0), (), (), ()) == ()
 
 
-def test_accounting_type_isolates_financial_and_unknown_market_profiles():
-    """场景：工业样本足够、金融及未知口径不足；预期：后两者不借工业样本取得分位。"""
-    inputs = research_inputs(34, flat=True)
-    fundamental, governance, flow = research_parents(inputs)
-    changes = {30: "2", 31: None, 32: "unexpected", 33: "7"}
-    fundamental = tuple(
-        replace(parent, details_json=encode({"comp_type": changes[index]}))
-        if index in changes
-        else parent
-        for index, parent in enumerate(fundamental)
-    )
-    results = build_candidates(inputs, fundamental, governance, flow)
-    assert all(result.envelope.rank is not None for result in results[:30])
-    assert results[30].envelope.feature_profile == "market_only/comp_type_2"
-    assert results[31].envelope.feature_profile == "market_only/comp_type_unknown"
-    assert results[33].envelope.feature_profile == "market_only/comp_type_7"
-    assert all(result.envelope.score is None for result in results[30:])
+def test_parent_metric_rejects_missing_unknown_and_wrong_units():
+    """场景：父指标未知或不是比例/分数；预期：不从金额猜测资金比例。"""
+    from tushare_entitlement_hub.equity_research.candidates import parent_metric
+
+    inputs = research_inputs(1)
+    parent = research_parents(inputs)[0][0]
+    assert parent_metric(None, "quality_score") is None
+    assert parent_metric(parent, "quality_score") is None
+    refs = parent.envelope.evidence_refs
+    changed = replace(parent, metrics=(metric("quality_score", 10, "元", refs),))
+    assert parent_metric(changed, "quality_score") is None
 
 
-def test_distinct_percentile_fallback_levels_never_share_final_ranking():
-    """场景：30只在叶行业取分位、1只回退上级；预期：回退样本不与叶行业分数混排。"""
-    inputs = research_inputs(31)
+def test_peer_fallback_levels_are_not_mixed_in_final_ranking():
+    """场景：两只在叶行业取分位，一只回退上级；预期：回退者不借叶行业名次。"""
+    from right_side_fixture import right_side_inputs, right_side_parents
+
+    inputs = right_side_inputs(3)
     paths = {
-        identity: ("CN", "industry", "large" if index < 30 else "small")
+        identity: ("CN", "industry", "large" if index < 2 else "small")
         for index, identity in enumerate(inputs.entity_ids)
     }
     inputs = replace(inputs, config=replace(inputs.config, peer_paths=paths))
-    results = build_candidates(inputs, *research_parents(inputs, quality=80))
-    assert results[0].details["factor_peer_path"] == ["CN", "industry", "large"]
-    assert results[-1].details["factor_peer_path"] == ["CN", "industry"]
-    assert results[-1].envelope.score is not None
-    assert results[-1].envelope.rank is None
-    assert results[-1].envelope.action_state is ActionState.NO_CONCLUSION
-    assert all(result.envelope.peer_count == 30 for result in results[:30])
-
-
-@pytest.mark.parametrize("flag", ["negative_equity", "negative_earnings"])
-def test_certified_financial_problem_overrides_positive_market_valuation(flag):
-    """场景：PE/PB仍为正但财务已认证负权益或亏损；预期：问题研究档保留父反证且禁排名。"""
-    inputs = research_inputs(1)
-    fundamental, governance, flow = research_parents(inputs, quality=100)
-    parent = replace(
-        fundamental[0],
-        details_json=encode({"comp_type": "1", "problem_research_flags": [flag]}),
-        envelope=replace(
-            fundamental[0].envelope, contrary_evidence=fundamental[0].envelope.evidence_refs
-        ),
-    )
-    result = build_candidates(inputs, (parent,), governance, flow)[0]
-    assert result.details["score_profile"] == "problem_research"
-    assert result.details["problem_research_flags"] == [flag]
-    assert result.details["exclusion_reason"] == "financial_problem_research"
-    assert result.envelope.contrary_evidence == parent.envelope.contrary_evidence
-    assert result.envelope.score is None
-    assert not result.envelope.decision_allowed
+    results = build_candidates(inputs, *right_side_parents(inputs))
+    assert all(item.envelope.rank is not None for item in results[:2])
+    assert results[-1].envelope.rank is None and results[-1].envelope.score is None

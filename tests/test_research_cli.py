@@ -83,7 +83,7 @@ def test_cli_empty_bindings_and_dependency_selection_are_explicit(tmp_path):
         "fundamental_dossier/v1",
         "capital_governance_risks/v1",
         "flow_feasibility/v1",
-        "equity_research_candidates/v1",
+        "equity_right_side_candidates/v1",
     ]
 
 
