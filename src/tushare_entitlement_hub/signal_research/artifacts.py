@@ -9,7 +9,7 @@ import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,7 @@ VALUE_COLUMNS = ("open", "high", "low", "close", "ma20", "ma60", "dif", "dea", "
 
 @dataclass(frozen=True)
 class EventEvidence:
-    """事件来源和双时间证据。未知发布时间不得判为当时已知。
+    """事件发布时间、历史系统可用时间及业务有效时间分别保留。
 
     输入示例：EventEvidence('公告', '2024-01-02T12:00:00+08:00', '2024-01-03')。
     输出示例：写入事件 JSON，注明发布时间、有效日期和无法据此确定因果。
@@ -29,6 +29,7 @@ class EventEvidence:
     effective_at: str | None = None
     verification_status: str = "verified"
     source_url: str = ""
+    pit_available_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,14 +114,16 @@ def _validated_rows(artifact: SignalArtifact) -> list[dict[str, Any]]:
 
 
 def _event_record(event: EventEvidence, confirmation_date: str) -> dict[str, Any]:
-    """依据可核验发布时间区分当时已知和事后信息，保留有效时间但不推断因果。
+    """同时核验公开发布时间与历史系统可用时间，不用业务有效时间替代任一时点。
 
     输入发布于确认日次日的事件，输出 information_state='post_signal_information'。
-    缺失发布时间或时区时，输出 information_state='unverifiable'，拒绝假定当时已知。
+    历史发布事件缺失PIT时点、无时区、PIT早于发布或晚于确认时均为 unverifiable。
+    未来公开事件可记 post_signal_information，但没有合格PIT证据时不认证历史可用性。
     """
     if event.verification_status not in {"verified", "not_found", "unverifiable"}:
         raise ValueError("未知事件核验状态")
     information_state = event.verification_status
+    pit_availability_verified = False
     if information_state == "verified":
         try:
             published_at = datetime.fromisoformat(event.published_at or "")
@@ -128,16 +131,31 @@ def _event_record(event: EventEvidence, confirmation_date: str) -> dict[str, Any
                 raise ValueError("发布时间必须带时区")
             # 日线信号按上海时区确认日收盘判定；不把当日晚间公告视为已知。
             confirmation_cutoff = datetime.fromisoformat(f"{confirmation_date}T15:00:00+08:00")
-            information_state = (
-                "known_at_confirmation"
-                if published_at.astimezone(UTC) <= confirmation_cutoff
-                else "post_signal_information"
-            )
+            try:
+                available_at = datetime.fromisoformat(event.pit_available_at or "")
+                pit_availability_verified = (
+                    available_at.tzinfo is not None and available_at >= published_at
+                )
+            except ValueError:
+                available_at = None
+            if published_at > confirmation_cutoff:
+                information_state = "post_signal_information"
+            elif (
+                pit_availability_verified
+                and available_at is not None
+                and available_at <= confirmation_cutoff
+            ):
+                information_state = "known_at_confirmation"
+            else:
+                information_state = "unverifiable"
         except ValueError:
             information_state = "unverifiable"
     return {
         "title": event.title,
         "published_at": event.published_at,
+        "pit_available_at": event.pit_available_at,
+        "pit_availability_verified": pit_availability_verified,
+        "pit_known_at_confirmation": information_state == "known_at_confirmation",
         "effective_at": event.effective_at,
         "verification_status": event.verification_status,
         "information_state": information_state,
@@ -329,8 +347,8 @@ def write_artifact_index(
         writer.writeheader()
         html_stream.write(
             '<!doctype html><meta charset="utf-8"><title>Signal evidence</title>'
-            '<h1>Signal evidence</h1><p>Post-event observations are separate; '
-            'event timing does not establish causation.</p><table><thead><tr>'
+            "<h1>Signal evidence</h1><p>Post-event observations are separate; "
+            "event timing does not establish causation.</p><table><thead><tr>"
         )
         html_stream.write("".join(f"<th>{html.escape(column)}</th>" for column in columns))
         html_stream.write("</tr></thead><tbody>")

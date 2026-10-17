@@ -35,7 +35,12 @@ def example_artifact(signal_id="signal-1", return_value=0.1):
         {"cross": True},
         {"return_20d": return_value},
         (
-            EventEvidence("known", "2024-01-03T07:00:00Z", "2024-02-01"),
+            EventEvidence(
+                "known",
+                "2024-01-03T07:00:00Z",
+                "2024-02-01",
+                pit_available_at="2024-01-03T15:00:00+08:00",
+            ),
             EventEvidence("after close", "2024-01-03T15:01:00+08:00", "2024-01-02"),
             EventEvidence("missing publication"),
             EventEvidence("naive", "2024-01-02T12:00:00"),
@@ -218,3 +223,36 @@ def test_signal_id_cannot_escape_cache_directory(tmp_path):
     )
     assert len(Path(entry.evidence_json).parts) == 2
     assert (tmp_path / entry.evidence_json).resolve().is_relative_to(tmp_path.resolve())
+
+
+@pytest.mark.parametrize(
+    "published_at,available_at,expected_state,verified",
+    [
+        ("2024-01-02T12:00:00+08:00", None, "unverifiable", False),
+        ("2024-01-02T12:00:00+08:00", "bad", "unverifiable", False),
+        ("2024-01-02T12:00:00+08:00", "2024-01-02T13:00:00", "unverifiable", False),
+        ("2024-01-02T12:00:00+08:00", "2024-01-01T13:00:00+08:00", "unverifiable", False),
+        ("2024-01-02T12:00:00+08:00", "2024-01-03T15:01:00+08:00", "unverifiable", True),
+        ("2024-01-03T16:00:00+08:00", None, "post_signal_information", False),
+        ("2024-01-03T16:00:00+08:00", "2024-01-03T17:00:00+08:00", "post_signal_information", True),
+    ],
+)
+def test_event_pit_contract_fails_closed_without_historical_availability(
+    tmp_path,
+    published_at,
+    available_at,
+    expected_state,
+    verified,
+):
+    """场景：缺失、无时区、非法、早于发布或未来PIT；预期：不进入历史已知快照。"""
+    event = EventEvidence("event", published_at, pit_available_at=available_at)
+    entry = write_signal_artifacts(
+        replace(example_artifact(), events=(event,)), tmp_path, render_charts=False
+    )
+    evidence = json.loads((tmp_path / entry.evidence_json).read_text())
+    assert evidence["snapshot"]["events"] == []
+    record = evidence["post_signal_review"]["events"][0]
+    assert record["published_at"] == published_at and record["pit_available_at"] == available_at
+    assert record["information_state"] == expected_state
+    assert record["pit_availability_verified"] is verified
+    assert record["pit_known_at_confirmation"] is False
