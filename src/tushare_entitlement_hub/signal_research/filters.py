@@ -57,48 +57,81 @@ TECHNICAL_FILTER_NAMES = tuple(
 )
 
 
+TECHNICAL_FEATURE_NAMES = frozenset({
+    "close", "ma20", "ma60", "previous_ma20", "previous_ma60", "dif", "dea",
+    "histogram", "normalized_histogram", "atr14",
+})
+
+
+def validate_filter_definitions(definitions: tuple[FilterDefinition, ...]) -> frozenset[str]:
+    """一次校验规则独立性并返回禁止注入的规则结果名；默认规则输出技术条件名集合。
+
+    输入重名规则或读取另一规则名的依赖时抛ValueError；允许基本面规则同名原始特征。
+    """
+    names = {definition.name for definition in definitions}
+    if len(names) != len(definitions):
+        raise ValueError("条件名称必须唯一")
+    if any(set(definition.feature_names).intersection(names - {definition.name})
+           for definition in definitions):
+        raise ValueError("规则不能读取其他规则布尔结果")
+    return frozenset(definition.name for definition in definitions
+                     if definition.name not in definition.feature_names)
+
+
+def _evaluate_validated_filters(
+    point: IndicatorPoint, injected_features: Mapping[str, float | None] | None,
+    definitions: tuple[FilterDefinition, ...], reserved: frozenset[str],
+) -> dict[str, TruthValue]:
+    """按预校验规则独立求一个日期的原始特征；dif=1输出dif_positive=TRUE。
+
+    无注入时省略特征字典和集合分配；未知、bool和非有限值保持UNKNOWN。
+    """
+    if injected_features:
+        if TECHNICAL_FEATURE_NAMES.intersection(injected_features):
+            raise ValueError("注入特征不能覆盖技术指标")
+        if reserved.intersection(injected_features):
+            raise ValueError("条件布尔结果不能作为注入特征")
+    results = {}
+    for definition in definitions:
+        values = []
+        valid = True
+        for name in definition.feature_names:
+            value = getattr(point, name) if name in TECHNICAL_FEATURE_NAMES \
+                else (injected_features or {}).get(name)
+            if value is None or isinstance(value, (bool, TruthValue)) or not isfinite(value):
+                valid = False
+                break
+            values.append(float(value))
+        results[definition.name] = (
+            TruthValue.TRUE if definition.predicate(tuple(values)) else TruthValue.FALSE
+        ) if valid else TruthValue.UNKNOWN
+    return results
+
+
+def evaluate_filter_series(
+    points: tuple[IndicatorPoint, ...],
+    features_by_date: Mapping[str, Mapping[str, float | None]] | None = None,
+    definitions: tuple[FilterDefinition, ...] = DEFAULT_FILTERS,
+) -> dict[str, dict[str, TruthValue]]:
+    """整段行情只校验规则一次，每日只求值一次，返回可复用原始条件矩阵。
+
+    输入两日指标输出两个日期的独立三态结果；缓存不包含任何实验通过/失败布尔。
+    """
+    reserved = validate_filter_definitions(definitions)
+    return {point.trade_date: _evaluate_validated_filters(
+        point, (features_by_date or {}).get(point.trade_date), definitions, reserved,
+    ) for point in points}
+
+
 def evaluate_filters(
     point: IndicatorPoint,
     injected_features: Mapping[str, float | None] | None = None,
     definitions: tuple[FilterDefinition, ...] = DEFAULT_FILTERS,
 ) -> dict[str, TruthValue]:
-    """对每条规则独立读取特征，输出名字到TRUE/FALSE/UNKNOWN的映射。
+    """独立校验并求一个日期的三态条件；dif=1为TRUE，缺失fundamentals为UNKNOWN。
 
-    输入point和可选基本面/板块等数值特征；缺失或非有限特征输出UNKNOWN。
-    例：dif=1输出dif_positive=TRUE；无fundamentals输出fundamentals=UNKNOWN。
-    注入值不能覆盖技术特征，也不能读取其他条件布尔结果；0和正数分别为失败/通过。
+    注入不得覆盖技术原始值或读取其他规则结果，整段重复使用请调用evaluate_filter_series。
     """
-    technical = {
-        "close": point.close, "ma20": point.ma20, "ma60": point.ma60,
-        "previous_ma20": point.previous_ma20, "previous_ma60": point.previous_ma60,
-        "dif": point.dif, "dea": point.dea, "histogram": point.histogram,
-        "normalized_histogram": point.normalized_histogram, "atr14": point.atr14,
-    }
-    features = dict(injected_features or {})
-    if set(features).intersection(technical):
-        raise ValueError("注入特征不能覆盖技术指标")
-    if len({definition.name for definition in definitions}) != len(definitions):
-        raise ValueError("条件名称必须唯一")
-    condition_names = {definition.name for definition in definitions}
-    if any(set(definition.feature_names).intersection(condition_names - {definition.name})
-           for definition in definitions):
-        raise ValueError("规则不能读取其他规则布尔结果")
-    if set(features).intersection(definition.name for definition in definitions):
-        # Basic external conditions intentionally share their feature and rule name.
-        reserved = {definition.name for definition in definitions
-                    if definition.name not in definition.feature_names}
-        if set(features).intersection(reserved):
-            raise ValueError("条件布尔结果不能作为注入特征")
-    features.update(technical)
-    results = {}
-    for definition in definitions:
-        values = tuple(features.get(name) for name in definition.feature_names)
-        if any(value is None or isinstance(value, (bool, TruthValue))
-               or not isfinite(value) for value in values):
-            results[definition.name] = TruthValue.UNKNOWN
-        else:
-            numeric = tuple(float(value) for value in values if value is not None)
-            results[definition.name] = (
-                TruthValue.TRUE if definition.predicate(numeric) else TruthValue.FALSE
-            )
-    return results
+    return _evaluate_validated_filters(
+        point, injected_features, definitions, validate_filter_definitions(definitions),
+    )

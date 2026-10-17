@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import SignalArtifact, write_artifact_index, write_signal_artifacts
-from .filters import TECHNICAL_FILTER_NAMES, evaluate_filters
+from .filters import TECHNICAL_FILTER_NAMES, evaluate_filter_series
 from .indicators import IndicatorPoint, PriceBar, StockCharacteristics, compute_indicators
 from .signals import ExperimentSwitches, confirm_signals
 from .simulation import SimulationConfiguration, simulate_signal_trades
@@ -299,9 +299,11 @@ def run_research(
                 counts["securities_without_calendar_points"] += 1
                 continue
             points_by_date = {point.trade_date: point for point in full_points}
+            results_by_date = evaluate_filter_series(full_points)
             relative_series = f"daily_condition_matrix/{code}.csv.gz"
             with gzip.open(
-                output_directory / relative_series, "wt", encoding="utf-8", newline=""
+                output_directory / relative_series, "wt", encoding="utf-8", newline="",
+                compresslevel=1,
             ) as file:
                 fieldnames = [
                     "trade_date",
@@ -320,7 +322,7 @@ def run_research(
                     "dea",
                     "histogram",
                     "normalized_histogram",
-                    *evaluate_filters(full_points[0]),
+                    *results_by_date[full_points[0].trade_date],
                     *asdict(full_points[0].characteristics),
                 ]
                 writer = csv.DictWriter(file, fieldnames=fieldnames)
@@ -331,7 +333,8 @@ def run_research(
                     values.update(trade_date=point.trade_date)
                     values.update({name: getattr(point, name) for name in fieldnames[10:16]})
                     values.update(
-                        {name: str(value) for name, value in evaluate_filters(point).items()}
+                        {name: str(value)
+                         for name, value in results_by_date[point.trade_date].items()}
                     )
                     values.update(asdict(point.characteristics))
                     writer.writerow(values)
@@ -341,6 +344,7 @@ def run_research(
                 ts_code=code,
                 threshold=protocol.histogram_threshold,
                 confirmation_days=protocol.confirmation_days,
+                precomputed_results_by_date=results_by_date,
             )
             signal_dicts = [
                 asdict(signal)

@@ -9,6 +9,7 @@ from tushare_entitlement_hub.signal_research.filters import (
     TECHNICAL_FILTER_NAMES,
     FilterDefinition,
     TruthValue,
+    evaluate_filter_series,
     evaluate_filters,
 )
 from tushare_entitlement_hub.signal_research.indicators import (
@@ -120,3 +121,23 @@ def test_signal_contract_validation() -> None:
         confirm_signals((), (ExperimentSwitches("x", ("absent",)),))
     with pytest.raises(ValueError, match="唯一"):
         confirm_signals((), (ExperimentSwitches("x", ()), ExperimentSwitches("x", ())))
+
+
+def test_shared_raw_condition_matrix_is_identical_and_validated() -> None:
+    """共享逐日原始矩阵与独立求值输出一致，日历或三态不完整及双来源输入拒绝。"""
+    points = (point(0, .001), point(1), point(2, dif=-1))
+    experiments = (ExperimentSwitches("dif", ("dif_positive",)),
+                   ExperimentSwitches("calendar", ("dif_positive",), False))
+    matrix = evaluate_filter_series(points)
+    assert matrix == {item.trade_date: evaluate_filters(item) for item in points}
+    assert confirm_signals(points, experiments) == confirm_signals(
+        points, experiments, precomputed_results_by_date=matrix,
+    )
+    with pytest.raises(ValueError, match="同时注入"):
+        confirm_signals(points, experiments, {}, precomputed_results_by_date=matrix)
+    with pytest.raises(ValueError, match="全部输入"):
+        confirm_signals(points, experiments, precomputed_results_by_date={})
+    with pytest.raises(ValueError, match="三态"):
+        confirm_signals(points, experiments, precomputed_results_by_date={
+            date: {} for date in matrix
+        })

@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from math import isfinite
 
-from .filters import DEFAULT_FILTERS, FilterDefinition, TruthValue, evaluate_filters
+from .filters import DEFAULT_FILTERS, FilterDefinition, TruthValue, evaluate_filter_series
 from .indicators import IndicatorPoint
 
 
@@ -101,6 +101,7 @@ def confirm_signals(
     threshold: float = 0.002,
     confirmation_days: int = 3,
     definitions: tuple[FilterDefinition, ...] = DEFAULT_FILTERS,
+    precomputed_results_by_date: Mapping[str, Mapping[str, TruthValue]] | None = None,
 ) -> tuple[SignalConfirmation, ...]:
     """每个实验从同一独立事件自行选择首次全部启用条件TRUE的日期。
 
@@ -108,6 +109,7 @@ def confirm_signals(
     输出可供模拟器消费的ts_code/confirmation_date/experiment_id及完整条件证据。
     例：A仅DIF、B仅MA，A在T确认不影响B在T+2确认。
     event_filter=False时逐个完整日历日评估并返回所有通过日期，event_id=None。
+    precomputed_results_by_date只接受同一原始指标产生的完整日矩阵，不接受实验布尔。
     features_by_date仅表示调用方已完成PIT证明的当日特征，不读取未来收益或其他实验结果。
     """
     events = detect_macd_events(points, threshold, confirmation_days)
@@ -117,11 +119,19 @@ def confirm_signals(
     for experiment in experiments:
         if set(experiment.enabled_filters) - names:
             raise ValueError("实验包含未定义条件")
-    results_by_date = {
-        point.trade_date: evaluate_filters(
-            point, (features_by_date or {}).get(point.trade_date), definitions
-        ) for point in points
-    }
+    if precomputed_results_by_date is None:
+        results_by_date = evaluate_filter_series(points, features_by_date, definitions)
+    else:
+        if features_by_date is not None:
+            raise ValueError("预计算矩阵不能同时注入原始特征")
+        if set(precomputed_results_by_date) != {point.trade_date for point in points}:
+            raise ValueError("预计算矩阵必须覆盖全部输入日历")
+        if any(set(results) != names or any(not isinstance(value, TruthValue)
+                                          for value in results.values())
+               for results in precomputed_results_by_date.values()):
+            raise ValueError("预计算矩阵条件名称或三态不完整")
+        results_by_date = {date: dict(results)
+                           for date, results in precomputed_results_by_date.items()}
     confirmations = []
     for experiment in experiments:
         candidates = [(event, event.active_dates) for event in events] if experiment.event_filter \
