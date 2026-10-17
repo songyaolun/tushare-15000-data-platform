@@ -11,9 +11,23 @@ import typer
 
 from .history import assert_complete_history, iter_security_history, load_history_database
 from .reporting import enrich_signal_percentiles, summarize_trades, write_research_report
+from .retrospective import build_retrospective_review
 from .runner import ResearchConfiguration, research_experiments, run_research
 
 signal_research_app = typer.Typer(help="独立MACD条件、五年研究回测和信号证据。")
+
+
+@signal_research_app.command("review")
+def review_command(
+    output_directory: Annotated[Path, typer.Option(help="已有研究产物目录")],
+    benchmark_root: Annotated[Path, typer.Option(help="公开指数和交易日历缓存目录")],
+) -> None:
+    """独立生成基线事后复核，不重新生成信号或阻断技术研究运行。
+
+    输入review --output-directory result --benchmark-root cache，输出复核CSV路径。
+    只读已有公开数据，不读取token或发网络请求。
+    """
+    typer.echo(str(build_retrospective_review(output_directory, benchmark_root)))
 
 
 def validate_research_window(calendar: list[str], configuration: ResearchConfiguration) -> None:

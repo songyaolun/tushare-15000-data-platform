@@ -60,3 +60,13 @@ uv run tushare-hub signal-research run \
 ```
 
 命令本身不联网。采集与回测分开，便于冻结输入、复现结果和进行独立条件实验。报告适用于研究复核；阈值、量价和入场位置仍需验证。
+
+已有结果可另行生成基线逐笔复核表：
+
+```bash
+uv run tushare-hub signal-research review \
+  --output-directory ~/.cache/tushare-hub/p03-macd-results-20261017 \
+  --benchmark-root ~/.cache/tushare-hub/p03-macd-backtest-20261017
+```
+
+`baseline_trade_review.csv` 并排保存交易结果、未来固定窗口最大不利／有利幅度、收盘峰谷回撤及三条市场指数的同期涨跌。固定窗口从确认日后开始，实际持仓路径在退出日仅使用开盘成交价，避免把卖出后的涨跌算入持仓风险。市场持仓参照使用入退出日期收盘比，与个股开盘成交收益的时段并不完全一致。每年最差的已退出亏损信号另存为事件调查样本；这些极端案例用于查问题，不代表总体分布。
