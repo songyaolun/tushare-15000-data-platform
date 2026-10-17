@@ -20,6 +20,7 @@ uv run --no-project bash scripts/demo.sh
 - [产品加工基础层](docs/产品加工基础层.md)
 - [产品说明书](docs/产品说明书.md)
 - [股票研究闭环](docs/股票研究闭环.md)
+- [P03 MACD 独立条件回测](docs/P03-MACD独立条件回测.md)
 - [全产品离线研究](docs/全产品离线研究.md)
 - [主题预期与基金研究](docs/主题预期与基金研究.md)
 - [跨市场与融资研究](docs/跨市场与融资研究.md)

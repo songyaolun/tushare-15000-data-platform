@@ -28,6 +28,7 @@ from .products import build_products
 from .quality import audit_rows
 from .raw import RawStore, assert_public
 from .reference import build_reference, rebuild_reference
+from .signal_research.cli import signal_research_app
 from .store import Store, encode
 from .survey import survey
 
@@ -52,6 +53,7 @@ for command_name, application in (
     ("product-foundation", foundation_app),
     ("research", research_app),
     ("research-all", all_products_app),
+    ("signal-research", signal_research_app),
 ):
     app.add_typer(application, name=command_name)
 
