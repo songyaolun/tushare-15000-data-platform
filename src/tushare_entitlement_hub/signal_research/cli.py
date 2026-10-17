@@ -9,12 +9,24 @@ from typing import Annotated, Any
 import duckdb
 import typer
 
+from .diagnostics import build_condition_diagnostics
 from .history import assert_complete_history, iter_security_history, load_history_database
 from .reporting import enrich_signal_percentiles, summarize_trades, write_research_report
 from .retrospective import build_retrospective_review
 from .runner import ResearchConfiguration, research_experiments, run_research
 
 signal_research_app = typer.Typer(help="独立MACD条件、五年研究回测和信号证据。")
+
+
+@signal_research_app.command("diagnose")
+def diagnose_command(
+    output_directory: Annotated[Path, typer.Option(help="已有完整研究产物目录")],
+) -> None:
+    """统计完整日矩阵的条件通过与重合，以及各实验信号变化。
+
+    输入 --output-directory result，输出result/condition_diagnostics.json路径；不联网。
+    """
+    typer.echo(str(build_condition_diagnostics(output_directory)))
 
 
 @signal_research_app.command("review")

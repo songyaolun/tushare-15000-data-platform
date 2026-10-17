@@ -93,3 +93,13 @@ def test_validate_research_window_rejects_short_or_missing_window() -> None:
         cli.validate_research_window(["20260101"], configuration)
     calendar = [str(index) for index in range(250)] + ["20260101", "20260102"]
     assert cli.validate_research_window(calendar, configuration) is None
+
+
+def test_diagnose_command_uses_existing_results(monkeypatch, tmp_path: Path) -> None:
+    """场景：已有完整产物；预期诊断命令只串联本地矩阵分析并打印路径。"""
+    monkeypatch.setattr(cli, "build_condition_diagnostics",
+                        lambda root: root / "condition_diagnostics.json")
+    result = CliRunner().invoke(cli.signal_research_app,
+                                ["diagnose", "--output-directory", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "condition_diagnostics.json" in result.output
