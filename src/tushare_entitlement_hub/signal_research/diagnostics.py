@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import tempfile
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -74,7 +75,9 @@ def _signal_comparison(
     }
 
 
-def build_condition_diagnostics(output_directory: Path) -> Path:
+def build_condition_diagnostics(
+    output_directory: Path, *, memory_limit: str = "512MB",
+) -> Path:
     """磁盘DuckDB读取本次全部gzip矩阵，生成研究窗口三态/重合/消融确认诊断。
 
     输入含run_manifest.json、daily_condition_matrix/*.csv.gz、signal_records.jsonl的目录。
@@ -82,6 +85,7 @@ def build_condition_diagnostics(output_directory: Path) -> Path:
     例：TRUE/FALSE/UNKNOWN各1时pass_rate_all=1/3、pass_rate_known=1/2。
     只统计源OHLC合法且close/vol/amount/adj_factor正有限的真实可计算日，保留未知预热。
     分母来自完整矩阵而非基线幸存者；不使用未来收益或自拟权重。
+    memory_limit默认512MB；独立私有缓存溢写目录结束时清理，研究窗只物化一次。
     """
     output_directory = Path(output_directory)
     manifest = json.loads((output_directory / "run_manifest.json").read_text())
@@ -94,11 +98,19 @@ def build_condition_diagnostics(output_directory: Path) -> Path:
         raise ValueError("diagnostics_matrix_missing")
     database = output_directory / "condition_diagnostics.duckdb"
     database.unlink(missing_ok=True)
-    with duckdb.connect(str(database)) as connection:
+    spill_root = Path.home() / ".cache" / "tushare-hub"
+    spill_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="condition-diagnostics-spill-", dir=spill_root) \
+            as spill_directory, duckdb.connect(str(database)) as connection:
         connection.execute("SET threads=1")
+        connection.execute("SET memory_limit=?", [memory_limit])
+        connection.execute("SET preserve_insertion_order=false")
+        connection.execute("SET temp_directory=?", [spill_directory])
         connection.execute(
             "CREATE TABLE matrix AS SELECT * FROM read_csv(?, header=true, "
-            "all_varchar=true, union_by_name=true, filename=true)", [[str(path) for path in files]],
+            "all_varchar=true, union_by_name=true, filename=true, buffer_size=1048576) "
+            "WHERE trade_date BETWEEN ? AND ?",
+            [[str(path) for path in files], start, end],
         )
         columns = {row[0] for row in connection.execute("DESCRIBE matrix").fetchall()}
         required = {"trade_date", "open", "high", "low", "close", "vol", "amount",
@@ -109,15 +121,14 @@ def build_condition_diagnostics(output_directory: Path) -> Path:
             if _scalar(connection, f"SELECT count(*) FROM matrix WHERE \"{rule}\" IS NULL "
                        f"OR \"{rule}\" NOT IN ('TRUE','FALSE','UNKNOWN')"):
                 raise ValueError("diagnostics_rule_state_invalid")
-        connection.execute("CREATE TABLE research_matrix AS SELECT * FROM matrix "
-                           "WHERE trade_date BETWEEN ? AND ?", [start, end])
+        connection.execute("CREATE VIEW research_matrix AS SELECT * FROM matrix")
         positive = " AND ".join(
             f"try_cast(\"{field}\" AS DOUBLE)>0 AND "
             f"isfinite(try_cast(\"{field}\" AS DOUBLE))"
             for field in ("open", "high", "low", "close", "vol", "amount", "adj_factor")
         )
         # Parameterized values cannot be captured in a persistent DuckDB view.
-        connection.execute("CREATE TABLE eligible AS SELECT * FROM research_matrix WHERE "
+        connection.execute("CREATE VIEW eligible AS SELECT * FROM research_matrix WHERE "
                            + positive + " AND try_cast(low AS DOUBLE)<= "
                            "least(try_cast(open AS DOUBLE),try_cast(close AS DOUBLE)) "
                            "AND try_cast(high AS DOUBLE)>= "

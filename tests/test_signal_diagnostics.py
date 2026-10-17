@@ -131,7 +131,7 @@ def test_invalid_matrix_or_signal_contract(tmp_path: Path, failure: str) -> None
             for row in rows:
                 del row["dif_positive"]
         else:
-            rows[0]["dif_positive"] = "MAYBE"
+            rows[1]["dif_positive"] = "MAYBE"
         with gzip.open(path, "wt", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
             writer.writeheader()
@@ -151,3 +151,24 @@ def test_invalid_matrix_or_signal_contract(tmp_path: Path, failure: str) -> None
         path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError):
         build_condition_diagnostics(tmp_path)
+
+
+def test_bounded_diagnostics_memory_and_private_spill_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """显式低内存限制仍生成诊断，私有溢写目录最终清理，不保存研究窗外矩阵。"""
+    import duckdb
+
+    fixture(tmp_path)
+    private_home = tmp_path / "private-home"
+    monkeypatch.setattr(Path, "home", lambda: private_home)
+    destination = build_condition_diagnostics(tmp_path, memory_limit="64MB")
+    assert destination.exists()
+    spill_root = private_home / ".cache" / "tushare-hub"
+    assert not list(spill_root.glob("condition-diagnostics-spill-*"))
+    database = tmp_path / "condition_diagnostics.duckdb"
+    with duckdb.connect(str(database), read_only=True) as connection:
+        assert connection.execute("SELECT min(trade_date) FROM matrix").fetchone() == ("20260102",)
+        tables = connection.execute("SELECT table_name FROM information_schema.tables "
+                                    "WHERE table_type='BASE TABLE'").fetchall()
+    assert ("eligible",) not in tables and ("research_matrix",) not in tables
