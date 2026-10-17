@@ -8,6 +8,7 @@ from enum import StrEnum
 from math import isfinite
 
 from .indicators import IndicatorPoint
+from .numeric import strictly_greater
 
 
 class TruthValue(StrEnum):
@@ -32,12 +33,16 @@ class FilterDefinition:
 
 def _descending(values: tuple[float, ...]) -> bool:
     """逐项严格递减；输入(3,2,1)输出True，(3,3,1)输出False。"""
-    return all(left > right for left, right in zip(values, values[1:], strict=False))
+    return all(strictly_greater(left, right)
+               for left, right in zip(values, values[1:], strict=False))
 
 
 def _positive(values: tuple[float, ...]) -> bool:
-    """检查单个原始特征严格为正；输入(1,)输出True，(0,)输出False。"""
-    return values[0] > 0
+    """检查原始特征为正，可附价格尺度；输入(1,10)输出True，(1e-15,10)输出False。
+
+    基本面/板块单值(1,)仍输出True，未知不调用本函数；尺度只抑制浮点舍入噪声。
+    """
+    return strictly_greater(values[0], 0, scale_ref=values[1] if len(values) > 1 else 0)
 
 
 DEFAULT_FILTERS = (
@@ -46,8 +51,8 @@ DEFAULT_FILTERS = (
     FilterDefinition("close_above_ma20_above_ma60", ("close", "ma20", "ma60"), _descending),
     FilterDefinition("ma20_rising", ("ma20", "previous_ma20"), _descending),
     FilterDefinition("ma60_rising", ("ma60", "previous_ma60"), _descending),
-    FilterDefinition("dif_positive", ("dif",), _positive),
-    FilterDefinition("histogram_positive", ("histogram",), _positive),
+    FilterDefinition("dif_positive", ("dif", "close"), _positive),
+    FilterDefinition("histogram_positive", ("histogram", "close"), _positive),
     FilterDefinition("fundamentals", ("fundamentals",), _positive),
     FilterDefinition("sector", ("sector",), _positive),
 )

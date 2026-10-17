@@ -156,7 +156,8 @@ def compute_indicators(
     """截取观察日可见行情，以TA-Lib MACD(12,26,9)、SMA20/60和ATR14计算指标。
 
     输入日期为可排序的YYYYMMDD，行情按日期排序，重复日期和无效OHLC/因子拒绝。
-    默认锚点为观察日最后一根可见K线因子；全部OHLC乘每日因子/锚点。
+    默认锚点为固定输入历史首根可见K线因子；全部OHLC乘每日因子/锚点。
+    输入历史起始不得随观察日裁剪，首因子锚点保证全历史与前缀使用同一算术路径。
     H=2*(DIF-DEA)，normalized_histogram=H/复权收盘价。
     示例：仅一根10元、因子2的K线与锚点4，输出close=5且ma20=None。
     无可见行情输出空元组；未来行情不参与校验、预热、锚点或股性计算。
@@ -167,7 +168,7 @@ def compute_indicators(
         return ()
     if len({bar.trade_date for bar in visible}) != len(visible):
         raise ValueError("交易日期必须唯一")
-    anchor = visible[-1].adjustment_factor if anchor_factor is None else anchor_factor
+    anchor = visible[0].adjustment_factor if anchor_factor is None else anchor_factor
     if not isfinite(anchor) or anchor <= 0:
         raise ValueError("观察日复权锚点必须为正有限数")
     for bar in visible:

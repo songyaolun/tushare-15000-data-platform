@@ -200,10 +200,10 @@ def _chart_artifact(
     ]
     position = next(index for index, point in enumerate(valid_points) if point.trade_date == day)
     window = valid_points[max(0, position - 250) : position + 61]
-    # compute_indicators采用固定末日锚点；展示以确认日锚点统一重标，H/C保持不变。
-    final_factor = rows[valid_points[-1].trade_date]["adj_factor"]
+    # compute_indicators采用固定历史首日锚点；展示以确认日锚点统一重标，H/C保持不变。
+    first_factor = rows[valid_points[0].trade_date]["adj_factor"]
     confirmation_factor = rows[day]["adj_factor"]
-    scale = final_factor / confirmation_factor
+    scale = first_factor / confirmation_factor
     dated: dict[str, list[Any]] = {
         name: []
         for name in (
@@ -370,7 +370,7 @@ def run_research(
             for trade in trades:
                 day = str(trade["confirmation_date"]).replace("-", "")
                 point = points_by_date[day]
-                snapshot_scale = rows[points[-1].trade_date]["adj_factor"] / rows[day]["adj_factor"]
+                snapshot_scale = rows[points[0].trade_date]["adj_factor"] / rows[day]["adj_factor"]
                 identifier = f"{code}:{day}:{trade['experiment_id']}"
                 record: dict[str, Any] = {
                     **trade,
@@ -379,14 +379,16 @@ def run_research(
                     "source_series_asof_cutoff": day,
                     "source_series_metadata": {
                         "raw_ohlc_semantics": "unadjusted_provider_quotes",
-                        "indicator_price_semantics": "daily_factor_divided_by_final_anchor",
-                        "indicator_anchor_date": points[-1].trade_date,
-                        "indicator_anchor_factor": rows[points[-1].trade_date]["adj_factor"],
+                        "indicator_price_semantics": (
+                            "daily_factor_divided_by_fixed_first_history_anchor"
+                        ),
+                        "indicator_anchor_date": points[0].trade_date,
+                        "indicator_anchor_factor": rows[points[0].trade_date]["adj_factor"],
                         "confirmation_anchor_factor": rows[day]["adj_factor"],
                         "snapshot_scale_from_series": (
-                            rows[points[-1].trade_date]["adj_factor"] / rows[day]["adj_factor"]
+                            rows[points[0].trade_date]["adj_factor"] / rows[day]["adj_factor"]
                         ),
-                        "future_anchor_affects_absolute_scale_only": True,
+                        "future_anchor_used": False,
                     },
                     "pre_signal_metrics": {
                         **asdict(point.characteristics),

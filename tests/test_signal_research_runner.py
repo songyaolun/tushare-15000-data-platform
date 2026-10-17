@@ -181,7 +181,7 @@ def test_independent_experiments_calendar_window_and_shared_records(
     assert data[0]["pre_signal_metrics"]["previous_ma20"] == 8
     assert data[0]["pre_signal_metrics"]["dif"] == 1
     assert manifest["chart_count"] == 0
-    assert data[0]["source_series_metadata"]["indicator_anchor_date"] == "20230106"
+    assert data[0]["source_series_metadata"]["indicator_anchor_date"] == "20230101"
     # 停牌占T+1，缩短至T+1窗口时DIF在T+2通过已经过期。
     short = runner.run_research(
         [("000001.SZ", source)],
@@ -275,7 +275,7 @@ def test_future_anchor_scaling_and_snapshot_consistency(
     earlier = compute_indicators(bars, calendar[79])
     full = compute_indicators(bars, calendar[-1])
     assert full[79].normalized_histogram == pytest.approx(earlier[79].normalized_histogram)
-    assert full[79].ma20 * 2 == pytest.approx(earlier[79].ma20)
+    assert full[79].ma20 == pytest.approx(earlier[79].ma20)
     record = dict(signal_id="one", pre_signal_metrics={}, filter_results={}, post_signal_returns={})
     artifact = runner._chart_artifact("a", {"confirmation_date": calendar[79]}, full, rows, record)
     position = artifact.dated_values["date"].index(calendar[79])

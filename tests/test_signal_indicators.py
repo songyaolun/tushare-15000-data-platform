@@ -20,7 +20,7 @@ def test_indicators_match_talib_and_prefix_invariant() -> None:
     """复权OHLC与库输出逐值一致，追加未来因子不会改变历史归一柱和条件。"""
     bars = price_bars()
     points = compute_indicators(bars, "99999999")
-    prices = np.asarray([bar.close * bar.adjustment_factor / bars[-1].adjustment_factor
+    prices = np.asarray([bar.close * bar.adjustment_factor / bars[0].adjustment_factor
                          for bar in bars])
     differences, signal, _ = talib.MACD(prices, 12, 26, 9)
     assert points[-1].dif == pytest.approx(differences[-1])
@@ -104,7 +104,7 @@ def test_vectorized_characteristics_match_independent_window_oracle() -> None:
     for index in range(0, len(bars), 23):
         bars[index] = replace(bars[index], amount=None)
     points = compute_indicators(bars, "99999999")
-    anchor = bars[-1].adjustment_factor
+    anchor = bars[0].adjustment_factor
     adjusted = np.asarray([
         [value * bar.adjustment_factor / anchor
          for value in (bar.open, bar.high, bar.low, bar.close)] for bar in bars

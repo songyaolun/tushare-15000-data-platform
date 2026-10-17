@@ -8,6 +8,7 @@ from math import isfinite
 
 from .filters import DEFAULT_FILTERS, FilterDefinition, TruthValue, evaluate_filter_series
 from .indicators import IndicatorPoint
+from .numeric import ratio_greater
 
 
 @dataclass(frozen=True)
@@ -75,14 +76,14 @@ def detect_macd_events(
         current = points[index].normalized_histogram
         if (previous is None or current is None
                 or not isfinite(previous) or not isfinite(current)
-                or not previous <= threshold < current):
+                or ratio_greater(previous, threshold) or not ratio_greater(current, threshold)):
             continue
         active_dates = []
         for candidate in points[index : index + confirmation_days + 1]:
             value = candidate.normalized_histogram
             if value is None or not isfinite(value):
                 continue
-            if value <= threshold:
+            if not ratio_greater(value, threshold):
                 break
             active_dates.append(candidate.trade_date)
         events.append(MacdEvent(
