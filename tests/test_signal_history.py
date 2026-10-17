@@ -103,6 +103,7 @@ def test_duplicate_keys_fail_and_keep_old_database(tmp_path: Path) -> None:
         load_history_database(tmp_path, path)
     assert path.read_bytes() == original
     assert not list(tmp_path.glob("signal-history-*"))
+    assert not list(tmp_path.glob("signal-partition-*"))
 
 
 @pytest.mark.parametrize("mutation,expected", [
@@ -204,3 +205,28 @@ def test_loading_progress_every_500_partitions_and_api_completion(
         "[history] stk_limit complete: processed_partitions=0 loaded_rows=0 skipped_partitions=0",
     ]
     assert manifest["skipped_file_count"] == 500
+
+
+def test_private_csv_copy_preserves_nulls_dates_and_cleans_up(tmp_path: Path) -> None:
+    """CSV COPY保留证券代码/日期文本和数值NULL；成功后临时文件全部清理。"""
+    write_calendar(tmp_path)
+    write_partition(tmp_path, "daily")
+    path = write_partition(tmp_path, "daily_basic")
+    envelope = json.loads(path.read_text())
+    fields = envelope["response"]["data"]["fields"]
+    for field in ("turnover_rate", "circ_mv"):
+        envelope["response"]["data"]["items"][0][fields.index(field)] = None
+    envelope["quality"] = partition_quality(
+        "daily_basic", envelope["parameters"], envelope["response"],
+    )
+    path.write_text(json.dumps(envelope))
+    database = tmp_path / "cache.duckdb"
+    load_history_database(tmp_path, database)
+    with duckdb.connect(str(database)) as connection:
+        code, rows = next(iter_security_history(connection))
+    assert code == "000001.SZ"
+    assert rows[0]["trade_date"] == "20260105"
+    assert rows[0]["turnover_rate"] is None
+    assert rows[0]["circ_mv"] is None
+    assert rows[0]["floating_market_value_yuan"] is None
+    assert not list(tmp_path.glob("signal-partition-*"))

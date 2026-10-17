@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import os
@@ -17,7 +18,6 @@ from ..raw import assert_public, canonical_json
 from ..research_history.collection import FIELDS, partition_quality, response_records
 
 HISTORY_APIS = ("daily", "adj_factor", "daily_basic", "stk_limit")
-INSERT_BATCH_SIZE = 1000
 
 
 def _read_public_json(path: Path) -> Any:
@@ -41,11 +41,14 @@ def _calendar_dates(value: Any) -> list[str]:
 
 
 def _load_partition(
-    connection: duckdb.DuckDBPyConnection, api_name: str, envelope: Any
+    connection: duckdb.DuckDBPyConnection, api_name: str, envelope: Any,
+    temporary_directory: Path,
 ) -> int | None:
-    """重新核验通过的分区并每1000行插入；失败质量页输出None，伪造通过或重复键抛异常。
+    """重新核验通过分区，以私有临时CSV整页COPY；失败质量页输出None，重复键抛异常。
 
-    输入collector标准envelope，输出实际入库行数；源单位完整保留不在载入时转换。
+    输入collector标准envelope和数据库所在临时目录，输出实际入库行数。
+    CSV权限0600、每分区限提供方行上限、finally删除；None按空字段映射SQL NULL。
+    源单位不在载入时转换；例：adj_factor=None仍保留NULL而不是0。
     """
     if not isinstance(envelope, dict):
         raise ValueError("history_envelope_invalid")
@@ -66,17 +69,25 @@ def _load_partition(
                 or not isinstance(record["trade_date"], str)
                 or not re.fullmatch(r"\d{8}", record["trade_date"])):
             raise ValueError("history_partition_key_invalid")
-    projections = ",".join(
-        f"unnest(?::{ 'VARCHAR' if field in {'ts_code', 'trade_date'} else 'DOUBLE' }[])"
-        for field in fields
-    )
-    sql = f"INSERT INTO {api_name} SELECT {projections}"
+    temporary_csv: Path | None = None
     try:
-        for start in range(0, len(records), INSERT_BATCH_SIZE):
-            batch = records[start : start + INSERT_BATCH_SIZE]
-            connection.execute(sql, [[record[field] for record in batch] for field in fields])
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="", suffix=".csv",
+            prefix="signal-partition-", dir=temporary_directory, delete=False,
+        ) as stream:
+            temporary_csv = Path(stream.name)
+            csv.writer(stream).writerows([record[field] for field in fields] for record in records)
+        columns = ",".join(f'"{field}"' for field in fields)
+        connection.execute(
+            f"COPY {api_name} ({columns}) FROM ? "
+            "(FORMAT CSV, HEADER FALSE, NULLSTR '', AUTO_DETECT FALSE)",
+            [str(temporary_csv)],
+        )
     except duckdb.Error:
         raise ValueError("history_partition_insert_contract_failed") from None
+    finally:
+        if temporary_csv is not None:
+            temporary_csv.unlink(missing_ok=True)
     return len(records)
 
 
@@ -87,7 +98,7 @@ def load_history_database(root: Path, database_path: Path) -> dict[str, Any]:
     trading_dates及database_path清单。摘要只在assert_public通过后计算，不读取凭据。
     例：一份daily页和日历载入后api_counts['daily']=1；所有源daily证券均保留。
     同一证券日期跨分区重复、字段质量损坏或日历外日期均失败，旧缓存保持不变。
-    每次重建并原子替换；一次Python内存只包含一个源分区和1000行插入批次。
+    每次重建并原子替换；一次Python内存只包含一个源分区，通过私有CSV整页COPY。
     每500个已处理分区及每接口完成时输出公开计数进度，不打印源内容或文件路径。
     """
     root, database_path = Path(root), Path(database_path)
@@ -127,7 +138,7 @@ def load_history_database(root: Path, database_path: Path) -> dict[str, Any]:
                     digest.update(canonical_json({"api": api_name, "file": path.name,
                                                   "envelope": envelope}).encode())
                     raw_file_count += 1
-                    rows = _load_partition(connection, api_name, envelope)
+                    rows = _load_partition(connection, api_name, envelope, database_path.parent)
                     if rows is None:
                         skipped_file_count += 1
                         skipped_partitions += 1
