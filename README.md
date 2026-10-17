@@ -21,6 +21,7 @@ uv run --no-project bash scripts/demo.sh
 - [产品说明书](docs/产品说明书.md)
 - [股票研究闭环](docs/股票研究闭环.md)
 - [P03 MACD 独立条件回测](docs/P03-MACD独立条件回测.md)
+- [P03 量价、主题与买卖点优化](docs/P03量价与主题优化.md)
 - [全产品离线研究](docs/全产品离线研究.md)
 - [主题预期与基金研究](docs/主题预期与基金研究.md)
 - [跨市场与融资研究](docs/跨市场与融资研究.md)

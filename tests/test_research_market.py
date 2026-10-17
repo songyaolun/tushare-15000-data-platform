@@ -147,8 +147,13 @@ def test_market_hand_calculation_and_evidence():
     assert result.metric("liquidity_concentration") == 0.75
     assert result.metric("down_limit_share") == 0.5
     assert result.metric("stress_score") == pytest.approx(100 * 1.75 / 3)
-    assert result.envelope.score == result.metric("stress_score")
-    assert sum(item.contribution for item in result.envelope.contributions) == result.envelope.score
+    # 场景：普通求和与精确求和的舍入次序不同；预期：仅容忍机器精度级误差。
+    assert result.envelope.score == pytest.approx(
+        result.metric("stress_score"), rel=1e-14, abs=1e-12
+    )
+    assert sum(item.contribution for item in result.envelope.contributions) == pytest.approx(
+        result.envelope.score, rel=1e-14, abs=1e-12
+    )
     assert result.details["denominator_count"] == 2
     assert not result.envelope.decision_allowed
 
