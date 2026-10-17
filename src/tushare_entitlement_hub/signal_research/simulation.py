@@ -28,6 +28,8 @@ class SimulationConfiguration:
     commission_rate: float = 0.0003
     transfer_fee_rate: float = 0.0
     price_stop_loss_fraction: float | None = None
+    maximum_entry_wait_sessions: int | None = None
+    price_take_profit_fraction: float | None = None
 
     def __post_init__(self) -> None:
         """Reject invalid assumptions before any fills are evaluated.
@@ -47,10 +49,20 @@ class SimulationConfiguration:
             raise ValueError("Adverse slippage must be less than one")
         if self.maximum_holding_sessions < 1:
             raise ValueError("Holding-session cap must be positive")
+        if self.maximum_entry_wait_sessions is not None and (
+            type(self.maximum_entry_wait_sessions) is not int
+            or self.maximum_entry_wait_sessions < 1
+        ):
+            raise ValueError("Entry expiry must be a positive integer session count")
         if self.price_stop_loss_fraction is not None and (
             not isfinite(self.price_stop_loss_fraction) or not 0 < self.price_stop_loss_fraction < 1
         ):
             raise ValueError("Price-stop fraction must lie strictly between zero and one")
+        if self.price_take_profit_fraction is not None and (
+            not isfinite(self.price_take_profit_fraction)
+            or not 0 < self.price_take_profit_fraction < 1
+        ):
+            raise ValueError("Take-profit fraction must lie strictly between zero and one")
 
 
 def _number(value: object) -> float | None:
@@ -269,6 +281,9 @@ def simulate_signal_trades(
             "green_histogram_threshold": assumptions.green_histogram_threshold,
             "threshold_semantics": "unoptimized_research_ratio_0.02_histogram_at_10_CNY",
             "price_stop_loss_fraction": assumptions.price_stop_loss_fraction,
+            "maximum_entry_wait_sessions": assumptions.maximum_entry_wait_sessions,
+            "entry_expiry_date": None,
+            "price_take_profit_fraction": assumptions.price_take_profit_fraction,
         }
         if position_key in occupied_until and (
             occupied_until[position_key] is None
@@ -284,10 +299,21 @@ def simulate_signal_trades(
         entry_price = 0.0
         trigger_date: str | None = None
         start_index = bisect_right(security_dates.get(security_code, []), confirmation_date)
+        expiry_date = None
+        if assumptions.maximum_entry_wait_sessions is not None:
+            expiry_index = (
+                bisect_right(session_dates, confirmation_date)
+                + assumptions.maximum_entry_wait_sessions - 1
+            )
+            if expiry_index < len(session_dates):
+                expiry_date = session_dates[expiry_index]
+                result["entry_expiry_date"] = expiry_date
         for bar_index in range(start_index, len(daily_bars)):
             daily_bar = daily_bars[bar_index]
             current_date = str(daily_bar["trade_date"])
             if entry_bar is None:
+                if expiry_date is not None and current_date > expiry_date:
+                    break
                 entry_blocker = _fill_blocker(daily_bar, "buy")
                 if entry_blocker is not None:
                     entry_blocks = result["entry_blocked_reason_counts"]
@@ -337,11 +363,25 @@ def simulate_signal_trades(
                         exit_reason = "configured_close_observed_price_stop"
                 if exit_reason is None and held_sessions >= assumptions.maximum_holding_sessions:
                     exit_reason = "research_time_cap"
+                if (exit_reason is None and assumptions.price_take_profit_fraction is not None
+                        and closing_price is not None and closing_price > 0):
+                    profit_return = _returns(
+                        entry_bar, daily_bar, entry_price, closing_price, assumptions
+                    )["provider_adjusted_price_return"]
+                    if (
+                        profit_return is not None
+                        and float(str(profit_return)) >= assumptions.price_take_profit_fraction
+                    ):
+                        exit_reason = "configured_close_observed_take_profit"
                 if exit_reason is not None:
                     trigger_date = current_date
                     result.update(exit_trigger_date=current_date, exit_reason=exit_reason)
         if entry_bar is None:
-            result["censor_reason"] = "no_eligible_future_entry_quote"
+            if expiry_date is not None:
+                result.update(status="expired", censor_reason="entry_order_expired")
+                occupied_until[position_key] = expiry_date
+            else:
+                result["censor_reason"] = "no_eligible_future_entry_quote"
         elif exit_bar is None:
             result["censor_reason"] = (
                 "no_eligible_future_exit_quote" if trigger_date else "no_exit_trigger_observed"
