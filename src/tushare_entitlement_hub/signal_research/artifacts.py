@@ -176,7 +176,12 @@ def _write_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
 
 
 def _render_chart(
-    path: Path, rows: Sequence[Mapping[str, Any]], confirmation_date: str, *, post_review: bool
+    path: Path,
+    rows: Sequence[Mapping[str, Any]],
+    confirmation_date: str,
+    *,
+    post_review: bool,
+    ts_code: str,
 ) -> None:
     """离线保存价格/均线、MACD、成交量三面板；事后区间用背景显式标识。
 
@@ -185,18 +190,38 @@ def _render_chart(
     """
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
+    from matplotlib.patches import Rectangle
 
     figure = Figure(figsize=(12, 8), dpi=120)
     FigureCanvasAgg(figure)
     price_axis, macd_axis, volume_axis = figure.subplots(3, 1, sharex=True)
     positions = list(range(len(rows)))
+    for position, row in enumerate(rows):
+        color = "#d73027" if row["close"] >= row["open"] else "#1a9850"
+        price_axis.vlines(position, row["low"], row["high"], color=color, linewidth=0.8)
+        price_axis.add_patch(
+            Rectangle(
+                (position - 0.3, min(row["open"], row["close"])),
+                0.6,
+                abs(row["close"] - row["open"]),
+                facecolor=color,
+                edgecolor=color,
+            )
+        )
+        if row["close"] == row["open"]:
+            price_axis.hlines(row["close"], position - 0.3, position + 0.3, color=color)
     for column, label in (("close", "Close"), ("ma20", "MA20"), ("ma60", "MA60")):
         price_axis.plot(positions, [row[column] for row in rows], label=label)
     for column, label in (("dif", "DIF"), ("dea", "DEA")):
         macd_axis.plot(positions, [row[column] for row in rows], label=label)
+    known_histogram_positions = [
+        position for position, row in enumerate(rows) if row["hist"] is not None
+    ]
+    histogram_values = [rows[position]["hist"] for position in known_histogram_positions]
     macd_axis.bar(
-        positions,
-        [float("nan") if row["hist"] is None else row["hist"] for row in rows],
+        known_histogram_positions,
+        histogram_values,
+        color=["#d73027" if value >= 0 else "#1a9850" for value in histogram_values],
         label="Histogram",
     )
     volume_axis.bar(positions, [row["volume"] for row in rows], label="Volume (source unit)")
@@ -209,11 +234,12 @@ def _render_chart(
         axis.grid(alpha=0.2)
         if post_review and confirmation_position < len(rows) - 1:
             axis.axvspan(confirmation_position + 0.5, len(rows) - 0.5, color="orange", alpha=0.15)
-    price_axis.set_title(
+    stage_title = (
         "Post-event review: orange = future observations; no causal inference"
         if post_review
         else "Signal snapshot: observations through confirmation only"
     )
+    price_axis.set_title(f"{ts_code} | confirmation {confirmation_date}\n{stage_title}")
     tick_positions = sorted(set((0, confirmation_position, len(rows) - 1)))
     volume_axis.set_xticks(
         tick_positions, [str(rows[position]["date"]) for position in tick_positions]
@@ -276,11 +302,19 @@ def write_signal_artifacts(
         (artifact_directory / file_name).unlink(missing_ok=True)
     if render_charts:
         _render_chart(
-            artifact_directory / "snapshot.png", snapshot_rows, confirmation_date, post_review=False
+            artifact_directory / "snapshot.png",
+            snapshot_rows,
+            confirmation_date,
+            post_review=False,
+            ts_code=artifact.ts_code,
         )
         if post_rows:
             _render_chart(
-                artifact_directory / "post_review.png", rows, confirmation_date, post_review=True
+                artifact_directory / "post_review.png",
+                rows,
+                confirmation_date,
+                post_review=True,
+                ts_code=artifact.ts_code,
             )
     return ArtifactIndexEntry(
         artifact.signal_id,

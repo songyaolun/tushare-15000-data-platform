@@ -256,3 +256,47 @@ def test_event_pit_contract_fails_closed_without_historical_availability(
     assert record["information_state"] == expected_state
     assert record["pit_availability_verified"] is verified
     assert record["pit_known_at_confirmation"] is False
+
+
+def test_chart_candles_histogram_colors_and_identity_preserve_source_values(tmp_path, monkeypatch):
+    """场景：涨跌平K线及缺失MACD；预期：OHLC位置准确、正红负绿、空柱不传NaN、标题可定位。"""
+    from matplotlib.colors import to_rgba
+    from matplotlib.figure import Figure
+
+    captured = []
+    original_savefig = Figure.savefig
+
+    def inspect_figure(figure, *arguments, **keywords):
+        """截取保存时的完整三面板；输入figure，输出轴与patch数值供独立断言。"""
+        captured.append(
+            {
+                "title": figure.axes[0].get_title(),
+                "candles": [
+                    (patch.get_x(), patch.get_y(), patch.get_height())
+                    for patch in figure.axes[0].patches
+                    if hasattr(patch, "get_height")
+                ],
+                "histogram": [
+                    (patch.get_height(), patch.get_facecolor())
+                        for patch in figure.axes[1].containers[0].patches
+                ],
+            }
+        )
+        return original_savefig(figure, *arguments, **keywords)
+
+    monkeypatch.setattr(Figure, "savefig", inspect_figure)
+    artifact = example_artifact()
+    values = dict(artifact.dated_values)
+    values.update(
+        open=[9, 12, 12],
+        close=[10, 11, 12],
+        high=[11, 13, 13],
+        low=[8, 10, 11],
+        hist=[None, 0.2, -0.3],
+    )
+    write_signal_artifacts(replace(artifact, dated_values=values), tmp_path)
+    assert "000001.SZ | confirmation 2024-01-03" in captured[0]["title"]
+    assert "Post-event review" in captured[1]["title"]
+    assert captured[0]["candles"] == [(-0.3, 9, 1), (0.7, 11, 1)]
+    assert captured[1]["candles"][2] == (1.7, 12, 0)
+    assert captured[1]["histogram"] == [(0.2, to_rgba("#d73027")), (-0.3, to_rgba("#1a9850"))]
