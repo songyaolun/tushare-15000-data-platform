@@ -44,7 +44,7 @@ CHARACTERISTIC_COLUMNS = (
 )
 
 
-def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "256MB") -> Path:
+def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "1GB") -> Path:
     """关联信号确认日的全市场有效特征分位，仅供展示，不参与硬筛或评分。
 
     输入含 signal_records.jsonl 和 daily_condition_matrix/*.csv.gz 的显式目录，
@@ -52,7 +52,8 @@ def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "25
     每日每证券一票，重复证券日期拒绝；UNKNOWN、空值及非有限数值不参与各特征排名。
     market_cap 保留来源单位，不将分位误称为实际收益；空信号生成只有表头的 CSV。
     只物化市场键/五项数值特征和信号必要字段，不复制完整宽矩阵或嵌套信号。
-    DuckDB 使用临时磁盘数据库与可配置内存上限，完成后清理数据库及溢写目录。
+    DuckDB 使用临时磁盘数据库，默认1GB内存上限支持全市场多特征关联和输出排序；
+    调用方可显式配置memory_limit，完成后清理数据库及溢写目录。
     """
     signal_path = output_directory / "signal_records.jsonl"
     result_path = output_directory / "signal_characteristics.csv"

@@ -151,7 +151,7 @@ def test_explicit_csv_reader_preserves_default_reader_output(tmp_path, monkeypat
     输入异构列、UNKNOWN/nan/inf与收益嵌套样本，输出与原默认reader完全相同。
     """
     write_percentile_fixture(tmp_path, explicit_code=True)
-    expected = enrich_signal_percentiles(tmp_path).read_bytes()
+    expected = enrich_signal_percentiles(tmp_path, memory_limit="64MB").read_bytes()
     original_connect = reporting.duckdb.connect
 
     class OriginalReaderConnection:
@@ -163,6 +163,8 @@ def test_explicit_csv_reader_preserves_default_reader_output(tmp_path, monkeypat
 
         def execute(self, query, *arguments):
             """输入相同查询，去除新增CSV选项后返回真实DuckDB结果。"""
+            if query == "SET memory_limit = ?":
+                assert arguments[0] == ["1GB"]
             original_query = query.replace(
                 ", sample_size=1, header=true, delim=',', quote='\"', escape='\"'", ""
             )
