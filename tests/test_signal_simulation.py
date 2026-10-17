@@ -81,6 +81,22 @@ def test_day() -> None:
         _day("bad")
 
 
+def test_green_histogram_ignores_floating_point_boundary() -> None:
+    """场景：绿柱只因浮点误差越过阈值；预期：等号附近不触发，明显越过后才退出。
+
+    输入 -0.002-1e-15 后接 -0.003，输出触发日为第二根明显绿柱日。
+    """
+    bars = [
+        bar("2023-08-24"),
+        bar("2023-08-25", normalized_histogram=-0.002 - 1e-15),
+        bar("2023-08-28", normalized_histogram=-0.003),
+        bar("2023-08-29"),
+    ]
+    trade = simulate_signal_trades(bars, [signal()])[0]
+    assert trade["exit_trigger_date"] == "2023-08-28"
+    assert trade["exit_date"] == "2023-08-29"
+
+
 @pytest.mark.parametrize(
     "changes, side",
     [

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import date
 from math import isfinite
 
+from .numeric import ratio_greater
+
 
 @dataclass(frozen=True)
 class SimulationConfiguration:
@@ -313,7 +315,7 @@ def simulate_signal_trades(
                 closing_price = _number(daily_bar.get("close"))
                 if (
                     histogram_value is not None
-                    and histogram_value < -assumptions.green_histogram_threshold
+                    and ratio_greater(-histogram_value, assumptions.green_histogram_threshold)
                 ):
                     exit_reason = "first_clear_green_histogram"
                 elif (
