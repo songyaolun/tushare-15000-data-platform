@@ -246,9 +246,15 @@ def test_sorted_panel_matches_legacy_history_and_cleans_spill(
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "private-home")
     with duckdb.connect(str(path)) as connection:
         before = list(iter_security_history(connection))
+        assert connection.execute("SELECT current_setting('index_scan_max_count')").fetchone() \
+            == (2048,)
         manifest = create_security_panel(connection, memory_limit="64MB")
         assert manifest["rows"] == 2 and manifest["securities"] == 2
         assert before == list(iter_security_history(connection))
+        assert connection.execute("SELECT current_setting('index_scan_max_count')").fetchone() \
+            == (0,)
+        assert connection.execute("SELECT current_setting('index_scan_percentage')").fetchone() \
+            == (0.0,)
         assert manifest == create_security_panel(connection, memory_limit="64MB")
     assert not list((tmp_path / "private-home" / ".cache" / "tushare-hub").glob(
         "security-panel-spill-*"

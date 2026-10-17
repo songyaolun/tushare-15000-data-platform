@@ -225,12 +225,16 @@ def iter_security_history(
     例：daily有已退市A且adj缺失，仍输出A、adj_factor=None、fundamentals=None。
     amount/circ_mv保留源单位，amount_yuan/floating_market_value_yuan分别乘1000/10000。
     单次仅物化一只证券历史；股票代码清单在DuckDB独立游标逐条迭代。
+    已建排序面板时，仅在本研究读取连接禁用ART选择，使用证券排序分区裁剪。
     """
     panel_exists = connection.execute(
         "SELECT count(*) FROM information_schema.tables WHERE table_schema='main' "
         "AND table_name='security_panel'"
     ).fetchone()
     table_name = "security_panel" if panel_exists and panel_exists[0] else "daily"
+    if table_name == "security_panel":
+        connection.execute("SET index_scan_percentage=0")
+        connection.execute("SET index_scan_max_count=0")
     code_cursor = connection.cursor()
     try:
         code_cursor.execute(f"SELECT DISTINCT ts_code FROM {table_name} ORDER BY ts_code")
