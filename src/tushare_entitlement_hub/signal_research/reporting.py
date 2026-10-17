@@ -51,6 +51,7 @@ def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "25
     输出 signal_characteristics.csv；原值 20 在同日有效值 [10,20,30] 中分位为 0.5。
     每日每证券一票，重复证券日期拒绝；UNKNOWN、空值及非有限数值不参与各特征排名。
     market_cap 保留来源单位，不将分位误称为实际收益；空信号生成只有表头的 CSV。
+    只物化市场键/五项数值特征和信号必要字段，不复制完整宽矩阵或嵌套信号。
     DuckDB 使用临时磁盘数据库与可配置内存上限，完成后清理数据库及溢写目录。
     """
     signal_path = output_directory / "signal_records.jsonl"
@@ -89,13 +90,14 @@ def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "25
             database.execute("SET temp_directory = ?", [str(Path(temporary_directory) / "spill")])
             database.execute("SET preserve_insertion_order = false")
             database.execute("SET threads = 1")
-            database.execute(
-                "CREATE TABLE matrix_source AS SELECT * FROM read_csv(?, union_by_name=true, "
-                "all_varchar=true, filename=true, buffer_size=1048576)",
-                [matrix_paths],
+            matrix_reader = (
+                "read_csv(?, union_by_name=true, all_varchar=true, filename=true, "
+                "buffer_size=1048576)"
             )
             available_columns = {
-                str(row[0]) for row in database.execute("DESCRIBE matrix_source").fetchall()
+                str(row[0]) for row in database.execute(
+                    "DESCRIBE SELECT * FROM " + matrix_reader, [matrix_paths],
+                ).fetchall()
             }
             if not {"trade_date", *CHARACTERISTIC_COLUMNS} <= available_columns:
                 raise ValueError("全市场日矩阵缺少特征列，无法核验分位")
@@ -112,7 +114,8 @@ def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "25
             database.execute(
                 "CREATE TABLE market AS SELECT " + security_expression + " AS ts_code, "
                 "coalesce(try_cast(trade_date AS DATE), try_strptime(trade_date, '%Y%m%d')::DATE) "
-                "AS trade_date, " + numeric_expressions + " FROM matrix_source"
+                "AS trade_date, " + numeric_expressions + " FROM " + matrix_reader,
+                [matrix_paths],
             )
             invalid_keys = database.execute(
                 "SELECT count(*) FROM market WHERE ts_code IS NULL OR ts_code = '' "
@@ -125,12 +128,11 @@ def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "25
             ).fetchone()
             if duplicates:
                 raise ValueError("全市场日矩阵证券日期重复，同日每证券必须只有一票")
-            database.execute(
-                "CREATE TABLE signal_source AS SELECT * FROM read_ndjson(?, union_by_name=true)",
-                [str(signal_path)],
-            )
+            signal_reader = "read_ndjson(?, union_by_name=true)"
             signal_columns = {
-                str(row[0]) for row in database.execute("DESCRIBE signal_source").fetchall()
+                str(row[0]) for row in database.execute(
+                    "DESCRIBE SELECT * FROM " + signal_reader, [str(signal_path)],
+                ).fetchall()
             }
             result_expressions = [
                 column if column in signal_columns else f"NULL AS {column}"
@@ -145,10 +147,12 @@ def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "25
             database.execute(
                 "CREATE TABLE signal_keys AS SELECT ts_code, "
                 "coalesce(try_cast(confirmation_date AS DATE), "
-                "try_strptime(confirmation_date, '%Y%m%d')::DATE) AS confirmation_date, "
+                "try_strptime(cast(confirmation_date AS VARCHAR), '%Y%m%d')::DATE) "
+                "AS confirmation_date, "
                 "signal_id, experiment_id, "
                 + ", ".join(result_expressions)
-                + " FROM signal_source",
+                + " FROM " + signal_reader,
+                [str(signal_path)],
             )
             joins = []
             selections = [

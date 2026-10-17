@@ -123,6 +123,27 @@ def test_signal_percentiles_empty_signal_has_only_header(tmp_path):
         assert list(csv.DictReader(stream)) == []
 
 
+def test_signal_projection_preserves_nested_results_and_pure_iso_dates(tmp_path):
+    """纯ISO日期被推断DATE仍可排名，未消费嵌套字段不改变所需收益与缺失分位输出。"""
+    write_percentile_fixture(tmp_path, explicit_code=True)
+    path = tmp_path / "signal_records.jsonl"
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    for record in records:
+        day = record["confirmation_date"].replace("-", "")
+        record["confirmation_date"] = f"{day[:4]}-{day[4:6]}-{day[6:]}"
+        record["unused_nested_evidence"] = {"notes": ["audit"] * 1000, "numbers": [1, 2, 3]}
+    path.write_text("\n".join(json.dumps(record) for record in records))
+    output = enrich_signal_percentiles(tmp_path, memory_limit="64MB")
+    with output.open() as stream:
+        rows = {row["signal_id"]: row for row in csv.DictReader(stream)}
+    assert rows["s1"]["confirmation_date"] == "2024-01-03"
+    assert rows["s1"]["efficiency_60_percentile"] == "0.5"
+    assert rows["s1"]["return_20d"] == "0.2"
+    assert rows["s4"]["efficiency_60_percentile"] == ""
+    assert "unused_nested_evidence" not in rows["s1"]
+    assert not list(tmp_path.glob("signal-percentiles-*"))
+
+
 def trade(status, research_return=None, holding_sessions=None, year=2024, experiment="base"):
     """构造一行公开确定性实验记录；输入状态/收益，输出 simulation 风格字典。
 
