@@ -7,6 +7,7 @@ import json
 import math
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from statistics import mean, median
@@ -97,8 +98,10 @@ def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "1G
                 "delim=',', quote='\"', escape='\"')"
             )
             available_columns = {
-                str(row[0]) for row in database.execute(
-                    "DESCRIBE SELECT * FROM " + matrix_reader, [matrix_paths],
+                str(row[0])
+                for row in database.execute(
+                    "DESCRIBE SELECT * FROM " + matrix_reader,
+                    [matrix_paths],
                 ).fetchall()
             }
             if not {"trade_date", *CHARACTERISTIC_COLUMNS} <= available_columns:
@@ -132,8 +135,10 @@ def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "1G
                 raise ValueError("全市场日矩阵证券日期重复，同日每证券必须只有一票")
             signal_reader = "read_ndjson(?, union_by_name=true)"
             signal_columns = {
-                str(row[0]) for row in database.execute(
-                    "DESCRIBE SELECT * FROM " + signal_reader, [str(signal_path)],
+                str(row[0])
+                for row in database.execute(
+                    "DESCRIBE SELECT * FROM " + signal_reader,
+                    [str(signal_path)],
                 ).fetchall()
             }
             result_expressions = [
@@ -153,7 +158,8 @@ def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "1G
                 "AS confirmation_date, "
                 "signal_id, experiment_id, "
                 + ", ".join(result_expressions)
-                + " FROM " + signal_reader,
+                + " FROM "
+                + signal_reader,
                 [str(signal_path)],
             )
             joins = []
@@ -214,35 +220,56 @@ def _finite_number(value: object) -> float | None:
     return float(value) if math.isfinite(value) else None
 
 
+@dataclass
+class _GroupAccumulator:
+    """仅保存状态计数和必要浮点样本，不引用完整交易证据。
+
+    输入_GroupAccumulator()，输出四状态零计数及两个空数值列表。
+    """
+
+    counts: dict[str, int] = field(
+        default_factory=lambda: {status: 0 for status in ("closed", "open", "censored", "skipped")}
+    )
+    returns: list[float] = field(default_factory=list)
+    holding_sessions: list[float] = field(default_factory=list)
+
+
+def _accumulate_trade(group: _GroupAccumulator, trade: Mapping[str, object]) -> None:
+    """消费一条信号的必要字段后立即释放交易引用，未知状态报错。
+
+    输入closed收益.1、持有3日，输出group.closed增1并追加.1/3.0两个样本；
+    open不保存其收益，缺失或非法closed数值不制造样本。
+    """
+    status = str(trade.get("status", ""))
+    if status not in group.counts:
+        raise ValueError("交易状态必须为 closed/open/censored/skipped")
+    group.counts[status] += 1
+    if status == "closed":
+        research_return = _finite_number(trade.get("fee_adjusted_research_return"))
+        if research_return is not None:
+            group.returns.append(research_return)
+        holding_period = _finite_number(trade.get("holding_sessions"))
+        if holding_period is not None and holding_period >= 0:
+            group.holding_sessions.append(holding_period)
+
+
 def _summarize_group(
-    trades: Sequence[Mapping[str, object]], experiment_id: str, experiment_name: str
+    group: _GroupAccumulator, experiment_id: str, experiment_name: str
 ) -> dict[str, Any]:
-    """统计一组信号，所有状态完整计数，收益和持有期只采纳可核验的 closed。
+    """从紧凑累积结果输出原汇总字段，不保留或重新遍历原交易。
 
     输入一笔 closed 收益 0.1 和一笔 open，输出 signals=2、closed=1、open=1、win_rate=1。
     缺失 closed 收益单列 unavailable；持有期分母独立列为 closed_holding_observations。
     """
-    counts = {status: 0 for status in ("closed", "open", "censored", "skipped")}
-    returns: list[float] = []
-    holding_sessions: list[float] = []
-    for trade in trades:
-        status = str(trade.get("status", ""))
-        if status not in counts:
-            raise ValueError("交易状态必须为 closed/open/censored/skipped")
-        counts[status] += 1
-        if status == "closed":
-            research_return = _finite_number(trade.get("fee_adjusted_research_return"))
-            if research_return is not None:
-                returns.append(research_return)
-            holding_period = _finite_number(trade.get("holding_sessions"))
-            if holding_period is not None and holding_period >= 0:
-                holding_sessions.append(holding_period)
+    counts = group.counts
+    returns = group.returns
+    holding_sessions = group.holding_sessions
     positive_returns = sum(value for value in returns if value > 0)
     absolute_negative_returns = -sum(value for value in returns if value < 0)
     return {
         "experiment_id": experiment_id,
         "experiment_name": experiment_name,
-        "signals": len(trades),
+        "signals": sum(counts.values()),
         **counts,
         "closed_return_observations": len(returns),
         "closed_return_unavailable": counts["closed"] - len(returns),
@@ -265,19 +292,22 @@ def summarize_trades(
     输入 simulation 输出及 {'baseline':'基线'}，输出 experiments 和 by_confirmation_year。
     声明但无信号的实验显示零计数与空指标；未知实验保留原 ID，不丢弃任何信号。
     年份属于确认日而非退出日；所有闭合收益均以小数比例保存，不写成虚构百分数。
+    单次遍历输入，只按实验与年度累积状态计数及必要浮点列表，不保存嵌套交易字典。
     """
     names = (
         dict(experiment_names)
         if isinstance(experiment_names, Mapping)
         else {name: name for name in experiment_names}
     )
-    experiment_groups: dict[str, list[Mapping[str, object]]] = {name: [] for name in names}
-    yearly_groups: dict[tuple[str, int], list[Mapping[str, object]]] = {}
+    experiment_groups = {name: _GroupAccumulator() for name in names}
+    yearly_groups: dict[tuple[str, int], _GroupAccumulator] = {}
     for trade in trades:
         experiment_id = str(trade.get("experiment_id", "default"))
         confirmation_year = date.fromisoformat(str(trade["confirmation_date"])).year
-        experiment_groups.setdefault(experiment_id, []).append(trade)
-        yearly_groups.setdefault((experiment_id, confirmation_year), []).append(trade)
+        _accumulate_trade(experiment_groups.setdefault(experiment_id, _GroupAccumulator()), trade)
+        _accumulate_trade(
+            yearly_groups.setdefault((experiment_id, confirmation_year), _GroupAccumulator()), trade
+        )
     experiment_rows = [
         _summarize_group(group, experiment_id, names.get(experiment_id, experiment_id))
         for experiment_id, group in experiment_groups.items()

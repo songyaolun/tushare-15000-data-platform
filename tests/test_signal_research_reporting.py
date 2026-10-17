@@ -253,6 +253,100 @@ def test_empty_or_nonclosed_returns_are_not_fabricated():
     assert row["profit_factor"] is None
 
 
+def test_compact_summary_matches_previous_implementation_and_consumes_once():
+    """场景：可迭代对象禁止二次消费并重用同一字典；预期：原汇总JSON逐字节一致。
+
+    固定原版输出作为对照；原交易字典不可被累积结果引用。
+    """
+    records = [
+        trade("closed", 0.1, 3),
+        trade("open"),
+        trade("closed", -0.2, 5, year=2023),
+        trade("closed", None, -1, experiment="unknown"),
+        trade("skipped"),
+    ]
+    expected = {
+        "schema_version": 1,
+        "return_semantics": "fee_adjusted_per_signal_research_estimate_not_portfolio_return",
+        "portfolio_return_available": False,
+        "portfolio_drawdown_available": False,
+        "return_denominator": "closed_with_finite_fee_adjusted_research_return",
+        "holding_denominator": "closed_with_finite_nonnegative_holding_sessions",
+        "experiments": [],
+        "by_confirmation_year": [],
+        "limitations": list(reporting.RESEARCH_LIMITATIONS),
+    }
+    specs = [
+        ("base", "基线", None, 4, 2, 1, 0, 1, 2, -0.05, -0.05, 0.5, 2, 4.0, 0.5),
+        ("empty", "空", None, 0, 0, 0, 0, 0, 0, None, None, None, 0, None, None),
+        ("unknown", "unknown", None, 1, 1, 0, 0, 0, 0, None, None, None, 0, None, None),
+        ("base", "基线", 2023, 1, 1, 0, 0, 0, 1, -0.2, -0.2, 0.0, 1, 5.0, 0.0),
+        ("base", "基线", 2024, 3, 1, 1, 0, 1, 1, 0.1, 0.1, 1.0, 1, 3.0, None),
+        ("unknown", "unknown", 2024, 1, 1, 0, 0, 0, 0, None, None, None, 0, None, None),
+    ]
+    for (
+        identifier,
+        name,
+        year,
+        signals,
+        closed,
+        opened,
+        censored,
+        skipped,
+        count,
+        average,
+        middle,
+        wins,
+        held_count,
+        held_average,
+        profit,
+    ) in specs:
+        row = {
+            "experiment_id": identifier,
+            "experiment_name": name,
+            "signals": signals,
+            "closed": closed,
+            "open": opened,
+            "censored": censored,
+            "skipped": skipped,
+            "closed_return_observations": count,
+            "closed_return_unavailable": closed - count,
+            "mean_fee_adjusted_research_return": average,
+            "median_fee_adjusted_research_return": middle,
+            "win_rate": wins,
+            "closed_holding_observations": held_count,
+            "average_holding_sessions": held_average,
+            "profit_factor": profit,
+        }
+        if year is not None:
+            row["confirmation_year"] = year
+            expected["by_confirmation_year"].append(row)
+        else:
+            expected["experiments"].append(row)
+
+    class SinglePass:
+        """只允许一次消费且复用字典，模拟逐行读出后释放证据的流。"""
+
+        def __init__(self):
+            """输入无，输出尚未消费的记录源。"""
+            self.consumed = False
+
+        def __iter__(self):
+            """输入无，输出逐条复用同一对象的交易；第二次迭代拒绝。"""
+            assert not self.consumed
+            self.consumed = True
+            current = {}
+            for record in records:
+                current.clear()
+                current.update(record)
+                current["unused_evidence"] = "x" * 10000
+                yield current
+            current.clear()
+
+    actual = summarize_trades(SinglePass(), {"base": "基线", "empty": "空"})
+    assert json.dumps(actual, ensure_ascii=False) == json.dumps(expected, ensure_ascii=False)
+
+
 def test_unknown_status_and_invalid_confirmation_date_are_rejected():
     """场景：未知交易状态或无效确认日期；预期：报错而不把记录默默排除。"""
     with pytest.raises(ValueError, match="交易状态"):
