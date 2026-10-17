@@ -140,11 +140,12 @@ def build_retrospective_review(output_directory: Path, benchmark_root: Path) -> 
     不推断事件因果或精确现金红利收益。示例无基线信号仍输出CSV表头与空samples。
     """
     output_directory, benchmark_root = Path(output_directory), Path(benchmark_root)
-    signals = [
-        record
-        for line in (output_directory / "signal_records.jsonl").read_text().splitlines()
-        if (record := json.loads(line)).get("experiment_id") == "technical_baseline"
-    ]
+    with (output_directory / "signal_records.jsonl").open(encoding="utf-8") as stream:
+        signals = [
+            record
+            for line in stream
+            if (record := json.loads(line)).get("experiment_id") == "technical_baseline"
+        ]
     series_paths: dict[str, Path] = {}
     for signal in signals:
         relative = str(signal["source_series"])

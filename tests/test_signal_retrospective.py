@@ -225,3 +225,29 @@ def test_missing_calendar_fallback_and_missing_exit_fill(tmp_path: Path) -> None
         rows = list(csv.DictReader(stream))
     assert rows[0]["holding_mae"] == ""
     assert "not_certified_market_calendar" in rows[0]["calendar_source"]
+
+
+def test_signal_streaming_preserves_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """场景：禁止signal JSONL整文件读取；预期：流式读取仍生成相同CSV与样本。
+
+    输入混合基线和其他实验的合成记录，输出逐字节一致的两个复核产物。
+    """
+    _, benchmark = fixture(tmp_path)
+    review = build_retrospective_review(tmp_path, benchmark)
+    expected_review = review.read_bytes()
+    sample = tmp_path / "baseline_loss_samples.json"
+    expected_sample = sample.read_bytes()
+    original_read_text = Path.read_text
+
+    def bounded_read_text(path: Path, *arguments, **keywords):
+        """输入文件路径，拒绝signal_records整体读取，其他公开JSON返回原内容。"""
+        if path.name == "signal_records.jsonl":
+            raise AssertionError("signal JSONL must be streamed")
+        return original_read_text(path, *arguments, **keywords)
+
+    monkeypatch.setattr(Path, "read_text", bounded_read_text)
+    build_retrospective_review(tmp_path, benchmark)
+    assert review.read_bytes() == expected_review
+    assert sample.read_bytes() == expected_sample
