@@ -13,6 +13,7 @@ def test_run_command_passes_protocol_and_writes_report(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(cli, "load_history_database", lambda *_: data)
     monkeypatch.setattr(cli, "assert_complete_history", lambda *_: None)
     monkeypatch.setattr(cli, "validate_research_window", lambda *_: None)
+    monkeypatch.setattr(cli, "create_security_panel", lambda *_: {})
     monkeypatch.setattr(cli, "iter_security_history", lambda *_: iter(()))
     observed = []
 

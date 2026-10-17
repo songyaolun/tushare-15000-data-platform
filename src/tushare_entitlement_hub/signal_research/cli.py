@@ -10,7 +10,12 @@ import duckdb
 import typer
 
 from .diagnostics import build_condition_diagnostics
-from .history import assert_complete_history, iter_security_history, load_history_database
+from .history import (
+    assert_complete_history,
+    create_security_panel,
+    iter_security_history,
+    load_history_database,
+)
 from .reporting import enrich_signal_percentiles, summarize_trades, write_research_report
 from .retrospective import build_retrospective_review
 from .runner import ResearchConfiguration, research_experiments, run_research
@@ -75,6 +80,8 @@ def run_command(
     configuration = ResearchConfiguration(start_date, end_date, histogram_threshold,
                                           confirmation_days, chart_samples)
     validate_research_window(calendar, configuration)
+    with duckdb.connect(str(database_path)) as connection:
+        panel_manifest = create_security_panel(connection)
     with duckdb.connect(str(database_path), read_only=True) as connection:
         run_manifest = run_research(iter_security_history(connection), calendar,
                                     output_directory, configuration)
@@ -82,6 +89,8 @@ def run_command(
         trades = (json.loads(line) for line in stream)
         summary = summarize_trades(trades, [item.name for item in research_experiments()])
     enrich_signal_percentiles(output_directory)
-    manifest: dict[str, Any] = {"data": data_manifest, **run_manifest}
+    manifest: dict[str, Any] = {
+        "data": data_manifest, "security_panel": panel_manifest, **run_manifest
+    }
     markdown_path, _ = write_research_report(summary, manifest, output_directory)
     typer.echo(str(markdown_path))
