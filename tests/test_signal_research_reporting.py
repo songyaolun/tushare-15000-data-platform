@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from tushare_entitlement_hub.signal_research import reporting
 from tushare_entitlement_hub.signal_research.reporting import (
     CHARACTERISTIC_COLUMNS,
     enrich_signal_percentiles,
@@ -142,6 +143,41 @@ def test_signal_projection_preserves_nested_results_and_pure_iso_dates(tmp_path)
     assert rows["s4"]["efficiency_60_percentile"] == ""
     assert "unused_nested_evidence" not in rows["s1"]
     assert not list(tmp_path.glob("signal-percentiles-*"))
+
+
+def test_explicit_csv_reader_preserves_default_reader_output(tmp_path, monkeypatch):
+    """场景：显式CSV参数替代默认嗅探；预期：NULL、独立分位与完整CSV逐字节一致。
+
+    输入异构列、UNKNOWN/nan/inf与收益嵌套样本，输出与原默认reader完全相同。
+    """
+    write_percentile_fixture(tmp_path, explicit_code=True)
+    expected = enrich_signal_percentiles(tmp_path).read_bytes()
+    original_connect = reporting.duckdb.connect
+
+    class OriginalReaderConnection:
+        """代理临时数据库，仅把显式CSV读取改回原有默认嗅探以形成对照。"""
+
+        def __init__(self, connection):
+            """输入真实DuckDB连接，输出保留在代理对象内的连接引用。"""
+            self.connection = connection
+
+        def execute(self, query, *arguments):
+            """输入相同查询，去除新增CSV选项后返回真实DuckDB结果。"""
+            original_query = query.replace(
+                ", sample_size=1, header=true, delim=',', quote='\"', escape='\"'", ""
+            )
+            return self.connection.execute(original_query, *arguments)
+
+        def close(self):
+            """输入无，输出None并关闭真实临时数据库连接。"""
+            self.connection.close()
+
+    def connect(*arguments, **keywords):
+        """输入连接参数，输出使用原始reader查询的临时数据库代理。"""
+        return OriginalReaderConnection(original_connect(*arguments, **keywords))
+
+    monkeypatch.setattr(reporting.duckdb, "connect", connect)
+    assert enrich_signal_percentiles(tmp_path).read_bytes() == expected
 
 
 def trade(status, research_return=None, holding_sessions=None, year=2024, experiment="base"):

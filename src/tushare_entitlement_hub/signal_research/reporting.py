@@ -92,7 +92,8 @@ def enrich_signal_percentiles(output_directory: Path, *, memory_limit: str = "25
             database.execute("SET threads = 1")
             matrix_reader = (
                 "read_csv(?, union_by_name=true, all_varchar=true, filename=true, "
-                "buffer_size=1048576)"
+                "buffer_size=1048576, sample_size=1, header=true, "
+                "delim=',', quote='\"', escape='\"')"
             )
             available_columns = {
                 str(row[0]) for row in database.execute(
