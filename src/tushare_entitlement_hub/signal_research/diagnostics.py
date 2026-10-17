@@ -108,7 +108,8 @@ def build_condition_diagnostics(
         connection.execute("SET temp_directory=?", [spill_directory])
         connection.execute(
             "CREATE TABLE matrix AS SELECT * FROM read_csv(?, header=true, "
-            "all_varchar=true, union_by_name=true, filename=true, buffer_size=1048576) "
+            "all_varchar=true, union_by_name=true, filename=true, buffer_size=1048576, "
+            "sample_size=1, delim=',', quote='\"', escape='\"') "
             "WHERE trade_date BETWEEN ? AND ?",
             [[str(path) for path in files], start, end],
         )

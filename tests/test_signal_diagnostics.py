@@ -172,3 +172,37 @@ def test_bounded_diagnostics_memory_and_private_spill_cleanup(
         tables = connection.execute("SELECT table_name FROM information_schema.tables "
                                     "WHERE table_type='BASE TABLE'").fetchall()
     assert ("eligible",) not in tables and ("research_matrix",) not in tables
+
+
+def test_explicit_csv_dialect_preserves_union_columns_and_quotes(tmp_path: Path) -> None:
+    """小采样显式CSV方言保留异构列、逗号、双引号及换行，诊断数值分母保持一致。"""
+    import duckdb
+
+    fixture(tmp_path)
+    result_before = json.loads(build_condition_diagnostics(tmp_path).read_text())
+    first_path = tmp_path / "daily_condition_matrix" / "A.csv.gz"
+    with gzip.open(first_path, "rt", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    rows[0]["source_note"] = 'comma, quote" and\nnewline'
+    with gzip.open(first_path, "wt", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=[*rows[0]])
+        writer.writeheader()
+        writer.writerows(rows)
+    extra = dict(rows[1])
+    extra.pop("source_note", None)
+    extra["other_source_column"] = 'another "quoted", value'
+    second_path = tmp_path / "daily_condition_matrix" / "B.csv.gz"
+    with gzip.open(second_path, "wt", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(extra))
+        writer.writeheader()
+        writer.writerow(extra)
+    result = json.loads(build_condition_diagnostics(tmp_path).read_text())
+    assert result["eligible_days"] == result_before["eligible_days"] + 1
+    assert result["rule_counts"]["dif_positive"]["TRUE"] == 2
+    database = tmp_path / "condition_diagnostics.duckdb"
+    with duckdb.connect(str(database), read_only=True) as connection:
+        row = connection.execute(
+            "SELECT other_source_column,source_note FROM matrix "
+            "WHERE other_source_column IS NOT NULL"
+        ).fetchone()
+    assert row == ('another "quoted", value', None)
