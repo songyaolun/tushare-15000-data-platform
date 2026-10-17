@@ -226,12 +226,18 @@ def iter_security_history(
     amount/circ_mv保留源单位，amount_yuan/floating_market_value_yuan分别乘1000/10000。
     单次仅物化一只证券历史；股票代码清单在DuckDB独立游标逐条迭代。
     """
+    panel_exists = connection.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='main' "
+        "AND table_name='security_panel'"
+    ).fetchone()
+    table_name = "security_panel" if panel_exists and panel_exists[0] else "daily"
     code_cursor = connection.cursor()
     try:
-        code_cursor.execute("SELECT DISTINCT ts_code FROM daily ORDER BY ts_code")
+        code_cursor.execute(f"SELECT DISTINCT ts_code FROM {table_name} ORDER BY ts_code")
         while (entry := code_cursor.fetchone()) is not None:
             code = str(entry[0])
-            result = connection.execute(
+            query = "SELECT * FROM security_panel WHERE ts_code=? ORDER BY trade_date" \
+                if table_name == "security_panel" else (
                 "SELECT d.*, a.adj_factor, b.turnover_rate, b.turnover_rate_f, "
                 "b.circ_mv, b.total_mv, l.up_limit, l.down_limit, "
                 "d.amount * 1000 AS amount_yuan, "
@@ -239,8 +245,9 @@ def iter_security_history(
                 "FROM daily d LEFT JOIN adj_factor a USING(ts_code, trade_date) "
                 "LEFT JOIN daily_basic b USING(ts_code, trade_date) "
                 "LEFT JOIN stk_limit l USING(ts_code, trade_date) "
-                "WHERE d.ts_code=? ORDER BY d.trade_date", [code],
+                "WHERE d.ts_code=? ORDER BY d.trade_date"
             )
+            result = connection.execute(query, [code])
             columns = [column[0] for column in result.description]
             rows = [dict(zip(columns, row, strict=True)) for row in result.fetchall()]
             for row in rows:
@@ -248,3 +255,52 @@ def iter_security_history(
             yield code, rows
     finally:
         code_cursor.close()
+
+
+def create_security_panel(
+    connection: duckdb.DuckDBPyConnection, *, memory_limit: str = "512MB",
+) -> dict[str, Any]:
+    """一次性连接历史四表并按证券日期排序，避免6000证券各自重复扫描全市场源表。
+
+    输入可写私有历史数据库连接；输出面板行数、证券数、来源语义和内存限制清单。
+    例：daily有A两日、B一日，输出rows=3、securities=2，缺失adj/basic仍保留NULL。
+    全源daily证券保留，源单位与人民币派生字段同时保存，不回填基本面和历史行业。
+    memory_limit默认512MB，使用独立私有缓存溢写目录并在结束清理；调用方不得有活动reader。
+    一次交易内替换面板、构建单列证券索引并CHECKPOINT，失败回滚旧面板。
+    """
+    spill_root = Path.home() / ".cache" / "tushare-hub"
+    spill_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="security-panel-spill-", dir=spill_root) as spill:
+        connection.execute("SET memory_limit=?", [memory_limit])
+        connection.execute("SET threads=1")
+        connection.execute("SET preserve_insertion_order=false")
+        connection.execute("SET temp_directory=?", [spill])
+        connection.execute("BEGIN TRANSACTION")
+        try:
+            connection.execute("DROP TABLE IF EXISTS security_panel")
+            connection.execute(
+                "CREATE TABLE security_panel AS SELECT d.*,a.adj_factor,b.turnover_rate,"
+                "b.turnover_rate_f,b.circ_mv,b.total_mv,l.up_limit,l.down_limit,"
+                "d.amount*1000 AS amount_yuan,"
+                "b.circ_mv*10000 AS floating_market_value_yuan "
+                "FROM daily d LEFT JOIN adj_factor a USING(ts_code,trade_date) "
+                "LEFT JOIN daily_basic b USING(ts_code,trade_date) "
+                "LEFT JOIN stk_limit l USING(ts_code,trade_date) ORDER BY d.ts_code,d.trade_date"
+            )
+            connection.execute("CREATE INDEX security_panel_code_index ON security_panel(ts_code)")
+            counts = connection.execute(
+                "SELECT count(*),count(DISTINCT ts_code) FROM security_panel"
+            ).fetchone()
+            assert counts is not None
+            source_count = connection.execute("SELECT count(*) FROM daily").fetchone()
+            assert source_count is not None
+            if counts[0] != source_count[0]:
+                raise ValueError("security_panel_source_row_count_mismatch")
+            connection.execute("COMMIT")
+        except Exception:
+            connection.execute("ROLLBACK")
+            raise
+        connection.execute("CHECKPOINT")
+    return {"rows": counts[0], "securities": counts[1], "memory_limit": memory_limit,
+            "ordering": ["ts_code", "trade_date"], "historical_fundamentals": "unknown",
+            "historical_sector": "unknown"}

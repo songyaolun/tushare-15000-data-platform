@@ -11,6 +11,7 @@ from tushare_entitlement_hub.research_history.collection import FIELDS, partitio
 from tushare_entitlement_hub.signal_research.history import (
     HISTORY_APIS,
     assert_complete_history,
+    create_security_panel,
     iter_security_history,
     load_history_database,
 )
@@ -230,3 +231,42 @@ def test_private_csv_copy_preserves_nulls_dates_and_cleans_up(tmp_path: Path) ->
     assert rows[0]["circ_mv"] is None
     assert rows[0]["floating_market_value_yuan"] is None
     assert not list(tmp_path.glob("signal-partition-*"))
+
+
+def test_sorted_panel_matches_legacy_history_and_cleans_spill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """排序面板保留全部源daily和缺失关联NULL，迭代输出与旧四表路径完全一致。"""
+    write_calendar(tmp_path)
+    for api_name in HISTORY_APIS:
+        write_partition(tmp_path, api_name)
+    write_partition(tmp_path, "daily", name="delisted", date="20260106", codes=("DELISTED.SZ",))
+    path = tmp_path / "cache.duckdb"
+    load_history_database(tmp_path, path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "private-home")
+    with duckdb.connect(str(path)) as connection:
+        before = list(iter_security_history(connection))
+        manifest = create_security_panel(connection, memory_limit="64MB")
+        assert manifest["rows"] == 2 and manifest["securities"] == 2
+        assert before == list(iter_security_history(connection))
+        assert manifest == create_security_panel(connection, memory_limit="64MB")
+    assert not list((tmp_path / "private-home" / ".cache" / "tushare-hub").glob(
+        "security-panel-spill-*"
+    ))
+
+
+def test_panel_duplicate_join_failure_rolls_back(tmp_path: Path) -> None:
+    """非法源表重复键导致连接行数增加时，面板失败回滚且旧面板仍可读取。"""
+    with duckdb.connect() as connection:
+        for api_name in HISTORY_APIS:
+            columns = ",".join(
+                f'"{field}" {"VARCHAR" if field in {"ts_code", "trade_date"} else "DOUBLE"}'
+                for field in FIELDS[api_name].split(",")
+            )
+            connection.execute(f"CREATE TABLE {api_name} ({columns})")
+        connection.execute("INSERT INTO daily VALUES ('A','20260105',1,1,1,1,1,1,1,1,1)")
+        create_security_panel(connection)
+        connection.execute("INSERT INTO adj_factor VALUES ('A','20260105',1),('A','20260105',2)")
+        with pytest.raises(ValueError, match="row_count"):
+            create_security_panel(connection)
+        assert connection.execute("SELECT count(*) FROM security_panel").fetchone() == (1,)
