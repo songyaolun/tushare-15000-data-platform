@@ -43,6 +43,7 @@ class PortfolioPolicy:
     slippage_rate: float = 0.0005
     non_stage_allocation: float = 0.9
     fee_multiplier: float = 1.0
+    take_profit_enabled: bool = True
 
     def __post_init__(self) -> None:
         """拒绝杠杆、负权重和不合法退出配置；例如position_weight=0抛ValueError。"""
@@ -57,6 +58,7 @@ class PortfolioPolicy:
             and 0 <= self.trailing < 1
             and self.ranking in {"original", "oversold", "liquid"}
             and isinstance(self.fixed_price_exits, bool)
+            and isinstance(self.take_profit_enabled, bool)
             and 0 <= self.slippage_rate < 1
             and 0 <= self.non_stage_allocation <= 1
             and np.isfinite(self.fee_multiplier)
@@ -150,6 +152,7 @@ def exit_reason(
     policy.fixed_price_exits=False关闭固定止盈止损，期限、跟踪与反弹失败规则保留；
     例如同一持仓收盘8.9且未到期时输出空字符串。fixed_exits=False也可由盘中模型
     关闭收盘固定退出；该参数不能重新开启策略明确关闭的固定退出。
+    take_profit_enabled=False仅关闭固定止盈，止损保持，例如上涨9%不止盈、跌9%仍止损。
     """
     held = day - holding.entry + 1
     fixed_exits = fixed_exits and policy.fixed_price_exits
@@ -161,7 +164,7 @@ def exit_reason(
         if policy.trailing and holding.stage == 1:
             if adjusted_close / holding.peak_adjusted <= 1 - policy.trailing:
                 return "trailing"
-        elif fixed_exits and multiple >= 1 + policy.take_profit:
+        elif fixed_exits and policy.take_profit_enabled and multiple >= 1 + policy.take_profit:
             return "profit"
         if policy.early_exit and held >= policy.early_exit and multiple <= 1:
             return "failed_rebound"

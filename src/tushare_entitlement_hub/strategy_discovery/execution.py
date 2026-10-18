@@ -162,7 +162,7 @@ def intraday_fixed_exit(
     profit_price = holding.entry_adjusted * (1 + policy.take_profit) / factor
     if opening <= stop_price:
         return opening, "stop"
-    if opening >= profit_price:
+    if policy.take_profit_enabled and opening >= profit_price:
         return opening, "profit"
     # 此后才使用完整日线判断盘中触线，不让全天质量标记回写已确定的开盘成交。
     high, low, closing, valid, amount = (
@@ -181,7 +181,7 @@ def intraday_fixed_exit(
         return None
     if low <= stop_price:
         return stop_price, "stop"
-    if high >= profit_price:
+    if policy.take_profit_enabled and high >= profit_price:
         return profit_price, "profit"
     return None
 
