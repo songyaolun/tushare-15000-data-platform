@@ -56,7 +56,7 @@ def configuration(definition: StrategyDefinition | None) -> dict[str, Any]:
         "trailing_stop": definition.trailing_stop,
         "intraday_exits": definition.intraday_exits,
     }
-    for name in ("entry_mask", "scores", "exit_mask"):
+    for name in ("entry_mask", "scores", "exit_mask", "entry_invalidation_mask"):
         values = getattr(definition, name)
         result[name] = (
             hashlib.sha256(np.ascontiguousarray(values).tobytes()).hexdigest()

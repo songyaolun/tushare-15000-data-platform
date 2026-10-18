@@ -81,6 +81,7 @@ def test_contract_defaults_frozen_and_invalid_fields(discovery_panel):
     assert not definition.policy.force_rebalance
     assert definition.policy.position_weight == 0.05
     assert definition.policy.sector_weight == 0.25
+    assert definition.entry_invalidation_mask is None
     with pytest.raises(FrozenInstanceError):
         definition.name = "changed"
     for changes in (
@@ -92,6 +93,9 @@ def test_contract_defaults_frozen_and_invalid_fields(discovery_panel):
         {"scores": np.ones((8, 12), dtype=int)},
         {"exit_mask": np.zeros((1, 1), dtype=bool)},
         {"exit_mask": np.zeros((8, 12))},
+        {"entry_invalidation_mask": np.zeros((1, 1), dtype=bool)},
+        {"entry_invalidation_mask": np.zeros((8, 12))},
+        {"entry_invalidation_mask": np.zeros(96, dtype=bool)},
         {"policy": PortfolioPolicy()},
         {"policy": replace(definition.policy, stage_allocation=True)},
         {"policy": replace(definition.policy, force_rebalance=True)},
@@ -691,3 +695,81 @@ def test_intraday_non_gap_suspended_placeholder_bar_cannot_trade(discovery_panel
     result = run_strategy(panel, definition)
     assert result["trades"] == []
     assert result["open_positions"] == 1
+
+
+def test_default_entry_invalidation_preserves_complete_old_combined_exit_snapshot(discovery_panel):
+    """默认None精确保留修改前候选否决、挂单撤销和持仓退出组合场景的完整资金快照。"""
+    panel = discovery_panel
+    exits = np.zeros((8, 12), dtype=bool)
+    exits[0, 2] = True
+    exits[1, :2] = True
+    definition = single_signal(panel, exit_mask=exits)
+    definition.entry_mask[0, :3] = True
+    panel.values["raw_open"][1, 1] = 11
+    baseline = run_strategy(panel, definition)
+    expected = "7e9e453bdc6b0ec81bfbeceee9402638a36a4d9a37030631daf0aa2cd9dff4e0"
+    assert hashlib.sha256(json.dumps(baseline, sort_keys=True).encode()).hexdigest() == expected
+    assert baseline == run_strategy(panel, replace(definition, entry_invalidation_mask=None))
+    assert baseline == run_strategy(
+        panel, replace(definition, entry_invalidation_mask=exits.copy())
+    )
+
+
+def test_explicit_entry_mask_separates_position_exit_from_pending_and_candidates(discovery_panel):
+    """显式全False入场否决时，exit_mask退出已有持仓，但不撤原挂单或阻止新候选。"""
+    panel = discovery_panel
+    exits = np.zeros((8, 12), dtype=bool)
+    exits[1, :3] = True
+    definition = single_signal(panel, exit_mask=exits)
+    definition.entry_mask[0, 1] = True
+    definition.entry_mask[1, 2] = True
+    panel.values["raw_open"][1, 1] = 11
+    independent = replace(definition, entry_invalidation_mask=np.zeros((8, 12), dtype=bool))
+    assert [row[0] for row in strategy_candidates(panel, 1, independent)] == [2]
+    result = run_strategy(panel, independent)
+    assert result["entry_days"] == [1, 2, 2]
+    assert len(result["trades"]) == 1
+    assert result["trades"][0]["security"] == 0
+    assert result["trades"][0]["exit"] == 2
+    assert result["trades"][0]["reason"] == "signal"
+    assert result["open_positions"] == 2
+    assert abs(result["reconciliation_error"]) < 1e-8
+    # 兼容路径则会撤销第1列旧买单并禁止第2列新候选。
+    combined = run_strategy(panel, definition)
+    assert combined["entry_days"] == [1]
+    assert combined["open_positions"] == 0
+
+
+@pytest.mark.parametrize("has_exit_matrix", [False, True])
+def test_independent_invalidation_blocks_and_cancels_without_exiting_holdings(
+    discovery_panel, has_exit_matrix
+):
+    """独立入场否决能阻止新候选、收盘撤旧挂单，但不会作为已有持仓的卖出理由。"""
+    panel = discovery_panel
+    invalidation = np.zeros((8, 12), dtype=bool)
+    invalidation[0, 2] = True
+    invalidation[1, :2] = True
+    exits = np.zeros((8, 12), dtype=bool) if has_exit_matrix else None
+    definition = single_signal(panel, exit_mask=exits, entry_invalidation_mask=invalidation)
+    definition.entry_mask[0, :3] = True
+    panel.values["raw_open"][1, 1] = 11
+    assert [row[0] for row in strategy_candidates(panel, 0, definition)] == [0, 1]
+    result = run_strategy(panel, definition)
+    assert result["entry_days"] == [1]
+    assert result["trades"] == []
+    assert result["open_positions"] == 1
+    assert abs(result["reconciliation_error"]) < 1e-8
+
+
+def test_independent_invalidation_is_close_only_and_future_changes_preserve_prefix(discovery_panel):
+    """入场否决只能在收盘撤未成交单，不能回写当天开盘成交或更早账户历史。"""
+    panel = discovery_panel
+    invalidation = np.zeros((8, 12), dtype=bool)
+    definition = single_signal(panel, entry_invalidation_mask=invalidation)
+    baseline = run_strategy(panel, definition)
+    invalidation[1, 0] = True
+    assert run_strategy(panel, definition) == baseline
+    invalidation[4:] = True
+    modified = run_strategy(panel, definition)
+    assert modified["daily"][:4] == baseline["daily"][:4]
+    assert modified["entry_days"] == baseline["entry_days"]

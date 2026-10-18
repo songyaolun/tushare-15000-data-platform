@@ -9,6 +9,23 @@ from ..regime_research.portfolio import PortfolioPolicy
 from ..strategy_optimization.features import FloatArray
 from .contracts import StrategyDefinition
 
+_MANAGEMENT_LABELS = frozenset(
+    {
+        "breadth_only",
+        "momentum20_only",
+        "bad_confirm2",
+        "bad_confirm3",
+        "momentum20_deep",
+        "momentum10",
+        "bad_below_ma20",
+        "stop4",
+        "stop6",
+        "hold20",
+        "hold40",
+        "industry_off",
+    }
+)
+
 
 def build_candidates(
     panel: Panel, features: dict[str, FloatArray], group: str
@@ -17,7 +34,16 @@ def build_candidates(
 
     延迟导入独立模块，避免准备数据时生成大矩阵。baseline由原执行路径单独运行。
     """
-    from . import defensive, reversion, sector, sector_onset, selection_timing, trend
+    from . import (
+        defensive,
+        onset_management,
+        onset_quality,
+        reversion,
+        sector,
+        sector_onset,
+        selection_timing,
+        trend,
+    )
 
     builders = {
         "trend": trend.build_strategies,
@@ -26,6 +52,8 @@ def build_candidates(
         "defensive": defensive.build_strategies,
         "selection_timing": selection_timing.build_strategies,
         "sector_onset": sector_onset.build_strategies,
+        "onset_quality": onset_quality.build_strategies,
+        "onset_management": onset_management.build_strategies,
         "control": control_candidates,
     }
     if group not in {*builders, "all"}:
@@ -71,9 +99,11 @@ def control_candidates(panel: Panel, features: dict[str, FloatArray]) -> list[St
 def resolve_definition(
     definitions: list[StrategyDefinition], name: str, features: dict[str, FloatArray]
 ) -> StrategyDefinition:
-    """由保存的唯一名称恢复初始、邻域、结构或盘中变体，未知名称拒绝。
+    """由保存的唯一名称恢复初始、邻域、结构、管理交叉或盘中变体，未知名称拒绝。
 
     例某初始名称追加__intraday，返回其intraday_exits=True的独立定义。
+    onset_quality_market_breadth_50__manage_momentum20_only把该质量信号接入
+    已声明的动量退出；仅完整匹配管理前缀和合法标签时才构建十二组管理矩阵。
     只允许程序声明过的变体，不执行配置中的任意代码。
     """
     from .refinement import defensive_exit_variants, onset_exit_variants, structural_variants
@@ -90,6 +120,14 @@ def resolve_definition(
             variants.extend(defensive_exit_variants(definition))
         if definition.family == "sector_breadth_onset":
             variants.extend(onset_exit_variants(definition))
+            management_prefix = definition.name + "__manage_"
+            if (
+                target.startswith(management_prefix)
+                and target[len(management_prefix) :] in _MANAGEMENT_LABELS
+            ):
+                from .onset_management import build_variants
+
+                variants.extend(build_variants(definition, features))
         for variant in variants:
             if variant.name == target:
                 return (

@@ -19,6 +19,8 @@ class StrategyDefinition:
     maximum_entry_gap=.03拒绝相对信号日绝对复权收盘高开超过3%的订单，
     trailing_stop=.08表示任意市场阶段从持仓最高复权收盘回撤8%触发退出。
     intraday_exits=True启用T+1日线OHLC固定止盈止损，默认False保留收盘退出模型。
+    entry_invalidation_mask单独控制入场禁止和挂单撤销；例如全False矩阵允许
+    exit_mask仅退出持仓。默认None兼容旧行为，入场禁止/撤单仍沿用exit_mask。
     mask和scores形状必须一致；调用方负责保持数组不变及信号计算的因果性。
     """
 
@@ -31,11 +33,13 @@ class StrategyDefinition:
     maximum_entry_gap: float | None = None
     trailing_stop: float = 0.0
     intraday_exits: bool = False
+    entry_invalidation_mask: NDArray[np.bool_] | None = None
 
     def __post_init__(self) -> None:
         """检查矩阵、策略开关和退出阈值，错误配置在执行前失败。
 
         例maximum_entry_gap=-.01或entry_mask为一维数组均抛出ValueError。
+        entry_invalidation_mask若非None，须为同形布尔矩阵，例如浮点矩阵会被拒绝。
         分数允许NaN代表不可排名，执行时会排除这些证券。
         """
         if (
@@ -50,6 +54,13 @@ class StrategyDefinition:
                 and (
                     self.exit_mask.shape != self.entry_mask.shape
                     or self.exit_mask.dtype != np.bool_
+                )
+            )
+            or (
+                self.entry_invalidation_mask is not None
+                and (
+                    self.entry_invalidation_mask.shape != self.entry_mask.shape
+                    or self.entry_invalidation_mask.dtype != np.bool_
                 )
             )
             or self.policy.switching

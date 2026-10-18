@@ -19,7 +19,8 @@ def strategy_candidates(
 
     输入当天分数[2,3,3]且全部合格，输出列号[1,2,0]对应的候选三元组。
     无效行情、未知行业/Beta/市值、成交额不足20000千元、限价带<=7%
-    或非有限分数均排除；同分保持面板证券列顺序。当天退出信号优先于新入场。
+    或非有限分数均排除；同分保持面板证券列顺序。入场失效矩阵禁止对应候选；
+    例如entry_invalidation_mask全False时exit_mask不阻止入场，None时沿用exit_mask。
     """
     values = panel.values
     upper = values["raw_up_limit"][day]
@@ -36,8 +37,13 @@ def strategy_candidates(
         & (band > 0.07)
         & np.isfinite(definition.scores[day])
     )
-    if definition.exit_mask is not None:
-        eligible &= ~definition.exit_mask[day]
+    entry_invalidation = (
+        definition.entry_invalidation_mask
+        if definition.entry_invalidation_mask is not None
+        else definition.exit_mask
+    )
+    if entry_invalidation is not None:
+        eligible &= ~entry_invalidation[day]
     columns = np.flatnonzero(eligible)
     ranked = columns[np.lexsort((columns, -definition.scores[day, columns]))]
     return [
@@ -52,6 +58,7 @@ def additional_exit_reason(
 
     例峰值绝对复权价12、当日11、trailing_stop=.08输出'trailing'；
     exit_mask[day,security]为True时输出'signal'，均在下个合格开盘卖出。
+    entry_invalidation_mask只用于候选和挂单，不会让已有持仓产生退出信号。
     """
     adjusted_close = (
         panel.values["raw_close"][day, holding.security]
@@ -171,7 +178,9 @@ def simulate_strategy(
     definition.trailing_stop跨全部阶段生效，旧policy.trailing由本适配层关闭。
     策略矩阵必须与面板一致，否则抛ValueError。信号日收盘下单、下一合格
     开盘执行，追价失败直接取消该次订单，保留原三日有效期和T+1规则。
-    等待期间exit_mask命中会在收盘撤单；仅entry_mask变False不会撤单。
+    等待期间entry_invalidation_mask命中会在收盘撤单；该矩阵为None时沿用exit_mask。
+    例如显式传入全False入场失效矩阵，exit_mask仅卖出持仓而不撤销原合格买单；
+    仅entry_mask变False不会撤单。
     intraday_exits=True时固定止损止盈采用日线OHLC模型，盘中收入不参与当天开盘买单；
     返回execution_model说明，日度开盘敞口基准不能精确匹配盘中卖出时点。
     """
@@ -200,8 +209,13 @@ def simulate_strategy(
     def cancel_pending_provider(
         current_panel: Panel, confirmation: int, day: int, security: int
     ) -> bool:
-        """只按当前收盘的明确退出信号撤单；例exit_mask[day,security]=True返回True。"""
-        return bool(definition.exit_mask is not None and definition.exit_mask[day, security])
+        """按当前收盘入场失效信号撤单；例独立矩阵命中返回True，None兼容exit_mask。"""
+        entry_invalidation = (
+            definition.entry_invalidation_mask
+            if definition.entry_invalidation_mask is not None
+            else definition.exit_mask
+        )
+        return bool(entry_invalidation is not None and entry_invalidation[day, security])
 
     result = simulate_portfolio(
         panel,

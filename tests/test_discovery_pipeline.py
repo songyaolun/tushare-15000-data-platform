@@ -15,6 +15,8 @@ from tushare_entitlement_hub.strategy_discovery import (
     cli,
     combination,
     defensive,
+    onset_management,
+    onset_quality,
     registry,
     reversion,
     runner,
@@ -53,7 +55,7 @@ def discovery_paths(tmp_path, monkeypatch, panel):
 
 
 def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition, monkeypatch):
-    """各组只调用对应构建器，all汇总七组；未知组和重名策略明确拒绝。"""
+    """各组只调用对应构建器，all汇总九组；未知组和重名策略明确拒绝。"""
     builders = {}
     for name, module in (
         ("trend", trend),
@@ -62,6 +64,8 @@ def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition
         ("defensive", defensive),
         ("selection_timing", selection_timing),
         ("sector_onset", sector_onset),
+        ("onset_quality", onset_quality),
+        ("onset_management", onset_management),
     ):
         builders[name] = Mock(return_value=[replace(definition, name=name)])
         monkeypatch.setattr(module, "build_strategies", builders[name])
@@ -75,6 +79,8 @@ def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition
         "defensive",
         "selection_timing",
         "sector_onset",
+        "onset_quality",
+        "onset_management",
         "control",
     ]
     for name, builder in builders.items():
@@ -118,10 +124,19 @@ def test_neighborhood_changes_one_parameter_and_deduplicates(definition):
 
 
 def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
-    """旧五组仍为63项，新增选股择时17项和行业扩散16项，全部96个初始配置唯一。"""
+    """保留63及96项旧网格，新增质量13项和管理12项，全部121个初始配置唯一。"""
     names = {
         name
-        for module in (trend, sector, reversion, defensive, selection_timing, sector_onset)
+        for module in (
+            trend,
+            sector,
+            reversion,
+            defensive,
+            selection_timing,
+            sector_onset,
+            onset_quality,
+            onset_management,
+        )
         for name in module.REQUIRED_FEATURES
     }
     features = {
@@ -136,12 +151,16 @@ def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
     ]
     selected = registry.build_candidates(panel, features, "selection_timing")
     onset = registry.build_candidates(panel, features, "sector_onset")
+    quality = registry.build_candidates(panel, features, "onset_quality")
+    management = registry.build_candidates(panel, features, "onset_management")
     assert len(original) == 63
     assert len(selected) == 17
     assert len(onset) == 16
-    assert len(candidates) == len({candidate.name for candidate in candidates}) == 63 + 17 + 16
+    assert len(original) + len(selected) + len(onset) == 96
+    assert len(quality) == 13 and len(management) == 12
+    assert len(candidates) == len({candidate.name for candidate in candidates}) == 96 + 13 + 12
     assert {candidate.name for candidate in candidates} == {
-        candidate.name for candidate in (*original, *selected, *onset)
+        candidate.name for candidate in (*original, *selected, *onset, *quality, *management)
     }
     assert sum(candidate.family == "defensive_rotation" for candidate in candidates) == 6
     assert candidates[-1].name == "control_volume"
@@ -156,6 +175,7 @@ def test_configuration_signal_hashes_and_legacy_baseline(definition):
     assert baseline["policy"]["switching"] is baseline["policy"]["stage_allocation"] is False
     signature = runner.configuration(definition)
     assert signature["exit_mask"] is None
+    assert signature["entry_invalidation_mask"] is None
     assert signature["intraday_exits"] is False
     intraday = runner.configuration(replace(definition, intraday_exits=True))
     assert intraday == signature | {"intraday_exits": True}
@@ -168,6 +188,24 @@ def test_configuration_signal_hashes_and_legacy_baseline(definition):
     updated = runner.configuration(changed)
     assert updated["scores"] != signature["scores"]
     assert updated["exit_mask"] == signature["entry_mask"]
+    invalidation = np.zeros_like(definition.entry_mask)
+    separate = runner.configuration(replace(definition, entry_invalidation_mask=invalidation))
+    assert separate["entry_invalidation_mask"] is not None
+    assert {key: value for key, value in separate.items() if key != "entry_invalidation_mask"} == {
+        key: value for key, value in signature.items() if key != "entry_invalidation_mask"
+    }
+    assert (
+        runner.configuration(
+            replace(definition, entry_invalidation_mask=np.asfortranarray(invalidation))
+        )
+        == separate
+    )
+    invalidation[0, 0] = True
+    changed_invalidation = runner.configuration(
+        replace(definition, entry_invalidation_mask=invalidation)
+    )
+    assert changed_invalidation["entry_invalidation_mask"] != separate["entry_invalidation_mask"]
+    assert changed_invalidation["exit_mask"] is None
 
 
 def test_fingerprint_tracks_feature_bytes_and_ignores_unrelated_files(discovery_paths):
@@ -186,6 +224,37 @@ def test_fingerprint_tracks_feature_bytes_and_ignores_unrelated_files(discovery_
     assert array_fingerprint != manifested
     np.save(features / "sample.npy", np.ones(2))
     assert runner.discovery_fingerprint(panel_path, raw, features) != array_fingerprint
+
+
+def test_runner_records_independent_entry_invalidation_and_rejects_changed_content(
+    discovery_paths, definition, monkeypatch
+):
+    """旧exit兼管候选时不入场；独立全False否决允许入场但仍退出，单bit修改拒绝恢复。"""
+    exit_mask = np.ones_like(definition.entry_mask)
+    invalidation = np.zeros_like(definition.entry_mask)
+    legacy = replace(definition, name="legacy_exit", exit_mask=exit_mask)
+    separated = replace(
+        definition,
+        name="separate_exit",
+        exit_mask=exit_mask,
+        entry_invalidation_mask=invalidation,
+    )
+    monkeypatch.setattr(runner, "build_candidates", Mock(return_value=[legacy, separated]))
+    runner.run_discovery(*discovery_paths, group="onset_management")
+    output = discovery_paths[-1]
+    previous = json.loads((output / "legacy_exit" / "metrics.json").read_text())
+    saved = json.loads((output / "separate_exit" / "metrics.json").read_text())
+    assert previous["metrics"]["entry_count"] == 0
+    assert previous["configuration"]["entry_invalidation_mask"] is None
+    assert saved["metrics"]["entry_count"] > 0 and saved["metrics"]["closed_trades"] > 0
+    assert saved["configuration"]["exit_mask"] == previous["configuration"]["exit_mask"]
+    assert saved["configuration"]["entry_invalidation_mask"] != saved["configuration"]["exit_mask"]
+    with (output / "separate_exit" / "trades.csv").open() as stream:
+        trades = list(csv.DictReader(stream))
+    assert trades and all(trade["reason"] == "signal" for trade in trades)
+    invalidation[0, 0] = True
+    with pytest.raises(ValueError, match="discovery_configuration_changed"):
+        runner.run_discovery(*discovery_paths, group="onset_management")
 
 
 def test_additional_metrics_include_cash_dividends_losses_and_empty_book():
@@ -282,6 +351,7 @@ def test_selected_strategy_neighbors_limit_and_configuration_changes(
     for modified in (
         replace(definition, trailing_stop=0.06),
         replace(definition, entry_mask=np.zeros_like(definition.entry_mask)),
+        replace(definition, entry_invalidation_mask=np.zeros_like(definition.entry_mask)),
     ):
         monkeypatch.setattr(runner, "build_candidates", Mock(return_value=[modified]))
         with pytest.raises(ValueError, match="discovery_configuration_changed"):
@@ -384,7 +454,7 @@ def test_cli_passes_prepare_and_run_paths_and_selection_options(tmp_path, monkey
     run.assert_called_once_with(
         panel_path, features, raw, output, group="trend", selection=selection, limit=2
     )
-    for group in ("selection_timing", "sector_onset"):
+    for group in ("selection_timing", "sector_onset", "onset_quality", "onset_management"):
         run.reset_mock()
         result = command.invoke(cli.discovery_app, arguments + ["--group", group])
         assert result.exit_code == 0, result.output
@@ -445,6 +515,53 @@ def test_registry_resolves_initial_neighbor_structural_and_intraday_names(panel,
     for name in ("missing", "fixture_extra", "fixture__unknown", "fixture__intraday__intraday"):
         with pytest.raises(ValueError, match="unknown_selected_strategy"):
             registry.resolve_definition(definitions, name, features)
+
+
+def test_registry_lazily_resolves_management_crosses_and_rejects_unknown_labels(
+    panel, definition, monkeypatch
+):
+    """普通及未知名称不构建管理矩阵，合法质量管理交叉保留原否决并支持盘中后缀。"""
+    original_exit = np.zeros_like(definition.entry_mask)
+    original_exit[10] = True
+    base = replace(
+        definition,
+        name="onset_quality_market_breadth_50",
+        family="sector_breadth_onset",
+        exit_mask=original_exit,
+    )
+    builder = Mock(wraps=onset_management.build_variants)
+    monkeypatch.setattr(onset_management, "build_variants", builder)
+    for name in (base.name, base.name + "__intraday", base.name + "__stop_tighter"):
+        assert registry.resolve_definition([base], name, {}).name == name
+    for name in (
+        base.name + "__manage_unknown",
+        base.name + "_manage_momentum20_only",
+        base.name + "__manage_momentum20_only_extra",
+        base.name + "__manage_unknown__intraday",
+    ):
+        with pytest.raises(ValueError, match="unknown_selected_strategy"):
+            registry.resolve_definition([base], name, {})
+    builder.assert_not_called()
+    with pytest.raises(ValueError, match="unknown_selected_strategy"):
+        registry.resolve_definition([definition], definition.name + "__manage_momentum20_only", {})
+    builder.assert_not_called()
+    crossed_name = base.name + "__manage_momentum20_only"
+    selected = registry.resolve_definition([base], crossed_name, panel.values)
+    builder.assert_called_once_with(base, panel.values)
+    assert selected.name == selected.policy.name == crossed_name
+    assert selected.entry_invalidation_mask is original_exit
+    np.testing.assert_array_equal(selected.entry_mask, base.entry_mask & ~original_exit)
+    assert not selected.exit_mask.any()
+    signature = runner.configuration(selected)
+    assert signature["exit_mask"] != signature["entry_invalidation_mask"]
+    intraday = registry.resolve_definition([base], crossed_name + "__intraday", panel.values)
+    assert intraday.intraday_exits and intraday.name == intraday.policy.name
+    assert intraday.entry_invalidation_mask is original_exit
+    actual_labels = {
+        variant.name.removeprefix(base.name + "__manage_")
+        for variant in onset_management.build_variants(base, panel.values)
+    }
+    assert actual_labels == registry._MANAGEMENT_LABELS
 
 
 def test_selected_structural_and_intraday_variants_record_execution_contract(
@@ -775,27 +892,38 @@ def test_runner_expands_twelve_defensive_exits_and_saves_selected_policy(
     [
         ("selection_timing", "volume_timing_delay1", 31),
         ("sector_onset", "sector_onset_broad_reclaim_mid_tp4_sl10_h20", 30),
+        ("onset_quality", "onset_quality_confirm_breadth_1d", 31),
+        ("onset_quality", "onset_quality_market_breadth_50__manage_momentum20_only", 30),
+        (
+            "onset_management",
+            "sector_onset_selective_quiet_risk_tp8_sl8_h30__manage_industry_off",
+            30,
+        ),
     ],
 )
 def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract(
     discovery_paths, panel, monkeypatch, tmp_path, group, selected_name, expected_confirmation
 ):
-    """延迟择时和行业扩散通过CLI真实选股成交，保留下一开盘、T+1、整手及资金核对。"""
+    """四新组通过CLI真实成交，延期确认下个开盘执行，管理退出不改原有效入场及撤单。"""
+    daily_growth = 1.004 if group in ("onset_quality", "onset_management") else 1.002
     price = np.broadcast_to(
-        (10 * 1.002 ** np.arange(len(panel.calendar)))[:, None], panel.values["close"].shape
+        (10 * daily_growth ** np.arange(len(panel.calendar)))[:, None], panel.values["close"].shape
     ).copy()
     for name in ("raw_open", "raw_close", "raw_low", "raw_high", "close"):
         panel.values[name] = price.copy()
     panel.values["raw_up_limit"] = price * 1.1
     panel.values["raw_down_limit"] = price * 0.9
-    panel.values["return1"][:] = 0.002
-    panel.values["return5"][:] = 1.002**5 - 1
-    panel.values["return20"][:] = 1.002**20 - 1
+    panel.values["return1"][:] = daily_growth - 1
+    panel.values["return5"][:] = daily_growth**5 - 1
+    panel.values["return20"][:] = daily_growth**20 - 1
     panel.values["ma20"] = price * 1.01
     for sector_identifier in (0, 1):
         columns = np.flatnonzero(panel.values["sector_index"][0] == sector_identifier)
         panel.values["ma20"][:, columns[:4]] = price[:, columns[:4]] * 0.99
         panel.values["ma20"][30:, columns[:8]] = price[30:, columns[:8]] * 0.99
+        if group == "onset_quality" and "__manage_" in selected_name:
+            panel.values["ma20"][40:, columns] = price[40:, columns] * 1.01
+            panel.values["ma20"][40:, columns[:2]] = price[40:, columns[:2]] * 0.99
     for mask in panel.signals.values():
         mask[:] = False
     if group == "selection_timing":
@@ -809,6 +937,8 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
     monkeypatch.setattr(runner, "load_features", Mock(return_value=features))
     builder = Mock(wraps=registry.build_candidates)
     monkeypatch.setattr(runner, "build_candidates", builder)
+    simulator = Mock(wraps=runner.simulate_strategy)
+    monkeypatch.setattr(runner, "simulate_strategy", simulator)
     selection = tmp_path / "new-group-selection.json"
     selection.write_text(json.dumps({"names": [selected_name]}))
     command = CliRunner().invoke(
@@ -844,7 +974,90 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
     saved = json.loads((strategy_path / "metrics.json").read_text())
     assert saved["metrics"]["fees"] > 0
     assert abs(saved["metrics"]["reconciliation_error"]) < 1e-6
-    assert saved["configuration"]["policy"]["take_profit"] == 0.04
-    assert saved["configuration"]["policy"]["stop_loss"] == 0.10
-    assert saved["configuration"]["policy"]["maximum_holding"] == 20
+    policy = saved["configuration"]["policy"]
+    expected_policy = (
+        (0.08, 0.08, 30) if group in ("onset_quality", "onset_management") else (0.04, 0.10, 20)
+    )
+    assert (
+        policy["take_profit"],
+        policy["stop_loss"],
+        policy["maximum_holding"],
+    ) == expected_policy
     assert saved["configuration"]["intraday_exits"] is False
+    if group == "onset_management":
+        base = next(
+            item
+            for item in sector_onset.build_strategies(panel, features)
+            if item.name == onset_management.BASELINE_NAME
+        )
+        selected = simulator.call_args.args[3]
+        np.testing.assert_array_equal(selected.entry_mask, base.entry_mask & ~base.exit_mask)
+        np.testing.assert_array_equal(selected.scores, base.scores)
+        np.testing.assert_array_equal(selected.entry_invalidation_mask, base.exit_mask)
+        assert selected.exit_mask is None
+        assert saved["configuration"]["exit_mask"] is None
+        assert (
+            saved["configuration"]["entry_invalidation_mask"]
+            == runner.configuration(base)["exit_mask"]
+        )
+    if group == "onset_quality" and "__manage_" in selected_name:
+        quality = next(
+            item
+            for item in onset_quality.build_strategies(panel, features)
+            if item.name == "onset_quality_market_breadth_50"
+        )
+        selected = simulator.call_args.args[3]
+        np.testing.assert_array_equal(selected.entry_mask, quality.entry_mask & ~quality.exit_mask)
+        np.testing.assert_array_equal(selected.entry_invalidation_mask, quality.exit_mask)
+        assert quality.exit_mask[40:].any() and not selected.exit_mask[40:].any()
+        assert min(int(trade["exit"]) for trade in trades) > 40
+        assert (
+            saved["configuration"]["exit_mask"] != saved["configuration"]["entry_invalidation_mask"]
+        )
+        required_names = {
+            name
+            for module in (
+                trend,
+                sector,
+                reversion,
+                defensive,
+                selection_timing,
+                sector_onset,
+                onset_quality,
+                onset_management,
+            )
+            for name in module.REQUIRED_FEATURES
+        }
+        for name in required_names:
+            features.setdefault(name, np.ones_like(price))
+        combination_selection = tmp_path / "crossed-combination.json"
+        combination_names = [selected_name, selected_name + "__intraday"]
+        combination_selection.write_text(
+            json.dumps(
+                {
+                    "name": "crossed_modes",
+                    "names": combination_names,
+                    "weights": [0.5, 0.5],
+                }
+            )
+        )
+        combination_output = tmp_path / "crossed-combination"
+        completed = runner.run_combination(
+            *discovery_paths[:3], combination_output, combination_selection
+        )
+        combined = json.loads(completed.read_text())
+        sleeves = combined["configuration"]["sleeves"]
+        assert [sleeve["name"] for sleeve in sleeves] == combination_names
+        assert [sleeve["intraday_exits"] for sleeve in sleeves] == [False, True]
+        assert combined["metrics"]["closed_trades"] > 0
+        for sleeve in sleeves:
+            assert sleeve["exit_mask"] == saved["configuration"]["exit_mask"]
+            assert (
+                sleeve["entry_invalidation_mask"]
+                == saved["configuration"]["entry_invalidation_mask"]
+            )
+        with (combination_output / "trades.csv").open() as stream:
+            combined_trades = list(csv.DictReader(stream))
+        assert {trade["sleeve"] for trade in combined_trades} == {
+            f"{index}:{name}" for index, name in enumerate(combination_names)
+        }
