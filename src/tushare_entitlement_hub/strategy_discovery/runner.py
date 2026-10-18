@@ -74,6 +74,7 @@ def configuration(definition: StrategyDefinition | None) -> dict[str, Any]:
         "maximum_entry_gap": definition.maximum_entry_gap,
         "trailing_stop": definition.trailing_stop,
         "intraday_exits": definition.intraday_exits,
+        "maximum_pending_sessions": definition.maximum_pending_sessions,
         "profit_protection": asdict(definition.profit_protection)
         if definition.profit_protection is not None
         else None,

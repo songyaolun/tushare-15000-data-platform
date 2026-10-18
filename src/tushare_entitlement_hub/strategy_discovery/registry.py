@@ -51,6 +51,8 @@ def build_candidates(
         breakout_retest,
         defensive,
         hierarchy_signals,
+        limit_events,
+        moving_support,
         onset_management,
         onset_protection,
         onset_quality,
@@ -77,6 +79,8 @@ def build_candidates(
         "hierarchy_signals": hierarchy_signals.build_strategies,
         "relay_signals": relay_signals.build_strategies,
         "breakout_retest": breakout_retest.build_strategies,
+        "limit_events": limit_events.build_strategies,
+        "moving_support": moving_support.build_strategies,
         "control": control_candidates,
     }
     if group not in {*builders, "all"}:

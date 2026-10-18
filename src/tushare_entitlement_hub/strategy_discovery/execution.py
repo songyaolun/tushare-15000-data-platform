@@ -201,6 +201,7 @@ def simulate_strategy(
     definition.trailing_stop跨全部阶段生效，旧policy.trailing由本适配层关闭。
     策略矩阵必须与面板一致，否则抛ValueError。信号日收盘下单、下一合格
     开盘执行，追价失败直接取消该次订单，保留原三日有效期和T+1规则。
+    maximum_pending_sessions设为1或2时，到最后允许日收盘撤单；默认3保持原时钟。
     等待期间entry_invalidation_mask命中会在收盘撤单；该矩阵为None时沿用exit_mask。
     例如显式传入全False入场失效矩阵，exit_mask仅卖出持仓而不撤销原合格买单；
     仅entry_mask变False不会撤单。
@@ -224,21 +225,27 @@ def simulate_strategy(
         return additional_exit_reason(current_panel, holding, day, definition)
 
     def entry_filter(current_panel: Panel, confirmation: int, day: int, security: int) -> bool:
-        """适配开盘追价接口；例如超出definition.maximum_entry_gap时返回False。"""
-        return entry_gap_allowed(
+        """适配开盘追价与有效期；例如maximum_pending_sessions=1拒绝第三日补买。"""
+        return day <= confirmation + definition.maximum_pending_sessions and entry_gap_allowed(
             current_panel, confirmation, day, security, definition.maximum_entry_gap
         )
 
     def cancel_pending_provider(
         current_panel: Panel, confirmation: int, day: int, security: int
     ) -> bool:
-        """按当前收盘入场失效信号撤单；例独立矩阵命中返回True，None兼容exit_mask。"""
+        """收盘撤销失效或短期限到期订单；例如有效期1在信号后第一日收盘返回True。"""
         entry_invalidation = (
             definition.entry_invalidation_mask
             if definition.entry_invalidation_mask is not None
             else definition.exit_mask
         )
-        return bool(entry_invalidation is not None and entry_invalidation[day, security])
+        return bool(
+            (
+                definition.maximum_pending_sessions < 3
+                and day >= confirmation + definition.maximum_pending_sessions
+            )
+            or (entry_invalidation is not None and entry_invalidation[day, security])
+        )
 
     result = simulate_portfolio(
         panel,

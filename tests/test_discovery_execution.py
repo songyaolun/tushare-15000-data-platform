@@ -84,6 +84,7 @@ def test_contract_defaults_frozen_and_invalid_fields(discovery_panel):
     assert definition.policy.sector_weight == 0.25
     assert definition.entry_invalidation_mask is None
     assert definition.profit_protection is None
+    assert definition.maximum_pending_sessions == 3
     with pytest.raises(FrozenInstanceError):
         definition.name = "changed"
     for changes in (
@@ -105,6 +106,10 @@ def test_contract_defaults_frozen_and_invalid_fields(discovery_panel):
         {"trailing_stop": 1},
         {"trailing_stop": np.nan},
         {"intraday_exits": 1},
+        {"maximum_pending_sessions": 0},
+        {"maximum_pending_sessions": 4},
+        {"maximum_pending_sessions": 1.0},
+        {"maximum_pending_sessions": True},
         {"maximum_entry_gap": -0.1},
         {"maximum_entry_gap": np.nan},
         {"maximum_entry_gap": np.inf},
@@ -919,3 +924,22 @@ def test_profit_protection_keeps_fixed_profit_and_t_plus_one(discovery_panel):
     assert result["trades"][0]["reason"] == "profit"
     assert result["trades"][0]["entry"] == 1
     assert result["trades"][0]["exit"] == 2
+
+
+@pytest.mark.parametrize("lifetime,expected", [(1, []), (2, [2]), (3, [2])])
+def test_pending_lifetime_prevents_late_board_chasing(discovery_panel, lifetime, expected):
+    """场景：次日开盘涨停、第三日打开；预期一日订单过期，二日和原三日订单仍可成交。"""
+    panel = discovery_panel
+    panel.values["raw_open"][1, 0] = panel.values["raw_up_limit"][1, 0]
+    definition = single_signal(panel, maximum_pending_sessions=lifetime)
+    assert run_strategy(panel, definition)["entry_days"] == expected
+
+
+def test_pending_lifetime_accepts_first_open_and_does_not_use_its_close(discovery_panel):
+    """场景：仅次日有效的订单、次日收盘字段未知；预期已知开盘仍可买入，不读未来收盘。"""
+    panel = discovery_panel
+    panel.values["valid"][1, 0] = 0
+    panel.values["raw_close"][1, 0] = np.nan
+    assert run_strategy(panel, single_signal(panel, maximum_pending_sessions=1))["entry_days"] == [
+        1
+    ]

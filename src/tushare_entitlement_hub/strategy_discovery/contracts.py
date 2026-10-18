@@ -23,6 +23,7 @@ class StrategyDefinition:
     entry_invalidation_mask单独控制入场禁止和挂单撤销；例如全False矩阵允许
     exit_mask仅退出持仓。默认None兼容旧行为，入场禁止/撤单仍沿用exit_mask。
     profit_protection可指定激活后收盘利润保护，默认None不改变既有退出行为。
+    maximum_pending_sessions默认3保持原待单时钟，设为1则只允许次市场日开盘买入。
     mask和scores形状必须一致；调用方负责保持数组不变及信号计算的因果性。
     """
 
@@ -37,6 +38,7 @@ class StrategyDefinition:
     intraday_exits: bool = False
     entry_invalidation_mask: NDArray[np.bool_] | None = None
     profit_protection: ProfitProtection | None = None
+    maximum_pending_sessions: int = 3
 
     def __post_init__(self) -> None:
         """检查矩阵、策略开关和退出阈值，错误配置在执行前失败。
@@ -71,6 +73,8 @@ class StrategyDefinition:
             or self.policy.force_rebalance
             or not 0 <= self.trailing_stop < 1
             or not isinstance(self.intraday_exits, bool)
+            or type(self.maximum_pending_sessions) is not int
+            or not 1 <= self.maximum_pending_sessions <= 3
             or (
                 self.profit_protection is not None
                 and not isinstance(self.profit_protection, ProfitProtection)

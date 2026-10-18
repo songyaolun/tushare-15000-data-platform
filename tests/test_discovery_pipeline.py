@@ -18,6 +18,8 @@ from tushare_entitlement_hub.strategy_discovery import (
     defensive,
     hierarchy,
     hierarchy_signals,
+    limit_events,
+    moving_support,
     onset_management,
     onset_protection,
     onset_quality,
@@ -62,7 +64,7 @@ def discovery_paths(tmp_path, monkeypatch, panel):
 
 
 def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition, monkeypatch):
-    """各组只调用对应构建器，all汇总十四组；未知组和重名策略明确拒绝。"""
+    """各组只调用对应构建器，all汇总十六组；未知组和重名策略明确拒绝。"""
     builders = {}
     for name, module in (
         ("trend", trend),
@@ -78,6 +80,8 @@ def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition
         ("hierarchy_signals", hierarchy_signals),
         ("relay_signals", relay_signals),
         ("breakout_retest", breakout_retest),
+        ("limit_events", limit_events),
+        ("moving_support", moving_support),
     ):
         builders[name] = Mock(return_value=[replace(definition, name=name)])
         monkeypatch.setattr(module, "build_strategies", builders[name])
@@ -101,6 +105,8 @@ def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition
         "hierarchy_signals",
         "relay_signals",
         "breakout_retest",
+        "limit_events",
+        "moving_support",
         "control",
     ]
     for name, builder in builders.items():
@@ -144,7 +150,7 @@ def test_neighborhood_changes_one_parameter_and_deduplicates(definition):
 
 
 def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
-    """保留63/96/121项旧网格，新增结构9项和保护8项，无L2时145项、有L2时149项初始配置唯一。"""
+    """保留63/96/121项旧网格，新增结构9项和保护8项，无L2时157项、有L2时161项初始配置唯一。"""
     names = {
         name
         for module in (
@@ -160,6 +166,8 @@ def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
             onset_protection,
             relay_signals,
             breakout_retest,
+            limit_events,
+            moving_support,
         )
         for name in module.REQUIRED_FEATURES
     }
@@ -190,7 +198,9 @@ def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
     assert len(original) + len(selected) + len(onset) + len(quality) + len(management) == 121
     assert len(structure) == 9 and len(protection) == 8
     assert (
-        len(candidates) == len({candidate.name for candidate in candidates}) == 121 + 9 + 8 + 4 + 3
+        len(candidates)
+        == len({candidate.name for candidate in candidates})
+        == 121 + 9 + 8 + 4 + 3 + 12
     )
     assert {candidate.name for candidate in candidates} == {
         candidate.name
@@ -204,6 +214,8 @@ def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
             *protection,
             *relay,
             *breakout,
+            *registry.build_candidates(panel, features, "limit_events"),
+            *registry.build_candidates(panel, features, "moving_support"),
         )
     }
     assert sum(candidate.family == "defensive_rotation" for candidate in candidates) == 6
@@ -213,7 +225,7 @@ def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
     with_level2 = features | {"sector_level2_index": panel.values["sector_index"].copy()}
     all_level2 = registry.build_candidates(panel, with_level2, "all")
     level2 = registry.build_candidates(panel, with_level2, "hierarchy_signals")
-    assert len(level2) == 4 and len(all_level2) == 149
+    assert len(level2) == 4 and len(all_level2) == 161
     assert {item.name for item in all_level2} == {item.name for item in candidates + level2}
 
 
@@ -1254,6 +1266,8 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
                 onset_protection,
                 relay_signals,
                 breakout_retest,
+                limit_events,
+                moving_support,
             )
             for name in module.REQUIRED_FEATURES
         }
