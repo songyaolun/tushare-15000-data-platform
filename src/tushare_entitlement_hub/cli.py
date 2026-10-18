@@ -28,6 +28,7 @@ from .products import build_products
 from .quality import audit_rows
 from .raw import RawStore, assert_public
 from .reference import build_reference, rebuild_reference
+from .regime_research.cli import regime_app
 from .signal_research.cli import signal_research_app
 from .store import Store, encode
 from .strategy_optimization.cli import optimization_app
@@ -56,6 +57,7 @@ for command_name, application in (
     ("research-all", all_products_app),
     ("signal-research", signal_research_app),
     ("strategy-optimize", optimization_app),
+    ("regime-research", regime_app),
 ):
     app.add_typer(application, name=command_name)
 
