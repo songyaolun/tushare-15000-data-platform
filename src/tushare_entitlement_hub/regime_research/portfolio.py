@@ -39,6 +39,10 @@ class PortfolioPolicy:
     trailing: float = 0
     beta_tilt: float = 0
     recovery_family: str = "volume_reversal__sector_group"
+    fixed_price_exits: bool = True
+    slippage_rate: float = 0.0005
+    non_stage_allocation: float = 0.9
+    fee_multiplier: float = 1.0
 
     def __post_init__(self) -> None:
         """拒绝杠杆、负权重和不合法退出配置；例如position_weight=0抛ValueError。"""
@@ -52,6 +56,11 @@ class PortfolioPolicy:
             and self.early_exit >= 0
             and 0 <= self.trailing < 1
             and self.ranking in {"original", "oversold", "liquid"}
+            and isinstance(self.fixed_price_exits, bool)
+            and 0 <= self.slippage_rate < 1
+            and 0 <= self.non_stage_allocation <= 1
+            and np.isfinite(self.fee_multiplier)
+            and self.fee_multiplier >= 0
         ):
             raise ValueError("invalid_portfolio_policy")
 
@@ -138,9 +147,12 @@ def exit_reason(
     """按入场时策略和当前已知收盘判断退出，不因阶段切换放宽止损。
 
     例成本复权10、收盘8.9、stop_loss=.1输出stop；停牌无价格仍可触发持有到期。
-    fixed_exits=False时固定止盈止损交由盘中模型，期限和跟踪等收盘规则继续执行。
+    policy.fixed_price_exits=False关闭固定止盈止损，期限、跟踪与反弹失败规则保留；
+    例如同一持仓收盘8.9且未到期时输出空字符串。fixed_exits=False也可由盘中模型
+    关闭收盘固定退出；该参数不能重新开启策略明确关闭的固定退出。
     """
     held = day - holding.entry + 1
+    fixed_exits = fixed_exits and policy.fixed_price_exits
     if np.isfinite(adjusted_close):
         multiple = adjusted_close / holding.entry_adjusted
         holding.peak_adjusted = max(holding.peak_adjusted, adjusted_close)
@@ -180,13 +192,16 @@ def simulate_portfolio(
     三日订单有效期；T+1、限价和停牌限制；卖出收益留在现金，不以未来净值定仓。
     原始股数处理现金/送股，不支持配股认购；零交易不伪造胜率。
     可选candidate_provider(panel,day,stage,policy)只在收盘提供候选；
-    exit_provider(panel,holding,day,policy)补充原退出规则，无权覆盖硬止损；
+    exit_provider(panel,holding,day,policy)补充原退出规则，无权覆盖已启用的固定止损；
     entry_filter(panel,confirmation,day,security)只可读取信号日历史及成交日开盘信息，
     False取消待买订单；cancel_pending_provider(panel,confirmation,day,security)
     在收盘为True时撤销尚未成交的买单，不影响该日已成交订单。
     intraday_exit_provider返回(原始基准价格,原因)，只在开盘买单后、收盘估值前调用；
     提供方负责完整OHLC和限价可成交检查，账本仍强制T+1与送股锁定。
     例如所有hook为None时使用内置策略；成交按前一日行业及当前资产核算仓位上限。
+    slippage_rate同时影响买卖成交价格、预算和日成本，fee_multiplier乘完整买卖费用；
+    例如fee_multiplier=2时买单先预留两倍手续费，再决定可买股数。
+    非阶段仓位使用non_stage_allocation，例如0.5表示最多投入当前资产的50%。
     """
     if capital <= 0 or len(states) != len(panel.calendar):
         raise ValueError("invalid_simulation_inputs")
@@ -212,10 +227,10 @@ def simulate_portfolio(
     ) -> None:
         """用同一手续费、滑点及分红账本记卖出；例基准价10以max(9.995,跌停价)卖出。"""
         nonlocal cash, fees, turnover, slippage
-        price = max(reference_price * 0.9995, lower_limit)
+        price = max(reference_price * (1 - policy.slippage_rate), lower_limit)
         notional = price * holding.shares
         slippage += (reference_price - price) * holding.shares
-        fee = transaction_fee(notional, calendar[day], True)
+        fee = transaction_fee(notional, calendar[day], True) * policy.fee_multiplier
         cash += notional - fee
         fees += fee
         turnover += notional
@@ -278,7 +293,7 @@ def simulate_portfolio(
             if not np.isfinite(sector) or sector < 0:
                 del pending[security]
                 continue
-            price = min(opening * 1.0005, upper)
+            price = min(opening * (1 + policy.slippage_rate), upper)
             # 日内只使用开盘与此前收盘计算可投资资产和行业已有暴露。
             marked = {
                 column: position.shares
@@ -291,7 +306,11 @@ def simulate_portfolio(
             }
             assets = cash + sum(marked.values()) + book.outstanding()
             current_stage = int(states[day - 1])
-            target = policy.allocations[current_stage] if policy.stage_allocation else 0.9
+            target = (
+                policy.allocations[current_stage]
+                if policy.stage_allocation
+                else policy.non_stage_allocation
+            )
             sector_value = sum(
                 amount
                 for column, amount in marked.items()
@@ -304,11 +323,17 @@ def simulate_portfolio(
                 target * assets - sum(marked.values()),
                 policy.sector_weight * assets - sector_value,
             )
-            shares = affordable_shares(allowance, price, panel.codes[security], calendar[day])
+            shares = affordable_shares(
+                allowance,
+                price,
+                panel.codes[security],
+                calendar[day],
+                fee_multiplier=policy.fee_multiplier,
+            )
             if shares:
                 notional = shares * price
                 slippage += (price - opening) * shares
-                fee = transaction_fee(notional, calendar[day], False)
+                fee = transaction_fee(notional, calendar[day], False) * policy.fee_multiplier
                 cash -= notional + fee
                 fees += fee
                 turnover += notional
@@ -373,7 +398,9 @@ def simulate_portfolio(
         if cash < -1e-6 or not np.isfinite(assets) or assets <= 0:
             raise ValueError("accounting_invariant_failed")
         stage = int(states[day])
-        target = policy.allocations[stage] if policy.stage_allocation else 0.9
+        target = (
+            policy.allocations[stage] if policy.stage_allocation else policy.non_stage_allocation
+        )
         # 只在收盘生成减仓订单，不能把当日风险信号用于当天开盘。
         if policy.stage_allocation and policy.force_rebalance:
             projected = invested - sum(

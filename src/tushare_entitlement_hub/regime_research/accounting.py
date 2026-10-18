@@ -55,18 +55,24 @@ def transaction_fee(notional: float, day: str, selling: bool) -> float:
     return max(5.0, notional * 0.0003) + notional * (transfer + stamp)
 
 
-def affordable_shares(budget: float, price: float, code: str, day: str) -> int:
+def affordable_shares(
+    budget: float, price: float, code: str, day: str, *, fee_multiplier: float = 1.0
+) -> int:
     """按沪深整手规则向下取股数并预留费用；科创板至少200股、其余100股整数倍。
 
     例预算1005.1元、价格10、主板代码，返回100股；预算不足首手返回0。
+    fee_multiplier乘完整买入手续费；同一输入取2时返回0，取0且预算1000时返回100。
+    倍数必须为有限非负数；例如-1抛ValueError，默认1保留原费用与股数。
     """
-    if not np.isfinite(price) or price <= 0 or budget <= 5:
+    if not np.isfinite(fee_multiplier) or fee_multiplier < 0:
+        raise ValueError("invalid_fee_multiplier")
+    if not np.isfinite(price) or price <= 0 or budget <= 5 * fee_multiplier:
         return 0
     minimum, step = (200, 1) if code.startswith(("688", "689")) else (100, 100)
     shares = int(budget / price) // step * step
     while shares >= minimum:
         notional = shares * price
-        if notional + transaction_fee(notional, day, False) <= budget:
+        if notional + transaction_fee(notional, day, False) * fee_multiplier <= budget:
             return shares
         shares -= step
     return 0
