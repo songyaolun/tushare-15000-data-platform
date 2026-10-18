@@ -25,6 +25,18 @@ _MANAGEMENT_LABELS = frozenset(
         "industry_off",
     }
 )
+_PROTECTION_LABELS = frozenset(
+    {
+        "floor_arm3_lock0",
+        "floor_arm3_lock1",
+        "floor_arm5_lock0",
+        "floor_arm5_lock2",
+        "trail_arm3_dd2",
+        "trail_arm3_dd3",
+        "trail_arm5_dd2",
+        "trail_arm5_dd3",
+    }
+)
 
 
 def build_candidates(
@@ -37,7 +49,9 @@ def build_candidates(
     from . import (
         defensive,
         onset_management,
+        onset_protection,
         onset_quality,
+        onset_structure,
         reversion,
         sector,
         sector_onset,
@@ -54,6 +68,8 @@ def build_candidates(
         "sector_onset": sector_onset.build_strategies,
         "onset_quality": onset_quality.build_strategies,
         "onset_management": onset_management.build_strategies,
+        "onset_structure": onset_structure.build_strategies,
+        "onset_protection": onset_protection.build_strategies,
         "control": control_candidates,
     }
     if group not in {*builders, "all"}:
@@ -104,6 +120,8 @@ def resolve_definition(
     例某初始名称追加__intraday，返回其intraday_exits=True的独立定义。
     onset_quality_market_breadth_50__manage_momentum20_only把该质量信号接入
     已声明的动量退出；仅完整匹配管理前缀和合法标签时才构建十二组管理矩阵。
+    onset_structure_control__protect_floor_arm3_lock1按需叠加3%激活、1%收盘保护阈值，
+    普通名称不构建保护变体，未知保护标签仍拒绝。
     只允许程序声明过的变体，不执行配置中的任意代码。
     """
     from .refinement import defensive_exit_variants, onset_exit_variants, structural_variants
@@ -125,9 +143,17 @@ def resolve_definition(
                 target.startswith(management_prefix)
                 and target[len(management_prefix) :] in _MANAGEMENT_LABELS
             ):
-                from .onset_management import build_variants
+                from .onset_management import build_variants as build_management_variants
 
-                variants.extend(build_variants(definition, features))
+                variants.extend(build_management_variants(definition, features))
+            protection_prefix = definition.name + "__protect_"
+            if (
+                target.startswith(protection_prefix)
+                and target[len(protection_prefix) :] in _PROTECTION_LABELS
+            ):
+                from .onset_protection import build_variants as build_protection_variants
+
+                variants.extend(build_protection_variants(definition))
         for variant in variants:
             if variant.name == target:
                 return (

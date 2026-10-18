@@ -45,6 +45,7 @@ def configuration(definition: StrategyDefinition | None) -> dict[str, Any]:
     """保存执行参数与信号摘要，不把行情矩阵写入配置；输入None返回原策略基线参数。
 
     数组按C序列哈希，同名策略信号改变也会拒绝恢复，NaN在评分中保留而非当作零。
+    profit_protection独立保存完整数据类参数；关闭时为None，参数变化也禁止混用结果。
     """
     if definition is None:
         return {"baseline": True, "policy": asdict(baseline_policy())}
@@ -55,6 +56,9 @@ def configuration(definition: StrategyDefinition | None) -> dict[str, Any]:
         "maximum_entry_gap": definition.maximum_entry_gap,
         "trailing_stop": definition.trailing_stop,
         "intraday_exits": definition.intraday_exits,
+        "profit_protection": asdict(definition.profit_protection)
+        if definition.profit_protection is not None
+        else None,
     }
     for name in ("entry_mask", "scores", "exit_mask", "entry_invalidation_mask"):
         values = getattr(definition, name)

@@ -16,7 +16,9 @@ from tushare_entitlement_hub.strategy_discovery import (
     combination,
     defensive,
     onset_management,
+    onset_protection,
     onset_quality,
+    onset_structure,
     registry,
     reversion,
     runner,
@@ -26,6 +28,7 @@ from tushare_entitlement_hub.strategy_discovery import (
     trend,
 )
 from tushare_entitlement_hub.strategy_discovery.contracts import StrategyDefinition
+from tushare_entitlement_hub.strategy_discovery.profit_protection import ProfitProtection
 
 
 @pytest.fixture
@@ -55,7 +58,7 @@ def discovery_paths(tmp_path, monkeypatch, panel):
 
 
 def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition, monkeypatch):
-    """各组只调用对应构建器，all汇总九组；未知组和重名策略明确拒绝。"""
+    """各组只调用对应构建器，all汇总十一组；未知组和重名策略明确拒绝。"""
     builders = {}
     for name, module in (
         ("trend", trend),
@@ -66,6 +69,8 @@ def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition
         ("sector_onset", sector_onset),
         ("onset_quality", onset_quality),
         ("onset_management", onset_management),
+        ("onset_structure", onset_structure),
+        ("onset_protection", onset_protection),
     ):
         builders[name] = Mock(return_value=[replace(definition, name=name)])
         monkeypatch.setattr(module, "build_strategies", builders[name])
@@ -81,6 +86,8 @@ def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition
         "sector_onset",
         "onset_quality",
         "onset_management",
+        "onset_structure",
+        "onset_protection",
         "control",
     ]
     for name, builder in builders.items():
@@ -124,7 +131,7 @@ def test_neighborhood_changes_one_parameter_and_deduplicates(definition):
 
 
 def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
-    """保留63及96项旧网格，新增质量13项和管理12项，全部121个初始配置唯一。"""
+    """保留63/96/121项旧网格，新增结构9项和保护8项，全部138个初始配置唯一。"""
     names = {
         name
         for module in (
@@ -136,6 +143,8 @@ def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
             sector_onset,
             onset_quality,
             onset_management,
+            onset_structure,
+            onset_protection,
         )
         for name in module.REQUIRED_FEATURES
     }
@@ -153,14 +162,27 @@ def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
     onset = registry.build_candidates(panel, features, "sector_onset")
     quality = registry.build_candidates(panel, features, "onset_quality")
     management = registry.build_candidates(panel, features, "onset_management")
+    structure = registry.build_candidates(panel, features, "onset_structure")
+    protection = registry.build_candidates(panel, features, "onset_protection")
     assert len(original) == 63
     assert len(selected) == 17
     assert len(onset) == 16
     assert len(original) + len(selected) + len(onset) == 96
     assert len(quality) == 13 and len(management) == 12
-    assert len(candidates) == len({candidate.name for candidate in candidates}) == 96 + 13 + 12
+    assert len(original) + len(selected) + len(onset) + len(quality) + len(management) == 121
+    assert len(structure) == 9 and len(protection) == 8
+    assert len(candidates) == len({candidate.name for candidate in candidates}) == 121 + 9 + 8
     assert {candidate.name for candidate in candidates} == {
-        candidate.name for candidate in (*original, *selected, *onset, *quality, *management)
+        candidate.name
+        for candidate in (
+            *original,
+            *selected,
+            *onset,
+            *quality,
+            *management,
+            *structure,
+            *protection,
+        )
     }
     assert sum(candidate.family == "defensive_rotation" for candidate in candidates) == 6
     assert candidates[-1].name == "control_volume"
@@ -176,6 +198,14 @@ def test_configuration_signal_hashes_and_legacy_baseline(definition):
     signature = runner.configuration(definition)
     assert signature["exit_mask"] is None
     assert signature["entry_invalidation_mask"] is None
+    assert signature["profit_protection"] is None
+    protection = ProfitProtection(0.03, minimum_return=0.01)
+    protected = runner.configuration(replace(definition, profit_protection=protection))
+    assert protected == signature | {"profit_protection": asdict(protection)}
+    changed_protection = ProfitProtection(0.05, trailing_drawdown=0.02)
+    assert runner.configuration(replace(definition, profit_protection=changed_protection)) == (
+        signature | {"profit_protection": asdict(changed_protection)}
+    )
     assert signature["intraday_exits"] is False
     intraday = runner.configuration(replace(definition, intraday_exits=True))
     assert intraday == signature | {"intraday_exits": True}
@@ -352,6 +382,7 @@ def test_selected_strategy_neighbors_limit_and_configuration_changes(
         replace(definition, trailing_stop=0.06),
         replace(definition, entry_mask=np.zeros_like(definition.entry_mask)),
         replace(definition, entry_invalidation_mask=np.zeros_like(definition.entry_mask)),
+        replace(definition, profit_protection=ProfitProtection(0.03, minimum_return=0.01)),
     ):
         monkeypatch.setattr(runner, "build_candidates", Mock(return_value=[modified]))
         with pytest.raises(ValueError, match="discovery_configuration_changed"):
@@ -454,7 +485,14 @@ def test_cli_passes_prepare_and_run_paths_and_selection_options(tmp_path, monkey
     run.assert_called_once_with(
         panel_path, features, raw, output, group="trend", selection=selection, limit=2
     )
-    for group in ("selection_timing", "sector_onset", "onset_quality", "onset_management"):
+    for group in (
+        "selection_timing",
+        "sector_onset",
+        "onset_quality",
+        "onset_management",
+        "onset_structure",
+        "onset_protection",
+    ):
         run.reset_mock()
         result = command.invoke(cli.discovery_app, arguments + ["--group", group])
         assert result.exit_code == 0, result.output
@@ -562,6 +600,90 @@ def test_registry_lazily_resolves_management_crosses_and_rejects_unknown_labels(
         for variant in onset_management.build_variants(base, panel.values)
     }
     assert actual_labels == registry._MANAGEMENT_LABELS
+
+
+def test_registry_lazily_resolves_protection_crosses_and_preserves_disabled_control(
+    definition, monkeypatch
+):
+    """关闭保护的原名不构建变体；八种合法保护按需解析，未知标签拒绝并保留盘中后缀。"""
+    original_exit = np.zeros_like(definition.entry_mask)
+    invalidation = np.ones_like(original_exit)
+    base = replace(
+        definition,
+        name="onset_structure_control",
+        family="sector_breadth_onset",
+        exit_mask=original_exit,
+        entry_invalidation_mask=invalidation,
+    )
+    builder = Mock(wraps=onset_protection.build_variants)
+    monkeypatch.setattr(onset_protection, "build_variants", builder)
+    for name in (base.name, base.name + "__intraday", base.name + "__stop_tighter"):
+        assert registry.resolve_definition([base], name, {}).profit_protection is None
+    for name in (
+        base.name + "__protect_unknown",
+        base.name + "_protect_floor_arm3_lock1",
+        base.name + "__protect_floor_arm3_lock1_extra",
+        base.name + "__protect_unknown__intraday",
+    ):
+        with pytest.raises(ValueError, match="unknown_selected_strategy"):
+            registry.resolve_definition([base], name, {})
+    with pytest.raises(ValueError, match="unknown_selected_strategy"):
+        registry.resolve_definition(
+            [definition], definition.name + "__protect_floor_arm3_lock1", {}
+        )
+    builder.assert_not_called()
+    for label in registry._PROTECTION_LABELS:
+        name = base.name + "__protect_" + label
+        selected = registry.resolve_definition([base], name, {})
+        assert selected.name == selected.policy.name == name
+        assert selected.profit_protection is not None
+        assert selected.entry_mask is base.entry_mask and selected.scores is base.scores
+        assert (
+            selected.exit_mask is original_exit and selected.entry_invalidation_mask is invalidation
+        )
+    assert builder.call_count == 8
+    selected = registry.resolve_definition(
+        [base], base.name + "__protect_floor_arm3_lock1__intraday", {}
+    )
+    assert selected.intraday_exits and selected.profit_protection == ProfitProtection(
+        0.03, minimum_return=0.01
+    )
+    assert {
+        item.name.removeprefix(base.name + "__protect_")
+        for item in onset_protection.build_variants(base)
+    } == registry._PROTECTION_LABELS
+
+
+def test_profit_protection_none_control_and_changed_parameters_reject_resume(
+    discovery_paths, definition, monkeypatch
+):
+    """无保护与显式None的资金结果一致；同名策略的激活或保底参数变化不能恢复旧输出。"""
+    disabled = replace(definition, name="disabled", profit_protection=None)
+    protected = replace(
+        definition, name="protected", profit_protection=ProfitProtection(0.03, minimum_return=0.01)
+    )
+    definitions = [definition, disabled, protected]
+    builder = Mock(return_value=definitions)
+    monkeypatch.setattr(runner, "build_candidates", builder)
+    runner.run_discovery(*discovery_paths, group="onset_protection")
+    output = discovery_paths[-1]
+    baseline = json.loads((output / definition.name / "metrics.json").read_text())
+    control = json.loads((output / disabled.name / "metrics.json").read_text())
+    assert control["metrics"] == baseline["metrics"]
+    assert control["configuration"]["profit_protection"] is None
+    assert (output / disabled.name / "daily.csv").read_bytes() == (
+        output / definition.name / "daily.csv"
+    ).read_bytes()
+    saved = json.loads((output / protected.name / "metrics.json").read_text())
+    assert saved["configuration"]["profit_protection"] == asdict(protected.profit_protection)
+    for protection in (
+        ProfitProtection(0.05, minimum_return=0.01),
+        ProfitProtection(0.03, minimum_return=0),
+        None,
+    ):
+        builder.return_value = [replace(protected, profit_protection=protection)]
+        with pytest.raises(ValueError, match="discovery_configuration_changed"):
+            runner.run_discovery(*discovery_paths, group="onset_protection")
 
 
 def test_selected_structural_and_intraday_variants_record_execution_contract(
@@ -899,16 +1021,27 @@ def test_runner_expands_twelve_defensive_exits_and_saves_selected_policy(
             "sector_onset_selective_quiet_risk_tp8_sl8_h30__manage_industry_off",
             30,
         ),
+        ("onset_structure", "onset_structure_control", 30),
+        (
+            "onset_protection",
+            "onset_quality_market_breadth_50__manage_momentum20_only__protect_floor_arm3_lock1",
+            30,
+        ),
+        ("onset_structure", "onset_structure_market_breadth_50_75__protect_floor_arm3_lock1", 30),
     ],
 )
 def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract(
     discovery_paths, panel, monkeypatch, tmp_path, group, selected_name, expected_confirmation
 ):
-    """四新组通过CLI真实成交，延期确认下个开盘执行，管理退出不改原有效入场及撤单。"""
-    daily_growth = 1.004 if group in ("onset_quality", "onset_management") else 1.002
+    """新组通过CLI真实成交，延期、独立管理和激活后利润保护均沿用下一开盘及资金账本。"""
+    enhanced_groups = ("onset_quality", "onset_management", "onset_structure", "onset_protection")
+    daily_growth = 1.004 if group in enhanced_groups else 1.002
     price = np.broadcast_to(
         (10 * daily_growth ** np.arange(len(panel.calendar)))[:, None], panel.values["close"].shape
     ).copy()
+    protected_case = "__protect_" in selected_name
+    if protected_case:
+        price[46:] = price[31] * 1.005
     for name in ("raw_open", "raw_close", "raw_low", "raw_high", "close"):
         panel.values[name] = price.copy()
     panel.values["raw_up_limit"] = price * 1.1
@@ -916,6 +1049,9 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
     panel.values["return1"][:] = daily_growth - 1
     panel.values["return5"][:] = daily_growth**5 - 1
     panel.values["return20"][:] = daily_growth**20 - 1
+    if protected_case:
+        for name, period in (("return1", 1), ("return5", 5), ("return20", 20)):
+            panel.values[name][period:] = price[period:] / price[:-period] - 1
     panel.values["ma20"] = price * 1.01
     for sector_identifier in (0, 1):
         columns = np.flatnonzero(panel.values["sector_index"][0] == sector_identifier)
@@ -975,15 +1111,21 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
     assert saved["metrics"]["fees"] > 0
     assert abs(saved["metrics"]["reconciliation_error"]) < 1e-6
     policy = saved["configuration"]["policy"]
-    expected_policy = (
-        (0.08, 0.08, 30) if group in ("onset_quality", "onset_management") else (0.04, 0.10, 20)
-    )
+    expected_policy = (0.08, 0.08, 30) if group in enhanced_groups else (0.04, 0.10, 20)
     assert (
         policy["take_profit"],
         policy["stop_loss"],
         policy["maximum_holding"],
     ) == expected_policy
     assert saved["configuration"]["intraday_exits"] is False
+    if protected_case:
+        assert saved["configuration"]["profit_protection"] == asdict(
+            ProfitProtection(0.03, minimum_return=0.01)
+        )
+        assert {trade["reason"] for trade in trades} == {"profit_protection"}
+        assert {int(trade["exit"]) for trade in trades} == {47}
+    else:
+        assert saved["configuration"]["profit_protection"] is None
     if group == "onset_management":
         base = next(
             item
@@ -1014,6 +1156,9 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
         assert (
             saved["configuration"]["exit_mask"] != saved["configuration"]["entry_invalidation_mask"]
         )
+    if (group == "onset_quality" and "__manage_" in selected_name) or (
+        group == "onset_structure" and protected_case
+    ):
         required_names = {
             name
             for module in (
@@ -1025,6 +1170,8 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
                 sector_onset,
                 onset_quality,
                 onset_management,
+                onset_structure,
+                onset_protection,
             )
             for name in module.REQUIRED_FEATURES
         }
@@ -1051,6 +1198,7 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
         assert [sleeve["intraday_exits"] for sleeve in sleeves] == [False, True]
         assert combined["metrics"]["closed_trades"] > 0
         for sleeve in sleeves:
+            assert sleeve["profit_protection"] == saved["configuration"]["profit_protection"]
             assert sleeve["exit_mask"] == saved["configuration"]["exit_mask"]
             assert (
                 sleeve["entry_invalidation_mask"]

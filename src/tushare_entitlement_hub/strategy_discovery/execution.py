@@ -10,6 +10,7 @@ from ..regime_research.accounting import Distribution, Holding
 from ..regime_research.panel import Panel
 from ..regime_research.portfolio import PortfolioPolicy, simulate_portfolio
 from .contracts import StrategyDefinition
+from .profit_protection import profit_protection_triggered
 
 
 def strategy_candidates(
@@ -59,6 +60,9 @@ def additional_exit_reason(
     例峰值绝对复权价12、当日11、trailing_stop=.08输出'trailing'；
     exit_mask[day,security]为True时输出'signal'，均在下个合格开盘卖出。
     entry_invalidation_mask只用于候选和挂单，不会让已有持仓产生退出信号。
+    激活式利润保护在旧trailing之后、行业信号之前判断；例如峰值10.5、入场10、
+    收盘10.1与ProfitProtection(.04,minimum_return=.01)返回'profit_protection'。
+    独立调用也更新有效复权收盘峰值；保护价只是触发阈值，次日跳空仍可能亏损。
     """
     adjusted_close = (
         panel.values["raw_close"][day, holding.security]
@@ -68,6 +72,25 @@ def additional_exit_reason(
         holding.peak_adjusted = max(holding.peak_adjusted, adjusted_close)
         if adjusted_close / holding.peak_adjusted <= 1 - definition.trailing_stop:
             return "trailing"
+    if definition.profit_protection is not None:
+        known_prices = (
+            panel.values["raw_close"][day, holding.security],
+            panel.values["raw_adj_factor"][day, holding.security],
+            holding.entry_adjusted,
+            holding.peak_adjusted,
+            adjusted_close,
+        )
+        if all(np.isfinite(value) and value > 0 for value in known_prices):
+            holding.peak_adjusted = max(
+                holding.entry_adjusted, holding.peak_adjusted, float(adjusted_close)
+            )
+            if profit_protection_triggered(
+                holding.entry_adjusted,
+                holding.peak_adjusted,
+                float(adjusted_close),
+                definition.profit_protection,
+            ):
+                return "profit_protection"
     if definition.exit_mask is not None and definition.exit_mask[day, holding.security]:
         return "signal"
     return ""

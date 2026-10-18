@@ -25,6 +25,7 @@ from tushare_entitlement_hub.strategy_discovery.execution import (
     simulate_strategy,
     strategy_candidates,
 )
+from tushare_entitlement_hub.strategy_discovery.profit_protection import ProfitProtection
 
 
 @pytest.fixture
@@ -82,6 +83,7 @@ def test_contract_defaults_frozen_and_invalid_fields(discovery_panel):
     assert definition.policy.position_weight == 0.05
     assert definition.policy.sector_weight == 0.25
     assert definition.entry_invalidation_mask is None
+    assert definition.profit_protection is None
     with pytest.raises(FrozenInstanceError):
         definition.name = "changed"
     for changes in (
@@ -106,6 +108,8 @@ def test_contract_defaults_frozen_and_invalid_fields(discovery_panel):
         {"maximum_entry_gap": -0.1},
         {"maximum_entry_gap": np.nan},
         {"maximum_entry_gap": np.inf},
+        {"profit_protection": True},
+        {"profit_protection": {"activation_return": 0.03, "minimum_return": 0}},
     ):
         with pytest.raises(ValueError, match="invalid_strategy"):
             replace(definition, **changes)
@@ -710,6 +714,7 @@ def test_default_entry_invalidation_preserves_complete_old_combined_exit_snapsho
     expected = "7e9e453bdc6b0ec81bfbeceee9402638a36a4d9a37030631daf0aa2cd9dff4e0"
     assert hashlib.sha256(json.dumps(baseline, sort_keys=True).encode()).hexdigest() == expected
     assert baseline == run_strategy(panel, replace(definition, entry_invalidation_mask=None))
+    assert baseline == run_strategy(panel, replace(definition, profit_protection=None))
     assert baseline == run_strategy(
         panel, replace(definition, entry_invalidation_mask=exits.copy())
     )
@@ -773,3 +778,144 @@ def test_independent_invalidation_is_close_only_and_future_changes_preserve_pref
     modified = run_strategy(panel, definition)
     assert modified["daily"][:4] == baseline["daily"][:4]
     assert modified["entry_days"] == baseline["entry_days"]
+
+
+def test_profit_protection_independent_call_updates_adjusted_close_peak(discovery_panel):
+    """独立调用按同尺度复权收盘更新峰值，新高抬升保护线，日内高价不参与激活。"""
+    panel = discovery_panel
+    definition = single_signal(
+        panel, profit_protection=ProfitProtection(0.03, trailing_drawdown=0.02)
+    )
+    holding = Holding(0, 0, 1, 100, 1000, 10, 10, 10, "independent", 4, 1)
+    panel.values["raw_high"][:, 0] = 100
+    assert additional_exit_reason(panel, holding, 1, definition) == ""
+    assert holding.peak_adjusted == 10
+    panel.values["raw_close"][2, 0] = 5.3
+    panel.values["raw_adj_factor"][2, 0] = 2
+    assert additional_exit_reason(panel, holding, 2, definition) == ""
+    assert holding.peak_adjusted == 10.6
+    panel.values["raw_close"][3, 0] = 5.5
+    panel.values["raw_adj_factor"][3, 0] = 2
+    assert additional_exit_reason(panel, holding, 3, definition) == ""
+    assert holding.peak_adjusted == 11
+    panel.values["raw_close"][4, 0] = 5.3
+    panel.values["raw_adj_factor"][4, 0] = 2
+    assert additional_exit_reason(panel, holding, 4, definition) == "profit_protection"
+    assert holding.peak_adjusted == 11
+
+
+@pytest.mark.parametrize(
+    "field", ["raw_close", "raw_adj_factor", "entry_adjusted", "peak_adjusted"]
+)
+@pytest.mark.parametrize("value", [0, -1, np.nan, np.inf])
+def test_profit_protection_invalid_source_prices_do_not_trigger(discovery_panel, field, value):
+    """无效原始价、复权因子、入场参考价或历史峰值不激活保护，也不制造新峰值。"""
+    panel = discovery_panel
+    definition = single_signal(panel, profit_protection=ProfitProtection(0.03, minimum_return=0))
+    holding = Holding(0, 0, 1, 100, 1000, 10, 10, 10.5, "independent", 4, 1)
+    if field.startswith("raw_"):
+        panel.values[field][2, 0] = value
+    else:
+        setattr(holding, field, value)
+    previous_peak = holding.peak_adjusted
+    assert additional_exit_reason(panel, holding, 2, definition) == ""
+    assert holding.peak_adjusted == previous_peak or np.isnan(previous_peak)
+
+
+def test_profit_protection_rejects_negative_price_and_factor_product(discovery_panel):
+    """两个负输入相乘虽为正也不视为有效复权价；旧峰值保持不变。"""
+    panel = discovery_panel
+    definition = single_signal(panel, profit_protection=ProfitProtection(0.03, minimum_return=0))
+    holding = Holding(0, 0, 1, 100, 1000, 10, 10, 10.5, "independent", 4, 1)
+    panel.values["raw_close"][2, 0] = -5
+    panel.values["raw_adj_factor"][2, 0] = -2
+    assert additional_exit_reason(panel, holding, 2, definition) == ""
+    assert holding.peak_adjusted == 10.5
+
+
+def test_profit_protection_invalid_price_still_allows_industry_exit(discovery_panel):
+    """保护价格未知只关闭保护判断，不能屏蔽随后已知的原行业退出信号。"""
+    panel = discovery_panel
+    exits = np.zeros((8, 12), dtype=bool)
+    exits[2, 0] = True
+    definition = single_signal(
+        panel, exit_mask=exits, profit_protection=ProfitProtection(0.03, minimum_return=0)
+    )
+    holding = Holding(0, 0, 1, 100, 1000, 10, 10, 10.5, "independent", 4, 1)
+    panel.values["raw_close"][2, 0] = np.nan
+    assert additional_exit_reason(panel, holding, 2, definition) == "signal"
+    assert holding.peak_adjusted == 10.5
+
+
+@pytest.mark.parametrize(
+    "opening,blocked,expected_day", [(10.1, False, 3), (8, False, 3), (8, True, 4)]
+)
+def test_profit_protection_close_trigger_next_tradable_open_can_lose(
+    discovery_panel, opening, blocked, expected_day
+):
+    """收盘激活回落后只在后续合格开盘卖出；跌停顺延，跳空可穿过保护线并造成净亏损。"""
+    panel = discovery_panel
+    definition = single_signal(panel, profit_protection=ProfitProtection(0.03, minimum_return=0.01))
+    definition = replace(definition, policy=replace(definition.policy, take_profit=0.5))
+    panel.values["raw_close"][1, 0] = 10.5
+    panel.values["raw_close"][2, 0] = 10.1
+    panel.values["raw_open"][3:5, 0] = opening
+    panel.values["raw_down_limit"][3:5, 0] = 7
+    if blocked:
+        panel.values["raw_down_limit"][3, 0] = opening
+    result = run_strategy(panel, definition)
+    trade = result["trades"][0]
+    assert trade["entry"] == 1
+    assert trade["exit"] == expected_day
+    assert trade["exit"] > trade["entry"]
+    assert trade["reason"] == "profit_protection"
+    assert (trade["return"] < 0) == (opening == 8)
+    assert abs(result["reconciliation_error"]) < 1e-8
+
+
+@pytest.mark.parametrize(
+    "closing,maximum_holding,trailing,expected",
+    [
+        (8, 30, 0, "stop"),
+        (10.1, 2, 0, "time"),
+        (10.1, 30, 0.02, "trailing"),
+        (10.1, 30, 0, "profit_protection"),
+    ],
+)
+def test_profit_protection_preserves_fixed_and_trailing_priority_before_industry(
+    discovery_panel, closing, maximum_holding, trailing, expected
+):
+    """共同命中时固定止损/期限和旧跟踪优先，利润保护再优先于行业退出。"""
+    panel = discovery_panel
+    exits = np.zeros((8, 12), dtype=bool)
+    exits[2, 0] = True
+    definition = single_signal(
+        panel,
+        exit_mask=exits,
+        trailing_stop=trailing,
+        profit_protection=ProfitProtection(0.03, minimum_return=0.01),
+    )
+    definition = replace(
+        definition,
+        policy=replace(
+            definition.policy,
+            take_profit=0.5,
+            maximum_holding=maximum_holding,
+        ),
+    )
+    panel.values["raw_close"][1, 0] = 10.5
+    panel.values["raw_close"][2, 0] = closing
+    result = run_strategy(panel, definition)
+    assert result["trades"][0]["reason"] == expected
+    assert result["trades"][0]["exit"] == 3
+
+
+def test_profit_protection_keeps_fixed_profit_and_t_plus_one(discovery_panel):
+    """买入当日收盘触发固定止盈仍优先，利润保护不会替代止盈或允许当日卖出。"""
+    panel = discovery_panel
+    definition = single_signal(panel, profit_protection=ProfitProtection(0.03, minimum_return=0.01))
+    panel.values["raw_close"][1, 0] = 11
+    result = run_strategy(panel, definition)
+    assert result["trades"][0]["reason"] == "profit"
+    assert result["trades"][0]["entry"] == 1
+    assert result["trades"][0]["exit"] == 2
