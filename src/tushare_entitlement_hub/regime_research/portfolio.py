@@ -1,5 +1,6 @@
 """收盘决策、下一合格开盘成交的资金受限组合模拟。"""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -126,21 +127,29 @@ def entry_candidates(
     ]
 
 
-def exit_reason(holding: Holding, day: int, adjusted_close: float, policy: PortfolioPolicy) -> str:
+def exit_reason(
+    holding: Holding,
+    day: int,
+    adjusted_close: float,
+    policy: PortfolioPolicy,
+    *,
+    fixed_exits: bool = True,
+) -> str:
     """按入场时策略和当前已知收盘判断退出，不因阶段切换放宽止损。
 
     例成本复权10、收盘8.9、stop_loss=.1输出stop；停牌无价格仍可触发持有到期。
+    fixed_exits=False时固定止盈止损交由盘中模型，期限和跟踪等收盘规则继续执行。
     """
     held = day - holding.entry + 1
     if np.isfinite(adjusted_close):
         multiple = adjusted_close / holding.entry_adjusted
         holding.peak_adjusted = max(holding.peak_adjusted, adjusted_close)
-        if multiple <= 1 - policy.stop_loss:
+        if fixed_exits and multiple <= 1 - policy.stop_loss:
             return "stop"
         if policy.trailing and holding.stage == 1:
             if adjusted_close / holding.peak_adjusted <= 1 - policy.trailing:
                 return "trailing"
-        elif multiple >= 1 + policy.take_profit:
+        elif fixed_exits and multiple >= 1 + policy.take_profit:
             return "profit"
         if policy.early_exit and held >= policy.early_exit and multiple <= 1:
             return "failed_rebound"
@@ -155,12 +164,29 @@ def simulate_portfolio(
     *,
     capital: float = 1_000_000,
     start: str = "20211018",
+    candidate_provider: Callable[[Panel, int, int, PortfolioPolicy], list[tuple[int, str, float]]]
+    | None = None,
+    exit_provider: Callable[[Panel, Holding, int, PortfolioPolicy], str] | None = None,
+    entry_filter: Callable[[Panel, int, int, int], bool] | None = None,
+    cancel_pending_provider: Callable[[Panel, int, int, int], bool] | None = None,
+    intraday_exit_provider: Callable[
+        [Panel, Holding, int, PortfolioPolicy], tuple[float, str] | None
+    ]
+    | None = None,
 ) -> dict[str, Any]:
     """完整逐日资金回放，返回净值、交易、敞口、成交日和陈旧报价诊断。
 
     例100万元账户、5%单股权重，买单预算不超过5万元且受现金和行业上限限制。
     三日订单有效期；T+1、限价和停牌限制；卖出收益留在现金，不以未来净值定仓。
     原始股数处理现金/送股，不支持配股认购；零交易不伪造胜率。
+    可选candidate_provider(panel,day,stage,policy)只在收盘提供候选；
+    exit_provider(panel,holding,day,policy)补充原退出规则，无权覆盖硬止损；
+    entry_filter(panel,confirmation,day,security)只可读取信号日历史及成交日开盘信息，
+    False取消待买订单；cancel_pending_provider(panel,confirmation,day,security)
+    在收盘为True时撤销尚未成交的买单，不影响该日已成交订单。
+    intraday_exit_provider返回(原始基准价格,原因)，只在开盘买单后、收盘估值前调用；
+    提供方负责完整OHLC和限价可成交检查，账本仍强制T+1与送股锁定。
+    例如所有hook为None时使用内置策略；成交按前一日行业及当前资产核算仓位上限。
     """
     if capital <= 0 or len(states) != len(panel.calendar):
         raise ValueError("invalid_simulation_inputs")
@@ -170,8 +196,48 @@ def simulate_portfolio(
     holdings: dict[int, Holding] = {}
     pending: dict[int, tuple[int, str, float, int, float]] = {}
     book = DistributionBook(events)
-    daily, trades, entry_days = [], [], []
+    daily: list[dict[str, Any]] = []
+    trades: list[dict[str, Any]] = []
+    entry_days: list[int] = []
     turnover, fees, rejected = 0.0, 0.0, 0
+    slippage = 0.0
+
+    def sell_position(
+        security: int,
+        holding: Holding,
+        day: int,
+        reference_price: float,
+        lower_limit: float,
+        reason: str,
+    ) -> None:
+        """用同一手续费、滑点及分红账本记卖出；例基准价10以max(9.995,跌停价)卖出。"""
+        nonlocal cash, fees, turnover, slippage
+        price = max(reference_price * 0.9995, lower_limit)
+        notional = price * holding.shares
+        slippage += (reference_price - price) * holding.shares
+        fee = transaction_fee(notional, calendar[day], True)
+        cash += notional - fee
+        fees += fee
+        turnover += notional
+        trades.append(
+            {
+                "security": security,
+                "ts_code": panel.codes[security],
+                "confirmation": holding.confirmation,
+                "entry": holding.entry,
+                "exit": day,
+                "family": holding.family,
+                "stage": holding.stage,
+                "cost": holding.cost,
+                "proceeds": notional - fee,
+                "dividend": holding.dividend,
+                "return": (notional - fee + holding.dividend) / holding.cost - 1,
+                "reason": reason,
+                "shares": holding.shares,
+            }
+        )
+        del holdings[security]
+
     for day in range(begin, len(calendar)):
         previous_fees = fees
         slippage = 0.0
@@ -189,31 +255,7 @@ def simulate_portfolio(
                 and holding.locked < 1e-8
             )
             if holding.sell_reason and can_sell:
-                price = max(opening * 0.9995, lower)
-                notional = price * holding.shares
-                slippage += (opening - price) * holding.shares
-                fee = transaction_fee(notional, calendar[day], True)
-                cash += notional - fee
-                fees += fee
-                turnover += notional
-                trades.append(
-                    {
-                        "security": security,
-                        "ts_code": panel.codes[security],
-                        "confirmation": holding.confirmation,
-                        "entry": holding.entry,
-                        "exit": day,
-                        "family": holding.family,
-                        "stage": holding.stage,
-                        "cost": holding.cost,
-                        "proceeds": notional - fee,
-                        "dividend": holding.dividend,
-                        "return": (notional - fee + holding.dividend) / holding.cost - 1,
-                        "reason": holding.sell_reason,
-                        "shares": holding.shares,
-                    }
-                )
-                del holdings[security]
+                sell_position(security, holding, day, opening, lower, holding.sell_reason)
         for security, (confirmation, family, score, stage, budget) in list(pending.items()):
             if day > confirmation + 3:
                 del pending[security]
@@ -229,6 +271,13 @@ def simulate_portfolio(
                 or opening >= upper
             ):
                 continue
+            if entry_filter is not None and not entry_filter(panel, confirmation, day, security):
+                del pending[security]
+                continue
+            sector = values["sector_index"][day - 1, security]
+            if not np.isfinite(sector) or sector < 0:
+                del pending[security]
+                continue
             price = min(opening * 1.0005, upper)
             # 日内只使用开盘与此前收盘计算可投资资产和行业已有暴露。
             marked = {
@@ -243,7 +292,6 @@ def simulate_portfolio(
             assets = cash + sum(marked.values()) + book.outstanding()
             current_stage = int(states[day - 1])
             target = policy.allocations[current_stage] if policy.stage_allocation else 0.9
-            sector = values["sector_index"][confirmation, security]
             sector_value = sum(
                 amount
                 for column, amount in marked.items()
@@ -251,6 +299,7 @@ def simulate_portfolio(
             )
             allowance = min(
                 budget,
+                policy.position_weight * assets,
                 cash,
                 target * assets - sum(marked.values()),
                 policy.sector_weight * assets - sector_value,
@@ -292,13 +341,33 @@ def simulate_portfolio(
             for column, position in holdings.items()
         )
         opening_assets = cash + opening_value + book.outstanding()
+        # 开盘资产先冻结；盘中卖出现金不能用于已经结束的开盘买单。
+        if intraday_exit_provider is not None:
+            for security, holding in list(holdings.items()):
+                if day <= holding.entry or holding.locked >= 1e-8:
+                    continue
+                instruction = intraday_exit_provider(panel, holding, day, policy)
+                if instruction is not None:
+                    reference_price, reason = instruction
+                    sell_position(
+                        security,
+                        holding,
+                        day,
+                        reference_price,
+                        float(values["raw_down_limit"][day, security]),
+                        reason,
+                    )
         for security, holding in holdings.items():
             closing = values["raw_close"][day, security]
             if np.isfinite(closing) and closing > 0:
                 holding.price, holding.observed = float(closing), day
             if not holding.sell_reason:
                 adjusted = closing * values["raw_adj_factor"][day, security]
-                holding.sell_reason = exit_reason(holding, day, adjusted, policy)
+                holding.sell_reason = exit_reason(
+                    holding, day, adjusted, policy, fixed_exits=intraday_exit_provider is None
+                )
+                if not holding.sell_reason and exit_provider is not None:
+                    holding.sell_reason = exit_provider(panel, holding, day, policy)
         invested = sum(holding.shares * holding.price for holding in holdings.values())
         assets = cash + invested + book.outstanding()
         if cash < -1e-6 or not np.isfinite(assets) or assets <= 0:
@@ -351,13 +420,19 @@ def simulate_portfolio(
         daily[-1].update(
             {
                 "open_exposure": opening_value / opening_assets,
+                "open_nav": opening_assets,
                 "cost": fees - previous_fees + slippage,
             }
         )
+        if cancel_pending_provider is not None:
+            for security, (confirmation, _, _, _, _) in list(pending.items()):
+                if cancel_pending_provider(panel, confirmation, day, security):
+                    del pending[security]
         available_slots = max(
             0, int(target / policy.position_weight + 1e-8) - len(holdings) - len(pending)
         )
-        for security, family, score in entry_candidates(panel, day, stage, policy):
+        candidates = candidate_provider if candidate_provider is not None else entry_candidates
+        for security, family, score in candidates(panel, day, stage, policy):
             if available_slots <= 0:
                 break
             if security not in holdings and security not in pending:

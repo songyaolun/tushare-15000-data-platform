@@ -31,6 +31,7 @@ from .reference import build_reference, rebuild_reference
 from .regime_research.cli import regime_app
 from .signal_research.cli import signal_research_app
 from .store import Store, encode
+from .strategy_discovery.cli import discovery_app
 from .strategy_optimization.cli import optimization_app
 from .survey import survey
 
@@ -58,6 +59,7 @@ for command_name, application in (
     ("signal-research", signal_research_app),
     ("strategy-optimize", optimization_app),
     ("regime-research", regime_app),
+    ("strategy-discovery", discovery_app),
 ):
     app.add_typer(application, name=command_name)
 
