@@ -17,13 +17,15 @@ def build_candidates(
 
     延迟导入独立模块，避免准备数据时生成大矩阵。baseline由原执行路径单独运行。
     """
-    from . import defensive, reversion, sector, trend
+    from . import defensive, reversion, sector, sector_onset, selection_timing, trend
 
     builders = {
         "trend": trend.build_strategies,
         "sector": sector.build_strategies,
         "reversion": reversion.build_strategies,
         "defensive": defensive.build_strategies,
+        "selection_timing": selection_timing.build_strategies,
+        "sector_onset": sector_onset.build_strategies,
         "control": control_candidates,
     }
     if group not in {*builders, "all"}:
@@ -74,7 +76,7 @@ def resolve_definition(
     例某初始名称追加__intraday，返回其intraday_exits=True的独立定义。
     只允许程序声明过的变体，不执行配置中的任意代码。
     """
-    from .refinement import defensive_exit_variants, structural_variants
+    from .refinement import defensive_exit_variants, onset_exit_variants, structural_variants
 
     intraday = name.endswith("__intraday")
     target = name.removesuffix("__intraday") if intraday else name
@@ -86,6 +88,8 @@ def resolve_definition(
             variants.extend(structural_variants(definition, features))
         if definition.family == "defensive_rotation":
             variants.extend(defensive_exit_variants(definition))
+        if definition.family == "sector_breadth_onset":
+            variants.extend(onset_exit_variants(definition))
         for variant in variants:
             if variant.name == target:
                 return (

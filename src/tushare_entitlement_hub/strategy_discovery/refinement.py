@@ -99,3 +99,38 @@ def defensive_exit_variants(definition: StrategyDefinition) -> list[StrategyDefi
                     )
                 )
     return variants
+
+
+def onset_exit_variants(definition: StrategyDefinition) -> list[StrategyDefinition]:
+    """为行业广度启动策略声明四档止盈与两种执行方式，共八组有限退出对照。
+
+    例base生成base__onsetexit_tp0.01_close和base__onsetexit_tp0.01_intraday，
+    对应1%止盈的收盘确认次开盘与既有T+1日线盘中模型；其余止盈为2%/4%/8%。
+    所有变体固定止损8%、最大持有30日，8%收盘版本保留为原最优锚的重复对照。
+    只设置名称、三个退出参数及intraday_exits，入场、评分和行业结构退出矩阵保持
+    原对象，追价、跟踪止损、early_exit与仓位等其余字段保留；不修改输入定义。
+    盘中模型如何处理跳空、双触及T+1由现有账本负责，本函数不推断日内价格顺序。
+    仅接受family='sector_breadth_onset'，其他策略族明确抛ValueError。
+    """
+    if definition.family != "sector_breadth_onset":
+        raise ValueError("onset_exit_variants_unsupported_family")
+    variants = []
+    for take_profit in (0.01, 0.02, 0.04, 0.08):
+        for intraday_exits in (False, True):
+            execution = "intraday" if intraday_exits else "close"
+            name = f"{definition.name}__onsetexit_tp{take_profit:g}_{execution}"
+            variants.append(
+                replace(
+                    definition,
+                    name=name,
+                    intraday_exits=intraday_exits,
+                    policy=replace(
+                        definition.policy,
+                        name=name,
+                        take_profit=take_profit,
+                        stop_loss=0.08,
+                        maximum_holding=30,
+                    ),
+                )
+            )
+    return variants

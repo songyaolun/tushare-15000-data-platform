@@ -19,6 +19,8 @@ from tushare_entitlement_hub.strategy_discovery import (
     reversion,
     runner,
     sector,
+    sector_onset,
+    selection_timing,
     trend,
 )
 from tushare_entitlement_hub.strategy_discovery.contracts import StrategyDefinition
@@ -51,13 +53,15 @@ def discovery_paths(tmp_path, monkeypatch, panel):
 
 
 def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition, monkeypatch):
-    """各组只调用对应构建器，all汇总五组；未知组和重名策略明确拒绝。"""
+    """各组只调用对应构建器，all汇总七组；未知组和重名策略明确拒绝。"""
     builders = {}
     for name, module in (
         ("trend", trend),
         ("sector", sector),
         ("reversion", reversion),
         ("defensive", defensive),
+        ("selection_timing", selection_timing),
+        ("sector_onset", sector_onset),
     ):
         builders[name] = Mock(return_value=[replace(definition, name=name)])
         monkeypatch.setattr(module, "build_strategies", builders[name])
@@ -69,6 +73,8 @@ def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition
         "sector",
         "reversion",
         "defensive",
+        "selection_timing",
+        "sector_onset",
         "control",
     ]
     for name, builder in builders.items():
@@ -111,11 +117,11 @@ def test_neighborhood_changes_one_parameter_and_deduplicates(definition):
     assert capped["profit_farther"].policy.take_profit == 0.95
 
 
-def test_registry_all_builds_sixty_three_unique_declared_candidates(panel):
-    """五类真实构建器合计产生63个唯一初始配置，不依赖mock或实盘行情。"""
+def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
+    """旧五组仍为63项，新增选股择时17项和行业扩散16项，全部96个初始配置唯一。"""
     names = {
         name
-        for module in (trend, sector, reversion, defensive)
+        for module in (trend, sector, reversion, defensive, selection_timing, sector_onset)
         for name in module.REQUIRED_FEATURES
     }
     features = {
@@ -123,7 +129,20 @@ def test_registry_all_builds_sixty_three_unique_declared_candidates(panel):
         for name in names
     }
     candidates = registry.build_candidates(panel, features, "all")
-    assert len(candidates) == len({candidate.name for candidate in candidates}) == 63
+    original = [
+        candidate
+        for group in ("trend", "sector", "reversion", "defensive", "control")
+        for candidate in registry.build_candidates(panel, features, group)
+    ]
+    selected = registry.build_candidates(panel, features, "selection_timing")
+    onset = registry.build_candidates(panel, features, "sector_onset")
+    assert len(original) == 63
+    assert len(selected) == 17
+    assert len(onset) == 16
+    assert len(candidates) == len({candidate.name for candidate in candidates}) == 63 + 17 + 16
+    assert {candidate.name for candidate in candidates} == {
+        candidate.name for candidate in (*original, *selected, *onset)
+    }
     assert sum(candidate.family == "defensive_rotation" for candidate in candidates) == 6
     assert candidates[-1].name == "control_volume"
 
@@ -365,6 +384,13 @@ def test_cli_passes_prepare_and_run_paths_and_selection_options(tmp_path, monkey
     run.assert_called_once_with(
         panel_path, features, raw, output, group="trend", selection=selection, limit=2
     )
+    for group in ("selection_timing", "sector_onset"):
+        run.reset_mock()
+        result = command.invoke(cli.discovery_app, arguments + ["--group", group])
+        assert result.exit_code == 0, result.output
+        run.assert_called_once_with(
+            panel_path, features, raw, output, group=group, selection=None, limit=None
+        )
     combine = Mock(return_value=output / "metrics.json")
     monkeypatch.setattr(cli, "run_combination", combine)
     combined = command.invoke(
@@ -573,6 +599,124 @@ def test_runner_rejects_ambiguous_refinement_flags(
     assert not discovery_paths[-1].exists()
 
 
+def test_runner_rejects_onset_exits_combined_with_other_refinement_flags(
+    discovery_paths, definition, monkeypatch, tmp_path
+):
+    """onset_exits与任意非空其他展开标志组合均拒绝，原三标志的互斥场景独立保留。"""
+    monkeypatch.setattr(runner, "build_candidates", Mock(return_value=[definition]))
+    simulator = Mock()
+    monkeypatch.setattr(runner, "simulate_strategy", simulator)
+    selection = tmp_path / "ambiguous-onset.json"
+    for enabled in (
+        ("structural",),
+        ("defensive_exits",),
+        ("neighbors",),
+        ("structural", "defensive_exits"),
+        ("structural", "neighbors"),
+        ("defensive_exits", "neighbors"),
+        ("structural", "defensive_exits", "neighbors"),
+    ):
+        selection.write_text(
+            json.dumps(
+                {"names": [definition.name], "onset_exits": True} | dict.fromkeys(enabled, True)
+            )
+        )
+        with pytest.raises(ValueError, match="ambiguous_discovery_refinement"):
+            runner.run_discovery(*discovery_paths, group="sector_onset", selection=selection)
+    simulator.assert_not_called()
+    assert not discovery_paths[-1].exists()
+
+
+def test_registry_resolves_eight_onset_exit_variants_and_switches_intraday_mode(definition):
+    """八个具名退出变体恢复四档止盈，close关闭盘中开关，intraday打开且保留结构退出。"""
+    exit_mask = np.zeros_like(definition.entry_mask)
+    exit_mask[20] = True
+    onset = replace(
+        definition,
+        name="onset",
+        family="sector_breadth_onset",
+        exit_mask=exit_mask,
+        policy=replace(definition.policy, stop_loss=0.08, maximum_holding=30),
+        intraday_exits=True,
+    )
+    names = set()
+    for take_profit in (0.01, 0.02, 0.04, 0.08):
+        for mode in ("close", "intraday"):
+            name = f"onset__onsetexit_tp{take_profit:g}_{mode}"
+            selected = registry.resolve_definition([onset], name, {})
+            names.add(selected.name)
+            assert selected.name == selected.policy.name == name
+            assert selected.policy.take_profit == take_profit
+            assert selected.policy.stop_loss == 0.08 and selected.policy.maximum_holding == 30
+            assert selected.intraday_exits is (mode == "intraday")
+            assert selected.entry_mask is onset.entry_mask
+            assert selected.scores is onset.scores and selected.exit_mask is exit_mask
+    assert len(names) == 8
+    assert registry.resolve_definition(
+        [onset], "onset__onsetexit_tp0.01_close__intraday", {}
+    ).intraday_exits
+    with pytest.raises(ValueError, match="unknown_selected_strategy"):
+        registry.resolve_definition([onset], "onset__onsetexit_tp0.03_close", {})
+
+
+def test_runner_expands_eight_onset_exits_and_saves_execution_metadata(
+    discovery_paths, definition, monkeypatch, tmp_path
+):
+    """八组真实合成账本保存结构退出及SL8/H30，盘中模式实际更早止盈并记录执行限制。"""
+    entry_mask = np.zeros_like(definition.entry_mask)
+    entry_mask[0, 0] = True
+    exit_mask = np.zeros_like(entry_mask)
+    exit_mask[20, 0] = True
+    onset = replace(
+        definition,
+        name="onset",
+        family="sector_breadth_onset",
+        entry_mask=entry_mask,
+        exit_mask=exit_mask,
+        policy=replace(definition.policy, take_profit=0.08, stop_loss=0.08, maximum_holding=30),
+    )
+    monkeypatch.setattr(runner, "build_candidates", Mock(return_value=[onset]))
+    simulator = Mock(wraps=runner.simulate_strategy)
+    monkeypatch.setattr(runner, "simulate_strategy", simulator)
+    selection = tmp_path / "onset-exits.json"
+    selection_data = {"names": ["onset"], "onset_exits": True}
+    selection.write_text(json.dumps(selection_data))
+    report_path = runner.run_discovery(*discovery_paths, group="sector_onset", selection=selection)
+    report = json.loads(report_path.read_text())
+    assert report["attempts"] == 8 and report["complete_grid"]
+    assert report["experiment"]["selection"] == selection_data
+    assert simulator.call_count == 8
+    original_signature = runner.configuration(onset)
+    first_exits = {}
+    for call in simulator.call_args_list:
+        selected = call.args[3]
+        assert selected.exit_mask is exit_mask and selected.entry_mask is entry_mask
+        strategy_path = discovery_paths[-1] / selected.name
+        saved = json.loads((strategy_path / "metrics.json").read_text())
+        configuration = saved["configuration"]
+        assert configuration["entry_mask"] == original_signature["entry_mask"]
+        assert configuration["scores"] == original_signature["scores"]
+        assert configuration["exit_mask"] == original_signature["exit_mask"]
+        assert configuration["policy"]["stop_loss"] == 0.08
+        assert configuration["policy"]["maximum_holding"] == 30
+        assert configuration["intraday_exits"] == selected.intraday_exits
+        if selected.intraday_exits:
+            assert saved["metrics"]["execution_model"]["fixed_exits"] == "daily_ohlc_t_plus_one"
+        else:
+            assert saved["metrics"]["execution_model"] == "close_next_open"
+        with (strategy_path / "trades.csv").open() as stream:
+            trades = list(csv.DictReader(stream))
+        assert len(trades) == 1
+        first_exits[selected.name] = int(trades[0]["exit"])
+    assert (
+        first_exits["onset__onsetexit_tp0.01_intraday"]
+        < first_exits["onset__onsetexit_tp0.01_close"]
+    )
+    with (discovery_paths[-1] / "attempts.csv").open() as stream:
+        attempts = list(csv.DictReader(stream))
+    assert len(attempts) == len({row["name"] for row in attempts}) == 8
+
+
 def test_registry_resolves_defensive_exit_and_intraday_variants(definition):
     """防御退出网格名称恢复指定止盈止损及期限，盘中后缀保留参数，未声明档位拒绝。"""
     defensive_definition = replace(definition, name="defensive", family="defensive_rotation")
@@ -624,3 +768,83 @@ def test_runner_expands_twelve_defensive_exits_and_saves_selected_policy(
         attempts = list(csv.DictReader(stream))
     assert len(attempts) == len({row["name"] for row in attempts}) == 12
     assert {row["family"] for row in attempts} == {"defensive_rotation"}
+
+
+@pytest.mark.parametrize(
+    ("group", "selected_name", "expected_confirmation"),
+    [
+        ("selection_timing", "volume_timing_delay1", 31),
+        ("sector_onset", "sector_onset_broad_reclaim_mid_tp4_sl10_h20", 30),
+    ],
+)
+def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract(
+    discovery_paths, panel, monkeypatch, tmp_path, group, selected_name, expected_confirmation
+):
+    """延迟择时和行业扩散通过CLI真实选股成交，保留下一开盘、T+1、整手及资金核对。"""
+    price = np.broadcast_to(
+        (10 * 1.002 ** np.arange(len(panel.calendar)))[:, None], panel.values["close"].shape
+    ).copy()
+    for name in ("raw_open", "raw_close", "raw_low", "raw_high", "close"):
+        panel.values[name] = price.copy()
+    panel.values["raw_up_limit"] = price * 1.1
+    panel.values["raw_down_limit"] = price * 0.9
+    panel.values["return1"][:] = 0.002
+    panel.values["return5"][:] = 1.002**5 - 1
+    panel.values["return20"][:] = 1.002**20 - 1
+    panel.values["ma20"] = price * 1.01
+    for sector_identifier in (0, 1):
+        columns = np.flatnonzero(panel.values["sector_index"][0] == sector_identifier)
+        panel.values["ma20"][:, columns[:4]] = price[:, columns[:4]] * 0.99
+        panel.values["ma20"][30:, columns[:8]] = price[30:, columns[:8]] * 0.99
+    for mask in panel.signals.values():
+        mask[:] = False
+    if group == "selection_timing":
+        panel.signals["volume_reversal__sector_group"][30] = True
+    features = panel.values | {
+        "high": price.copy(),
+        "turnover": np.full_like(price, 2),
+        "boll_position": np.full_like(price, 0.3),
+    }
+    save_panel(discovery_paths[0], panel)
+    monkeypatch.setattr(runner, "load_features", Mock(return_value=features))
+    builder = Mock(wraps=registry.build_candidates)
+    monkeypatch.setattr(runner, "build_candidates", builder)
+    selection = tmp_path / "new-group-selection.json"
+    selection.write_text(json.dumps({"names": [selected_name]}))
+    command = CliRunner().invoke(
+        cli.discovery_app,
+        [
+            "run",
+            *(str(path) for path in discovery_paths),
+            "--group",
+            group,
+            "--selection",
+            str(selection),
+        ],
+    )
+    assert command.exit_code == 0, command.output
+    assert builder.call_args.args[2] == group
+    report = json.loads((discovery_paths[-1] / "report.json").read_text())
+    assert report["attempts"] == 1 and report["highest_return"]["name"] == selected_name
+    strategy_path = discovery_paths[-1] / selected_name
+    with (strategy_path / "trades.csv").open() as stream:
+        trades = list(csv.DictReader(stream))
+    assert trades
+    assert min(int(trade["confirmation"]) for trade in trades) == expected_confirmation
+    assert min(int(trade["entry"]) for trade in trades) == expected_confirmation + 1
+    assert all(int(trade["exit"]) > int(trade["entry"]) for trade in trades)
+    assert all(int(trade["shares"]) > 0 and int(trade["shares"]) % 100 == 0 for trade in trades)
+    with (strategy_path / "daily.csv").open() as stream:
+        daily = list(csv.DictReader(stream))
+    assert min(float(row["cash"]) for row in daily) >= 0
+    assert max(float(row["exposure"]) for row in daily) <= 0.91
+    for row in daily:
+        assets, cash, receivable = (float(row[key]) for key in ("nav", "cash", "receivable"))
+        assert assets == pytest.approx(cash + receivable + assets * float(row["exposure"]))
+    saved = json.loads((strategy_path / "metrics.json").read_text())
+    assert saved["metrics"]["fees"] > 0
+    assert abs(saved["metrics"]["reconciliation_error"]) < 1e-6
+    assert saved["configuration"]["policy"]["take_profit"] == 0.04
+    assert saved["configuration"]["policy"]["stop_loss"] == 0.10
+    assert saved["configuration"]["policy"]["maximum_holding"] == 20
+    assert saved["configuration"]["intraday_exits"] is False

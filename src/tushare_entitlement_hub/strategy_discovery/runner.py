@@ -18,7 +18,7 @@ from .combination import simulate_sleeves
 from .contracts import StrategyDefinition
 from .dataset import load_features
 from .execution import simulate_strategy
-from .refinement import defensive_exit_variants, structural_variants
+from .refinement import defensive_exit_variants, onset_exit_variants, structural_variants
 from .registry import build_candidates, neighborhood, resolve_definition
 
 
@@ -151,6 +151,7 @@ def run_discovery(
     """同账本运行一个策略组并保存完整证据；例如group='baseline'重现旧固定组合。
 
     selection可为{'names':['某配置'],'neighbors':true}，记录全样本自适应选优来源。
+    onset_exits=true为行业初期策略生成八组止盈与执行方式对照，和其他扩展标志互斥。
     不同组可用独立进程和输出目录并行；limit只用于软件烟测，结果明确标记不完整。
     """
     if limit is not None and limit < 1:
@@ -168,7 +169,7 @@ def run_discovery(
         if (
             sum(
                 bool(selection_data.get(key))
-                for key in ("structural", "defensive_exits", "neighbors")
+                for key in ("structural", "defensive_exits", "onset_exits", "neighbors")
             )
             > 1
         ):
@@ -186,6 +187,8 @@ def run_discovery(
                 if selection_data.get("structural", False)
                 else defensive_exit_variants(item)
                 if selection_data.get("defensive_exits", False)
+                else onset_exit_variants(item)
+                if selection_data.get("onset_exits", False)
                 else neighborhood(item)
                 if selection_data.get("neighbors", False)
                 else [item]

@@ -9,6 +9,7 @@ from tushare_entitlement_hub.regime_research.portfolio import PortfolioPolicy
 from tushare_entitlement_hub.strategy_discovery.contracts import StrategyDefinition
 from tushare_entitlement_hub.strategy_discovery.refinement import (
     defensive_exit_variants,
+    onset_exit_variants,
     structural_variants,
 )
 
@@ -231,3 +232,75 @@ def test_defensive_grid_rejects_other_entry_families(family):
     definition, _ = refinement_fixture(family)
     with pytest.raises(ValueError, match="defensive_exit_variants_unsupported_family"):
         defensive_exit_variants(definition)
+
+
+@pytest.mark.parametrize("take_profit", [0.01, 0.02, 0.04, 0.08])
+@pytest.mark.parametrize("intraday_exits", [False, True])
+def test_onset_exit_grid_preserves_entry_ranking_and_industry_exit(take_profit, intraday_exits):
+    """场景：四档止盈与收盘/盘中八组合；预期：固定SL8%/H30，原信号矩阵与其他参数保留。"""
+    original, _ = refinement_fixture("sector_breadth_onset")
+    original = replace(
+        original,
+        intraday_exits=True,
+        policy=replace(original.policy, early_exit=6, trailing=0.04),
+    )
+    variants = onset_exit_variants(original)
+    assert len(variants) == len({variant.name for variant in variants}) == 8
+    execution = "intraday" if intraday_exits else "close"
+    name = f"{original.name}__onsetexit_tp{take_profit:g}_{execution}"
+    selected = next(variant for variant in variants if variant.name == name)
+    assert selected.intraday_exits is intraday_exits
+    assert selected.policy.name == name
+    assert selected.policy.take_profit == take_profit
+    assert selected.policy.stop_loss == 0.08
+    assert selected.policy.maximum_holding == 30
+    for field in fields(original):
+        if field.name not in {"name", "policy", "intraday_exits"}:
+            expected, actual = getattr(original, field.name), getattr(selected, field.name)
+            if isinstance(expected, np.ndarray):
+                assert actual is expected
+                assert actual.shape == expected.shape
+            else:
+                assert actual == expected
+    for field in fields(original.policy):
+        if field.name not in {"name", "take_profit", "stop_loss", "maximum_holding"}:
+            assert getattr(selected.policy, field.name) == getattr(original.policy, field.name)
+    assert original.policy.take_profit == 0.09
+    assert original.policy.stop_loss == 0.05
+    assert original.policy.maximum_holding == 12
+    assert original.intraday_exits is True
+
+
+def test_onset_eight_percent_close_is_same_policy_as_original_anchor():
+    """场景：TP8%/SL8%/H30的收盘执行锚；预期：对应重复对照只改变名称。"""
+    definition, _ = refinement_fixture("sector_breadth_onset")
+    definition = replace(
+        definition,
+        intraday_exits=False,
+        policy=replace(definition.policy, take_profit=0.08, stop_loss=0.08, maximum_holding=30),
+    )
+    variant = next(
+        item
+        for item in onset_exit_variants(definition)
+        if item.name.endswith("__onsetexit_tp0.08_close")
+    )
+    assert replace(variant.policy, name=definition.policy.name) == definition.policy
+    assert variant.intraday_exits is definition.intraday_exits
+    assert variant.entry_mask is definition.entry_mask
+    assert variant.scores is definition.scores
+    assert variant.exit_mask is definition.exit_mask
+
+
+def test_onset_exit_grid_preserves_absent_industry_exit():
+    """场景：行业启动锚没有结构退出矩阵；预期：八个变体均保留None而不生成额外退出。"""
+    definition, _ = refinement_fixture("sector_breadth_onset")
+    definition = replace(definition, exit_mask=None)
+    assert all(variant.exit_mask is None for variant in onset_exit_variants(definition))
+
+
+@pytest.mark.parametrize("family", ["boll_reentry", "defensive_rotation", "trend"])
+def test_onset_exit_grid_rejects_other_families(family):
+    """场景：将其他族传入行业启动退出探索；预期：明确拒绝，避免扩张预声明范围。"""
+    definition, _ = refinement_fixture(family)
+    with pytest.raises(ValueError, match="onset_exit_variants_unsupported_family"):
+        onset_exit_variants(definition)
