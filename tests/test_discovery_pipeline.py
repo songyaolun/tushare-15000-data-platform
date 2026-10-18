@@ -12,14 +12,18 @@ from test_regime_research import panel as panel
 from typer.testing import CliRunner
 
 from tushare_entitlement_hub.strategy_discovery import (
+    breakout_retest,
     cli,
     combination,
     defensive,
+    hierarchy,
+    hierarchy_signals,
     onset_management,
     onset_protection,
     onset_quality,
     onset_structure,
     registry,
+    relay_signals,
     reversion,
     runner,
     sector,
@@ -58,7 +62,7 @@ def discovery_paths(tmp_path, monkeypatch, panel):
 
 
 def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition, monkeypatch):
-    """各组只调用对应构建器，all汇总十一组；未知组和重名策略明确拒绝。"""
+    """各组只调用对应构建器，all汇总十四组；未知组和重名策略明确拒绝。"""
     builders = {}
     for name, module in (
         ("trend", trend),
@@ -71,12 +75,18 @@ def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition
         ("onset_management", onset_management),
         ("onset_structure", onset_structure),
         ("onset_protection", onset_protection),
+        ("hierarchy_signals", hierarchy_signals),
+        ("relay_signals", relay_signals),
+        ("breakout_retest", breakout_retest),
     ):
         builders[name] = Mock(return_value=[replace(definition, name=name)])
         monkeypatch.setattr(module, "build_strategies", builders[name])
     builders["control"] = Mock(return_value=[replace(definition, name="control")])
     monkeypatch.setattr(registry, "control_candidates", builders["control"])
-    features = {"fixture": panel.values["close"]}
+    features = {
+        "fixture": panel.values["close"],
+        "sector_level2_index": panel.values["sector_index"],
+    }
     assert [item.name for item in registry.build_candidates(panel, features, "all")] == [
         "trend",
         "sector",
@@ -88,6 +98,9 @@ def test_registry_groups_unknown_names_and_duplicate_rejection(panel, definition
         "onset_management",
         "onset_structure",
         "onset_protection",
+        "hierarchy_signals",
+        "relay_signals",
+        "breakout_retest",
         "control",
     ]
     for name, builder in builders.items():
@@ -131,7 +144,7 @@ def test_neighborhood_changes_one_parameter_and_deduplicates(definition):
 
 
 def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
-    """保留63/96/121项旧网格，新增结构9项和保护8项，全部138个初始配置唯一。"""
+    """保留63/96/121项旧网格，新增结构9项和保护8项，无L2时145项、有L2时149项初始配置唯一。"""
     names = {
         name
         for module in (
@@ -145,6 +158,8 @@ def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
             onset_management,
             onset_structure,
             onset_protection,
+            relay_signals,
+            breakout_retest,
         )
         for name in module.REQUIRED_FEATURES
     }
@@ -164,6 +179,9 @@ def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
     management = registry.build_candidates(panel, features, "onset_management")
     structure = registry.build_candidates(panel, features, "onset_structure")
     protection = registry.build_candidates(panel, features, "onset_protection")
+    relay = registry.build_candidates(panel, features, "relay_signals")
+    breakout = registry.build_candidates(panel, features, "breakout_retest")
+    assert len(relay) == 4 and len(breakout) == 3
     assert len(original) == 63
     assert len(selected) == 17
     assert len(onset) == 16
@@ -171,7 +189,9 @@ def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
     assert len(quality) == 13 and len(management) == 12
     assert len(original) + len(selected) + len(onset) + len(quality) + len(management) == 121
     assert len(structure) == 9 and len(protection) == 8
-    assert len(candidates) == len({candidate.name for candidate in candidates}) == 121 + 9 + 8
+    assert (
+        len(candidates) == len({candidate.name for candidate in candidates}) == 121 + 9 + 8 + 4 + 3
+    )
     assert {candidate.name for candidate in candidates} == {
         candidate.name
         for candidate in (
@@ -182,10 +202,19 @@ def test_registry_all_preserves_original_sixty_three_and_adds_new_groups(panel):
             *management,
             *structure,
             *protection,
+            *relay,
+            *breakout,
         )
     }
     assert sum(candidate.family == "defensive_rotation" for candidate in candidates) == 6
     assert candidates[-1].name == "control_volume"
+    with pytest.raises(ValueError, match="missing"):
+        registry.build_candidates(panel, features, "hierarchy_signals")
+    with_level2 = features | {"sector_level2_index": panel.values["sector_index"].copy()}
+    all_level2 = registry.build_candidates(panel, with_level2, "all")
+    level2 = registry.build_candidates(panel, with_level2, "hierarchy_signals")
+    assert len(level2) == 4 and len(all_level2) == 149
+    assert {item.name for item in all_level2} == {item.name for item in candidates + level2}
 
 
 def test_configuration_signal_hashes_and_legacy_baseline(definition):
@@ -391,7 +420,12 @@ def test_selected_strategy_neighbors_limit_and_configuration_changes(
     selection.write_text(json.dumps({"names": ["fixture"], "neighbors": True}))
     neighbor_output = tmp_path / "neighbors"
     neighbor_report = runner.run_discovery(
-        *discovery_paths[:3], neighbor_output, group="trend", selection=selection, limit=2
+        *discovery_paths[:3],
+        neighbor_output,
+        group="trend",
+        selection=selection,
+        limit=2,
+        hierarchy_path=None,
     )
     saved = json.loads(neighbor_report.read_text())
     assert saved["attempts"] == 2 and saved["complete_grid"] is False
@@ -473,7 +507,14 @@ def test_cli_passes_prepare_and_run_paths_and_selection_options(tmp_path, monkey
     default = command.invoke(cli.discovery_app, arguments)
     assert default.exit_code == 0, default.output
     run.assert_called_once_with(
-        panel_path, features, raw, output, group="all", selection=None, limit=None
+        panel_path,
+        features,
+        raw,
+        output,
+        group="all",
+        selection=None,
+        limit=None,
+        hierarchy_path=None,
     )
     run.reset_mock()
     selected = command.invoke(
@@ -483,7 +524,14 @@ def test_cli_passes_prepare_and_run_paths_and_selection_options(tmp_path, monkey
     assert selected.exit_code == 0, selected.output
     assert selected.output.strip() == str(output / "report.json")
     run.assert_called_once_with(
-        panel_path, features, raw, output, group="trend", selection=selection, limit=2
+        panel_path,
+        features,
+        raw,
+        output,
+        group="trend",
+        selection=selection,
+        limit=2,
+        hierarchy_path=None,
     )
     for group in (
         "selection_timing",
@@ -497,7 +545,14 @@ def test_cli_passes_prepare_and_run_paths_and_selection_options(tmp_path, monkey
         result = command.invoke(cli.discovery_app, arguments + ["--group", group])
         assert result.exit_code == 0, result.output
         run.assert_called_once_with(
-            panel_path, features, raw, output, group=group, selection=None, limit=None
+            panel_path,
+            features,
+            raw,
+            output,
+            group=group,
+            selection=None,
+            limit=None,
+            hierarchy_path=None,
         )
     combine = Mock(return_value=output / "metrics.json")
     monkeypatch.setattr(cli, "run_combination", combine)
@@ -507,7 +562,9 @@ def test_cli_passes_prepare_and_run_paths_and_selection_options(tmp_path, monkey
     )
     assert combined.exit_code == 0, combined.output
     assert combined.output.strip() == str(output / "metrics.json")
-    combine.assert_called_once_with(panel_path, features, raw, output, selection)
+    combine.assert_called_once_with(
+        panel_path, features, raw, output, selection, hierarchy_path=None
+    )
 
 
 def test_control_candidates_preserve_signal_ranking_and_baseline_cash(
@@ -1028,13 +1085,28 @@ def test_runner_expands_twelve_defensive_exits_and_saves_selected_policy(
             30,
         ),
         ("onset_structure", "onset_structure_market_breadth_50_75__protect_floor_arm3_lock1", 30),
+        ("hierarchy_signals", "hierarchy_matched_control", 30),
+        ("hierarchy_signals", "hierarchy_l1_peer_relative20", 30),
+        ("hierarchy_signals", "hierarchy_l2_peer_relative20", 30),
+        ("hierarchy_signals", "hierarchy_l2_onset", 30),
+        ("relay_signals", "relay_matched_control", 30),
+        ("relay_signals", "relay_previous_leaders", 30),
+        ("relay_signals", "relay_new_participants", 30),
+        ("relay_signals", "relay_current_strength", 30),
     ],
 )
 def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract(
     discovery_paths, panel, monkeypatch, tmp_path, group, selected_name, expected_confirmation
 ):
     """新组通过CLI真实成交，延期、独立管理和激活后利润保护均沿用下一开盘及资金账本。"""
-    enhanced_groups = ("onset_quality", "onset_management", "onset_structure", "onset_protection")
+    enhanced_groups = (
+        "onset_quality",
+        "onset_management",
+        "onset_structure",
+        "onset_protection",
+        "hierarchy_signals",
+        "relay_signals",
+    )
     daily_growth = 1.004 if group in enhanced_groups else 1.002
     price = np.broadcast_to(
         (10 * daily_growth ** np.arange(len(panel.calendar)))[:, None], panel.values["close"].shape
@@ -1075,6 +1147,11 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
     monkeypatch.setattr(runner, "build_candidates", builder)
     simulator = Mock(wraps=runner.simulate_strategy)
     monkeypatch.setattr(runner, "simulate_strategy", simulator)
+    sidecar = None
+    if group == "hierarchy_signals":
+        sidecar = prepare_test_hierarchy(
+            discovery_paths[0], panel, tmp_path / "members", tmp_path / "sidecar"
+        )
     selection = tmp_path / "new-group-selection.json"
     selection.write_text(json.dumps({"names": [selected_name]}))
     command = CliRunner().invoke(
@@ -1086,6 +1163,7 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
             group,
             "--selection",
             str(selection),
+            *(["--hierarchy", str(sidecar)] if sidecar is not None else []),
         ],
     )
     assert command.exit_code == 0, command.output
@@ -1156,8 +1234,10 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
         assert (
             saved["configuration"]["exit_mask"] != saved["configuration"]["entry_invalidation_mask"]
         )
-    if (group == "onset_quality" and "__manage_" in selected_name) or (
-        group == "onset_structure" and protected_case
+    if (
+        (group == "onset_quality" and "__manage_" in selected_name)
+        or (group == "onset_structure" and protected_case)
+        or group in ("hierarchy_signals", "relay_signals")
     ):
         required_names = {
             name
@@ -1172,6 +1252,8 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
                 onset_management,
                 onset_structure,
                 onset_protection,
+                relay_signals,
+                breakout_retest,
             )
             for name in module.REQUIRED_FEATURES
         }
@@ -1190,7 +1272,7 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
         )
         combination_output = tmp_path / "crossed-combination"
         completed = runner.run_combination(
-            *discovery_paths[:3], combination_output, combination_selection
+            *discovery_paths[:3], combination_output, combination_selection, hierarchy_path=sidecar
         )
         combined = json.loads(completed.read_text())
         sleeves = combined["configuration"]["sleeves"]
@@ -1209,3 +1291,270 @@ def test_new_groups_cli_runs_real_signals_with_existing_cash_and_timing_contract
         assert {trade["sleeve"] for trade in combined_trades} == {
             f"{index}:{name}" for index, name in enumerate(combination_names)
         }
+
+
+def prepare_test_hierarchy(panel_path, panel, source, output):
+    """给合成面板添加公开来源摘要并生成真实sidecar；例如输出OUT/hierarchy.json。
+
+    每十只同业共享L2，日期覆盖完整面板；不改变面板数组或任何旧测试的输入。
+    """
+    manifest_path = panel_path / "panel.json"
+    manifest = json.loads(manifest_path.read_text()) | {"source_fingerprint": "a" * 64}
+    manifest_path.write_text(json.dumps(manifest))
+    source.mkdir()
+    rows = [
+        {
+            "ts_code": code,
+            "l1_code": f"{801000 + index % 2:06d}.SI",
+            "l2_code": f"{801010 + index % 2:06d}.SI",
+            "in_date": panel.calendar[0],
+            "out_date": None,
+            "is_new": "Y",
+        }
+        for index, code in enumerate(panel.codes)
+    ]
+    write_partition(source / "members-fixture.json", "index_member_all", {}, rows)
+    return hierarchy.prepare_hierarchy(source, panel_path, output)
+
+
+def test_cli_hierarchy_creation_and_optional_run_combine_paths(tmp_path, monkeypatch):
+    """CLI层级命令传递源目录，run/combine的显式sidecar参数准确传到runner。"""
+    source, panel_path, features, raw, output, selection, sidecar = (
+        tmp_path / name
+        for name in ("source", "panel", "features", "raw", "output", "selection.json", "sidecar")
+    )
+    prepare = Mock(return_value=sidecar / "hierarchy.json")
+    run, combine = (
+        Mock(return_value=output / "report.json"),
+        Mock(return_value=output / "metrics.json"),
+    )
+    monkeypatch.setattr(cli, "prepare_hierarchy", prepare)
+    monkeypatch.setattr(cli, "run_discovery", run)
+    monkeypatch.setattr(cli, "run_combination", combine)
+    command = CliRunner()
+    prepared = command.invoke(
+        cli.discovery_app, ["hierarchy", str(source), str(panel_path), str(sidecar)]
+    )
+    assert prepared.exit_code == 0, prepared.output
+    assert prepared.output.strip() == str(sidecar / "hierarchy.json")
+    prepare.assert_called_once_with(source, panel_path, sidecar)
+    executed = command.invoke(
+        cli.discovery_app,
+        [
+            "run",
+            str(panel_path),
+            str(features),
+            str(raw),
+            str(output),
+            "--hierarchy",
+            str(sidecar),
+            "--group",
+            "hierarchy_signals",
+        ],
+    )
+    assert executed.exit_code == 0, executed.output
+    run.assert_called_once_with(
+        panel_path,
+        features,
+        raw,
+        output,
+        group="hierarchy_signals",
+        selection=None,
+        limit=None,
+        hierarchy_path=sidecar,
+    )
+    combined = command.invoke(
+        cli.discovery_app,
+        [
+            "combine",
+            str(panel_path),
+            str(features),
+            str(raw),
+            str(output),
+            str(selection),
+            "--hierarchy",
+            str(sidecar / "hierarchy.json"),
+        ],
+    )
+    assert combined.exit_code == 0, combined.output
+    combine.assert_called_once_with(
+        panel_path, features, raw, output, selection, hierarchy_path=sidecar / "hierarchy.json"
+    )
+
+
+def test_fingerprint_tracks_explicit_sidecar_and_external_structure_dependencies(
+    discovery_paths, panel, tmp_path, monkeypatch
+):
+    """sidecar两文件与两外部结构源码改变指纹，目录和清单等价，无关文件不进入摘要。"""
+    panel_path, features, raw, _ = discovery_paths
+    sidecar = prepare_test_hierarchy(panel_path, panel, tmp_path / "members", tmp_path / "sidecar")
+    without = runner.discovery_fingerprint(panel_path, raw, features)
+    initial = runner.discovery_fingerprint(panel_path, raw, features, sidecar)
+    assert initial != without
+    assert runner.discovery_fingerprint(panel_path, raw, features, sidecar.parent) == initial
+    (sidecar.parent / "unrelated.txt").write_text("unrelated")
+    assert runner.discovery_fingerprint(panel_path, raw, features, sidecar) == initial
+    sidecar.write_text(sidecar.read_text() + "\n")
+    changed = runner.discovery_fingerprint(panel_path, raw, features, sidecar)
+    assert changed != initial
+    matrix = np.load(sidecar.parent / "values-sector_level2_index.npy", mmap_mode="r+")
+    matrix[0, 0] = np.nan
+    matrix.flush()
+    assert runner.discovery_fingerprint(panel_path, raw, features, sidecar) != changed
+    assert runner.discovery_fingerprint(panel_path, raw, features) == without
+    package = tmp_path / "package"
+    (package / "strategy_discovery").mkdir(parents=True)
+    dependency = package / "equity_research"
+    dependency.mkdir()
+    monkeypatch.setattr(runner, "__file__", str(package / "strategy_discovery" / "runner.py"))
+    previous = runner.discovery_fingerprint(panel_path, raw, features)
+    for filename in ("right_side_structure.py", "right_side_policy.py"):
+        (dependency / filename).write_text("STRUCTURE_VERSION = 1\n")
+        current = runner.discovery_fingerprint(panel_path, raw, features)
+        assert current != previous
+        (dependency / filename).write_text("STRUCTURE_VERSION = 2\n")
+        previous = runner.discovery_fingerprint(panel_path, raw, features)
+        assert previous != current
+    (dependency / "unrelated.py").write_text("UNUSED = True\n")
+    assert runner.discovery_fingerprint(panel_path, raw, features) == previous
+
+
+@pytest.mark.parametrize("combined", [False, True])
+def test_runner_loads_verified_hierarchy_and_rejects_sidecar_drift(
+    discovery_paths, panel, definition, tmp_path, monkeypatch, combined
+):
+    """独立/组合runner加载只读L2；原样恢复，合法清单字节漂移拒绝混用旧结果。"""
+    sidecar = prepare_test_hierarchy(
+        discovery_paths[0], panel, tmp_path / "members", tmp_path / "sidecar"
+    )
+    builder = Mock(return_value=[definition])
+    monkeypatch.setattr(runner, "build_candidates", builder)
+    selection = tmp_path / "selection.json"
+    selection.write_text(
+        json.dumps({"name": "sidecar", "names": [definition.name], "weights": [1.0]})
+    )
+
+    def invoke():
+        """重放当前参数化入口；例如combined=True返回组合metrics.json路径。"""
+        if combined:
+            return runner.run_combination(*discovery_paths, selection, hierarchy_path=sidecar)
+        return runner.run_discovery(*discovery_paths, hierarchy_path=sidecar.parent)
+
+    completed = invoke()
+    matrix = builder.call_args.args[1]["sector_level2_index"]
+    assert isinstance(matrix, np.memmap) and not matrix.flags.writeable
+    np.testing.assert_array_equal(matrix, panel.values["sector_index"])
+    assert invoke() == completed
+    sidecar.write_text(sidecar.read_text() + "\n")
+    with pytest.raises(ValueError, match="inputs.*changed_use_new_output"):
+        invoke()
+
+
+@pytest.mark.parametrize("combined", [False, True])
+def test_runner_rejects_invalid_hierarchy_before_output_creation(
+    discovery_paths, panel, tmp_path, combined
+):
+    """独立/组合运行先核验L2矩阵完整性，损坏数据不能创建实验输出目录。"""
+    sidecar = prepare_test_hierarchy(
+        discovery_paths[0], panel, tmp_path / "members", tmp_path / "sidecar"
+    )
+    matrix = np.load(sidecar.parent / "values-sector_level2_index.npy", mmap_mode="r+")
+    matrix[0, 0] = 99
+    matrix.flush()
+    selection = tmp_path / "selection.json"
+    selection.write_text(json.dumps({"name": "invalid", "names": ["fixture"], "weights": [1.0]}))
+    with pytest.raises(ValueError, match="hierarchy_matrix_integrity_mismatch"):
+        if combined:
+            runner.run_combination(*discovery_paths, selection, hierarchy_path=sidecar)
+        else:
+            runner.run_discovery(*discovery_paths, hierarchy_path=sidecar)
+    assert not discovery_paths[-1].exists()
+
+
+@pytest.mark.parametrize(
+    ("selected_name", "expected_confirmation"),
+    [("breakout_direct", 60), ("first_retest", 61), ("repeat_retest", 61)],
+)
+def test_breakout_three_arms_cli_reaches_real_cash_ledger(
+    panel, tmp_path, monkeypatch, selected_name, expected_confirmation
+):
+    """61日真实结构穿过CLI、登记器、执行器与审计账本；三臂按各自确认日下一开盘成交。"""
+    from datetime import date, timedelta
+
+    from test_discovery_breakout_retest import breakout_fixture
+
+    source_panel, features = breakout_fixture(days=80)
+    days = len(source_panel.calendar)
+    panel.calendar = [
+        (date(2024, 1, 1) + timedelta(days=day)).strftime("%Y%m%d") for day in range(days)
+    ]
+    panel.codes = source_panel.codes
+    panel.values = {name: np.full((days, 1), values[0, 0]) for name, values in panel.values.items()}
+    panel.signals = {name: np.zeros((days, 1), dtype=bool) for name in panel.signals}
+    panel.market = {name: np.full(days, values[0]) for name, values in panel.market.items()}
+    for name in ("index", "total_index", "index_open"):
+        panel.market[name] = 100 * 1.001 ** np.arange(days)
+    features["close"][70:], features["high"][70:], features["low"][70:] = 11.2, 11.3, 11.1
+    features["raw_amount"] *= 1000
+    features["ma20"] = features["close"] * 0.99
+    features["return1"][1:] = features["close"][1:] / features["close"][:-1] - 1
+    panel.values.update(features)
+    for name, source in (
+        ("raw_open", "close"),
+        ("raw_close", "close"),
+        ("raw_high", "high"),
+        ("raw_low", "low"),
+    ):
+        panel.values[name] = features[source].copy()
+    panel.values["raw_up_limit"] = features["close"] * 1.1
+    panel.values["raw_down_limit"] = features["close"] * 0.9
+    for name, period in (("return5", 5), ("return20", 20)):
+        panel.values[name][period:] = features["close"][period:] / features["close"][:-period] - 1
+    panel_path, feature_path, raw, output = (
+        tmp_path / name for name in ("panel", "features", "raw", "output")
+    )
+    save_panel(panel_path, panel)
+    feature_path.mkdir()
+    raw.mkdir()
+    for day in panel.calendar:
+        write_partition(raw / f"dividend-{day}.json", "dividend", {"ex_date": day}, [])
+    monkeypatch.setattr(runner, "load_features", Mock(return_value=features))
+    selection = tmp_path / "selection.json"
+    selection.write_text(json.dumps({"names": [selected_name]}))
+    command = CliRunner().invoke(
+        cli.discovery_app,
+        [
+            "run",
+            str(panel_path),
+            str(feature_path),
+            str(raw),
+            str(output),
+            "--group",
+            "breakout_retest",
+            "--selection",
+            str(selection),
+        ],
+    )
+    assert command.exit_code == 0, command.output
+    saved = json.loads((output / selected_name / "metrics.json").read_text())
+    assert saved["configuration"]["name"] == selected_name
+    assert saved["configuration"]["policy"]["maximum_holding"] == 30
+    assert saved["configuration"]["maximum_entry_gap"] == 0.02
+    assert saved["metrics"]["fees"] > 0
+    assert abs(saved["metrics"]["reconciliation_error"]) < 1e-6
+    with (output / selected_name / "trades.csv").open() as stream:
+        trades = list(csv.DictReader(stream))
+    assert len(trades) == 1
+    trade = trades[0]
+    assert int(trade["confirmation"]) == expected_confirmation
+    assert int(trade["entry"]) == expected_confirmation + 1
+    assert int(trade["exit"]) > int(trade["entry"])
+    assert int(trade["shares"]) > 0 and int(trade["shares"]) % 100 == 0
+    assert trade["reason"] == "profit"
+    with (output / selected_name / "daily.csv").open() as stream:
+        daily = list(csv.DictReader(stream))
+    assert min(float(row["cash"]) for row in daily) >= 0
+    assert max(float(row["exposure"]) for row in daily) <= 0.06
+    for row in daily:
+        assets, cash, receivable = (float(row[key]) for key in ("nav", "cash", "receivable"))
+        assert assets == pytest.approx(cash + receivable + assets * float(row["exposure"]))

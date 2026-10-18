@@ -18,19 +18,29 @@ from .combination import simulate_sleeves
 from .contracts import StrategyDefinition
 from .dataset import load_features
 from .execution import simulate_strategy
+from .hierarchy import load_hierarchy
 from .refinement import defensive_exit_variants, onset_exit_variants, structural_variants
 from .registry import build_candidates, neighborhood, resolve_definition
 
 
-def discovery_fingerprint(panel: Path, raw: Path, features: Path) -> str:
-    """哈希公开面板、分红、特征和两研究包源码；不读取任何凭据或任意目录。
+def discovery_fingerprint(
+    panel: Path, raw: Path, features: Path, hierarchy_path: Path | None = None
+) -> str:
+    """哈希公开面板、分红、特征及明确的执行源码依赖；不读取凭据或任意目录。
 
     输入三个明确数据目录，输出SHA256；代码变化必须新输出目录，避免混用旧结果。
+    hierarchy_path可为目录或清单，例如SIDECAR/hierarchy.json；仅额外读取该清单
+    与同目录values-sector_level2_index.npy，未提供时保持原数据范围。
+    除两个研究包外，纳入突破策略复用的right_side_structure和right_side_policy源码。
     """
     digest = hashlib.sha256(input_fingerprint(panel, raw).encode())
     for root, patterns in (
         (features, ("*.npy", "*.json")),
         (Path(__file__).parent, ("*.py",)),
+        (
+            Path(__file__).parent.parent / "equity_research",
+            ("right_side_structure.py", "right_side_policy.py"),
+        ),
     ):
         for pattern in patterns:
             for path in sorted(root.glob(pattern)):
@@ -38,6 +48,14 @@ def discovery_fingerprint(panel: Path, raw: Path, features: Path) -> str:
                 with path.open("rb") as stream:
                     while chunk := stream.read(1024 * 1024):
                         digest.update(chunk)
+    if hierarchy_path is not None:
+        manifest = hierarchy_path / "hierarchy.json" if hierarchy_path.is_dir() else hierarchy_path
+        digest.update(b"hierarchy-sidecar")
+        for path in (manifest, manifest.parent / "values-sector_level2_index.npy"):
+            digest.update(path.name.encode())
+            with path.open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    digest.update(chunk)
     return digest.hexdigest()
 
 
@@ -151,17 +169,21 @@ def run_discovery(
     group: str = "all",
     selection: Path | None = None,
     limit: int | None = None,
+    hierarchy_path: Path | None = None,
 ) -> Path:
     """同账本运行一个策略组并保存完整证据；例如group='baseline'重现旧固定组合。
 
     selection可为{'names':['某配置'],'neighbors':true}，记录全样本自适应选优来源。
     onset_exits=true为行业初期策略生成八组止盈与执行方式对照，和其他扩展标志互斥。
     不同组可用独立进程和输出目录并行；limit只用于软件烟测，结果明确标记不完整。
+    hierarchy_path例如SIDECAR/hierarchy.json仅补充经过验证的L2特征，不修改原Panel。
     """
     if limit is not None and limit < 1:
         raise ValueError("discovery_limit_must_be_positive")
     panel = load_panel(panel_path)
     features = load_features(features_path, panel)
+    if hierarchy_path is not None:
+        features |= load_hierarchy(hierarchy_path, panel)
     for day in panel.calendar:
         if day >= "20211001" and not (raw / f"dividend-{day}.json").exists():
             raise ValueError("incomplete_dividend_partitions")
@@ -198,7 +220,7 @@ def run_discovery(
                 else [item]
             )
         ]
-    fingerprint = discovery_fingerprint(panel_path, raw, features_path)
+    fingerprint = discovery_fingerprint(panel_path, raw, features_path, hierarchy_path)
     output.mkdir(parents=True, exist_ok=True)
     contract = {"fingerprint": fingerprint, "group": group, "selection": selection_data}
     contract_path = output / "experiment.json"
@@ -281,15 +303,24 @@ def run_discovery(
 
 
 def run_combination(
-    panel_path: Path, features_path: Path, raw: Path, output: Path, selection: Path
+    panel_path: Path,
+    features_path: Path,
+    raw: Path,
+    output: Path,
+    selection: Path,
+    *,
+    hierarchy_path: Path | None = None,
 ) -> Path:
     """按声明资金权重重跑具名策略组合，并复用审计输出；例如两策略weights=[.5,.5]。
 
     selection包含name/names/weights，names可使用已声明邻域或__intraday后缀。
     使用不同结果目录记录每组实际资金分配；不把大账户净值曲线线性平均当成交结果。
+    例如hierarchy_path=SIDECAR允许组合选择L2策略，层级清单和矩阵同时进入恢复指纹。
     """
     panel = load_panel(panel_path)
     features = load_features(features_path, panel)
+    if hierarchy_path is not None:
+        features |= load_hierarchy(hierarchy_path, panel)
     for day in panel.calendar:
         if day >= "20211001" and not (raw / f"dividend-{day}.json").exists():
             raise ValueError("incomplete_dividend_partitions")
@@ -303,7 +334,7 @@ def run_combination(
     }
     signature = json.loads(json.dumps(signature))
     contract = {
-        "fingerprint": discovery_fingerprint(panel_path, raw, features_path),
+        "fingerprint": discovery_fingerprint(panel_path, raw, features_path, hierarchy_path),
         "configuration": signature,
     }
     output.mkdir(parents=True, exist_ok=True)

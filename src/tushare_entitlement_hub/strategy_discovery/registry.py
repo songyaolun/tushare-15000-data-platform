@@ -45,13 +45,17 @@ def build_candidates(
     """按研究组创建具名策略，拒绝重名或未知组；例如group='trend'返回两类趋势策略。
 
     延迟导入独立模块，避免准备数据时生成大矩阵。baseline由原执行路径单独运行。
+    all缺少sector_level2_index时只跳过hierarchy_signals；显式请求该组仍校验缺字段。
     """
     from . import (
+        breakout_retest,
         defensive,
+        hierarchy_signals,
         onset_management,
         onset_protection,
         onset_quality,
         onset_structure,
+        relay_signals,
         reversion,
         sector,
         sector_onset,
@@ -70,6 +74,9 @@ def build_candidates(
         "onset_management": onset_management.build_strategies,
         "onset_structure": onset_structure.build_strategies,
         "onset_protection": onset_protection.build_strategies,
+        "hierarchy_signals": hierarchy_signals.build_strategies,
+        "relay_signals": relay_signals.build_strategies,
+        "breakout_retest": breakout_retest.build_strategies,
         "control": control_candidates,
     }
     if group not in {*builders, "all"}:
@@ -78,6 +85,9 @@ def build_candidates(
         definition
         for name, builder in builders.items()
         if group in (name, "all")
+        and not (
+            group == "all" and name == "hierarchy_signals" and "sector_level2_index" not in features
+        )
         for definition in builder(panel, features)
     ]
     if len({definition.name for definition in definitions}) != len(definitions):

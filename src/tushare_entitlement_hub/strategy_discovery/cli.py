@@ -5,6 +5,7 @@ from pathlib import Path
 import typer
 
 from .dataset import prepare_features
+from .hierarchy import prepare_hierarchy
 from .runner import run_combination, run_discovery
 
 discovery_app = typer.Typer(help="独立策略比较、有限邻域探索和资金组合归因。")
@@ -16,6 +17,12 @@ def prepare_command(source: Path, panel: Path, output: Path) -> None:
     typer.echo(str(prepare_features(source, panel, output)))
 
 
+@discovery_app.command("hierarchy")
+def hierarchy_command(source: Path, panel: Path, output: Path) -> None:
+    """从本地members分区生成独立L2特征；例如hierarchy RAW PANEL OUT打印hierarchy.json。"""
+    typer.echo(str(prepare_hierarchy(source, panel, output)))
+
+
 @discovery_app.command("run")
 def run_command(
     panel: Path,
@@ -25,10 +32,12 @@ def run_command(
     group: str = "all",
     selection: Path | None = None,
     limit: int | None = None,
+    hierarchy: Path | None = None,
 ) -> None:
     """运行独立策略组；例如run PANEL FEATURES RAW OUT --group trend打印报告路径。
 
     selection为具名配置选择JSON，neighbors=true追加有限邻域；limit仅用于烟测。
+    例如--hierarchy SIDECAR显式加载已验证L2特征，不提供时保持原输入范围。
     """
     typer.echo(
         str(
@@ -40,12 +49,22 @@ def run_command(
                 group=group,
                 selection=selection,
                 limit=limit,
+                hierarchy_path=hierarchy,
             )
         )
     )
 
 
 @discovery_app.command("combine")
-def combine_command(panel: Path, features: Path, raw: Path, output: Path, selection: Path) -> None:
+def combine_command(
+    panel: Path,
+    features: Path,
+    raw: Path,
+    output: Path,
+    selection: Path,
+    hierarchy: Path | None = None,
+) -> None:
     """按真实子账户执行组合；例如combine PANEL FEATURES RAW OUT SELECTION打印指标路径。"""
-    typer.echo(str(run_combination(panel, features, raw, output, selection)))
+    typer.echo(
+        str(run_combination(panel, features, raw, output, selection, hierarchy_path=hierarchy))
+    )
