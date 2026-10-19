@@ -7,6 +7,7 @@ import pytest
 import test_portfolio_economic
 
 from tushare_entitlement_hub.regime_research.accounting import Distribution
+from tushare_entitlement_hub.regime_research.execution_audit import audit_execution
 from tushare_entitlement_hub.regime_research.execution_evidence import ExecutionEvidence
 from tushare_entitlement_hub.regime_research.portfolio import PortfolioPolicy, simulate_portfolio
 from tushare_entitlement_hub.strategy_discovery.runner import save_result
@@ -62,6 +63,44 @@ def test_observations_preserve_account_and_rebuild_daily_cash(events, tmp_path):
         assert len(list(csv.DictReader(stream))) == len(evidence["fills"])
     assert (tmp_path / "distributions.csv").exists()
     assert (tmp_path / "positions.csv").exists()
+    audit = audit_execution(tmp_path, 10000, 1, .0005)
+    assert audit["passed"], audit["errors"]
+    assert audit["total_fees"] == pytest.approx(observed["fees"])
+    assert not audit["capacity"]["capacity_certified"]
+    if not events:
+        rows = list(csv.DictReader((tmp_path / "fills.csv").open()))
+        rows[0]["fee"] = str(float(rows[0]["fee"]) + 1)
+        with (tmp_path / "fills.csv").open("w") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        broken = audit_execution(tmp_path, 10000, 1, .0005)
+        assert not broken["passed"]
+        assert any(error["kind"] == "fee" for error in broken["errors"])
+        for field, value, error in (
+            ("day", "999", "evidence_outside_daily_axis"),
+            ("side", "unknown", "invalid_fill_identity_or_quantity"),
+            ("shares", "nan", "invalid_fill_identity_or_quantity"),
+        ):
+            corrupted = [rows[0] | {field: value}, *rows[1:]]
+            with (tmp_path / "fills.csv").open("w") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(corrupted)
+            with pytest.raises(ValueError, match=error):
+                audit_execution(tmp_path, 10000, 1, .0005)
+        (tmp_path / "daily.csv").write_text("")
+        with pytest.raises(ValueError, match="invalid_daily_axis"):
+            audit_execution(tmp_path, 10000, 1, .0005)
+    else:
+        rows = list(csv.DictReader((tmp_path / "distributions.csv").open()))
+        rows[1]["kind"] = "unknown"
+        with (tmp_path / "distributions.csv").open("w") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        with pytest.raises(ValueError, match="unknown_distribution_kind"):
+            audit_execution(tmp_path, 10000, 1, .0005)
 
 
 def test_empty_evidence_and_unknown_market_observation():
