@@ -101,6 +101,29 @@ def test_independent_audit_reconstructs_cross_year_and_fee_adjusted_results(tmp_
     assert result["annual"]["2025"]["total_return"] == pytest.approx(0.1)
 
 
+def test_explicit_capital_reconstructs_small_account_and_rejects_wrong_default(tmp_path):
+    """场景：12万元合成账本；预期显式本金正确复算，误用100万基准被拒绝。"""
+    path = tmp_path / "small_account"
+    metrics, daily, trades, entries = audit_fixture(path)
+    for row in daily:
+        row["nav"] *= 0.12
+        row["cash"] *= 0.12
+    metrics["terminal_nav_if_stale_zero"] = daily[-1]["nav"] - metrics["stale_value"]
+    save_fixture(path, metrics, daily, trades, entries)
+    result = audit_result(path, initial_capital=120000)
+    assert result["total_return"] == pytest.approx(0.089)
+    assert result["terminal_nav"] == pytest.approx(130680)
+    with pytest.raises(ValueError, match=r"daily\[0\].return"):
+        audit_result(path)
+
+
+@pytest.mark.parametrize("capital", [0, -1, True, float("nan"), float("inf")])
+def test_invalid_explicit_initial_capital_fails_before_reading_account(tmp_path, capital):
+    """场景：非正或非有限本金；预期明确拒绝，不推测或读取缺失账户。"""
+    with pytest.raises(ValueError, match="initial_capital"):
+        audit_result(tmp_path / "account", initial_capital=capital)
+
+
 @pytest.mark.parametrize("zero_bytes", [False, True])
 def test_zero_counts_accept_header_only_or_zero_byte_exports(tmp_path, zero_bytes):
     """场景：零交易零入场的两种既有导出格式；预期：胜率未知、全区间空窗为4日。"""

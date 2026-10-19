@@ -76,17 +76,20 @@ def _performance(returns: list[float]) -> dict[str, float]:
     }
 
 
-def audit_result(path: Path) -> dict[str, Any]:
+def audit_result(path: Path, *, initial_capital: float = INITIAL_CAPITAL) -> dict[str, Any]:
     """独立审计一个配置的metrics、daily、trades和entries并返回可复核摘要。
 
     例audit_result(Path('run/reversion_a'))返回配置名、交易数、末端NAV和重算收益；
     daily.return与NAV不符时抛出含reversion_a及daily.return的ValueError。
-    初始资本固定100万元，年化250日，入场空窗含起止边界；费用后交易收益
+    初始资本默认100万元，显式initial_capital=120000用于12万元账户，不从末端倒推。
+    年化250日，入场空窗含起止边界；费用后交易收益
     从(proceeds+dividend-cost)/cost重算。未平仓股息没有导出，末端恒等式只检查
     已导出的reconciliation_error，不以不完整字段重建持仓损益。该货币差额
     容差按末端NAV的64个浮点间距缩放，下限1e-8元、上限1e-6元；例如
     548万元账户的1.03e-8元累加舍入误差可接受，0.01元差额仍拒绝。
     """
+    capital = _number(initial_capital, path, "initial_capital")
+    _require(capital > 0, path, "initial_capital")
     try:
         saved = json.loads((path / "metrics.json").read_text())
     except (OSError, json.JSONDecodeError) as error:
@@ -127,7 +130,7 @@ def audit_result(path: Path) -> dict[str, Any]:
     annual_returns: dict[str, list[float]] = {}
     day_years: dict[int, str] = {}
     cash_values, exposures = [], []
-    previous_nav = INITIAL_CAPITAL
+    previous_nav = capital
     previous_date = ""
     previous_day: int | None = None
     for index, row in enumerate(daily):
