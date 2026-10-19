@@ -16,6 +16,11 @@ from .accounting import (
 )
 from .panel import Panel
 
+ContextCandidates = Callable[
+    [Panel, int, int, "PortfolioPolicy", frozenset[int], frozenset[int]],
+    list[tuple[int, str, float]],
+]
+
 
 @dataclass(frozen=True)
 class PortfolioPolicy:
@@ -188,6 +193,8 @@ def simulate_portfolio(
         [Panel, Holding, int, PortfolioPolicy], tuple[float, str] | None
     ]
     | None = None,
+    context_candidate_provider: ContextCandidates | None = None,
+    reserve_exit_candidates: bool = False,
 ) -> dict[str, Any]:
     """完整逐日资金回放，返回净值、交易、敞口、成交日和陈旧报价诊断。
 
@@ -205,6 +212,11 @@ def simulate_portfolio(
     slippage_rate同时影响买卖成交价格、预算和日成本，fee_multiplier乘完整买卖费用；
     例如fee_multiplier=2时买单先预留两倍手续费，再决定可买股数。
     非阶段仓位使用non_stage_allocation，例如0.5表示最多投入当前资产的50%。
+    context_candidate_provider附加不可变的当前持仓和待单证券集合，仅在收盘调用。
+    reserve_exit_candidates允许已发卖单支持条件预备名额；第k个预备单须等该批
+    卖单至少“当前超额名额+k”笔实际成交才能参与买入，仍受真实现金/仓位/行业限制，
+    默认关闭。超额名额按收盘新挂单前的持仓与待单计算，避免弱市收紧后提前补仓。
+    例满仓两只均待卖时可准备两单；只卖出一只最多启用第一单，不假定第二只可卖。
     """
     if capital <= 0 or len(states) != len(panel.calendar):
         raise ValueError("invalid_simulation_inputs")
@@ -213,6 +225,8 @@ def simulate_portfolio(
     cash = capital
     holdings: dict[int, Holding] = {}
     pending: dict[int, tuple[int, str, float, int, float]] = {}
+    reserve_dependencies: dict[tuple[int, int], tuple[frozenset[int], int]] = {}
+    reserve_created = reserve_waits = reserve_filled = 0
     book = DistributionBook(events)
     daily: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
@@ -278,6 +292,12 @@ def simulate_portfolio(
             if day > confirmation + 3:
                 del pending[security]
                 continue
+            dependency = reserve_dependencies.get((confirmation, security))
+            if dependency is not None:
+                outgoing, required_sales = dependency
+                if len(outgoing - holdings.keys()) < required_sales:
+                    reserve_waits += 1
+                    continue
             opening, upper = (
                 values["raw_open"][day, security],
                 values["raw_up_limit"][day, security],
@@ -356,6 +376,8 @@ def simulate_portfolio(
                     observed=day,
                 )
                 entry_days.append(day)
+                if dependency is not None:
+                    reserve_filled += 1
             else:
                 rejected += 1
             del pending[security]
@@ -461,12 +483,42 @@ def simulate_portfolio(
         available_slots = max(
             0, int(target / policy.position_weight + 1e-8) - len(holdings) - len(pending)
         )
+        regular_slots = available_slots
+        slot_deficit = max(
+            0, len(holdings) + len(pending) - int(target / policy.position_weight + 1e-8)
+        )
+        outgoing = frozenset(
+            security for security, holding in holdings.items() if holding.sell_reason
+        )
+        if reserve_exit_candidates:
+            available_slots = max(
+                available_slots,
+                int(target / policy.position_weight + 1e-8)
+                - len(holdings)
+                + len(outgoing)
+                - len(pending),
+            )
         candidates = candidate_provider if candidate_provider is not None else entry_candidates
-        for security, family, score in candidates(panel, day, stage, policy):
+        candidate_rows = (
+            context_candidate_provider(
+                panel, day, stage, policy, frozenset(holdings), frozenset(pending)
+            )
+            if context_candidate_provider is not None
+            else candidates(panel, day, stage, policy)
+        )
+        scheduled = 0
+        for security, family, score in candidate_rows:
             if available_slots <= 0:
                 break
             if security not in holdings and security not in pending:
                 pending[security] = (day, family, score, stage, assets * policy.position_weight)
+                scheduled += 1
+                if scheduled > regular_slots:
+                    reserve_dependencies[day, security] = (
+                        outgoing,
+                        slot_deficit + scheduled - regular_slots,
+                    )
+                    reserve_created += 1
                 available_slots -= 1
     stale_value = sum(
         position.shares * position.price
@@ -489,6 +541,17 @@ def simulate_portfolio(
         "fees": fees,
         "turnover": turnover,
         "rejected_budget": rejected,
+        **(
+            {
+                "reserve_orders": {
+                    "created": reserve_created,
+                    "blocked_open_attempts": reserve_waits,
+                    "filled": reserve_filled,
+                }
+            }
+            if reserve_exit_candidates
+            else {}
+        ),
         "capital": capital,
         "policy": policy.name,
         "reconciliation_error": actual_assets - reconstructed,

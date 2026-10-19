@@ -13,6 +13,28 @@ from .contracts import StrategyDefinition
 from .profit_protection import profit_protection_triggered
 
 
+def common_candidate_eligibility(panel: Panel, day: int) -> NDArray[np.bool_]:
+    """返回信号日共同交易资格，不读取次日行情或账户状态。
+
+    输入面板及收盘日，输出证券布尔轴；例成交额19999千元被排除，20000可通过。
+    有效行情、已知Beta/市值/行业以及限价带宽规则与strategy_candidates相同。
+    它不等于次日可成交保证；停牌、涨停和追价仍在实际开盘检查。
+    """
+    values = panel.values
+    upper, lower = values["raw_up_limit"][day], values["raw_down_limit"][day]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        band = (upper - lower) / (upper + lower)
+    return np.asarray(
+        (values["valid"][day] == 1)
+        & np.isfinite(values["beta"][day])
+        & np.isfinite(values["capitalization"][day])
+        & (values["sector_index"][day] >= 0)
+        & (values["raw_amount"][day] >= 20000)
+        & (band > 0.07),
+        dtype=np.bool_,
+    )
+
+
 def strategy_candidates(
     panel: Panel, day: int, definition: StrategyDefinition
 ) -> list[tuple[int, str, float]]:
@@ -23,19 +45,9 @@ def strategy_candidates(
     或非有限分数均排除；同分保持面板证券列顺序。入场失效矩阵禁止对应候选；
     例如entry_invalidation_mask全False时exit_mask不阻止入场，None时沿用exit_mask。
     """
-    values = panel.values
-    upper = values["raw_up_limit"][day]
-    lower = values["raw_down_limit"][day]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        band = (upper - lower) / (upper + lower)
     eligible = (
         definition.entry_mask[day]
-        & (values["valid"][day] == 1)
-        & np.isfinite(values["beta"][day])
-        & np.isfinite(values["capitalization"][day])
-        & (values["sector_index"][day] >= 0)
-        & (values["raw_amount"][day] >= 20000)
-        & (band > 0.07)
+        & common_candidate_eligibility(panel, day)
         & np.isfinite(definition.scores[day])
     )
     entry_invalidation = (
