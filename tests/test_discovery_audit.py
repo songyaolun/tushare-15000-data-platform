@@ -2,6 +2,7 @@
 
 import csv
 import json
+import math
 
 import pytest
 
@@ -356,6 +357,27 @@ def test_tiny_rounding_errors_are_tolerated(tmp_path):
     metrics["reconciliation_error"] = 1e-10
     save_fixture(path, metrics, *rows)
     assert audit_result(path)["closed_trades"] == 2
+
+
+@pytest.mark.parametrize("sign", [-1, 1])
+def test_reconciliation_allows_balance_scaled_float_roundoff(tmp_path, sign):
+    """场景：百万级资产重构相差55个浮点间距；预期保留原误差且通过核账。"""
+    path = tmp_path / "balance_roundoff"
+    metrics, daily, trades, entries = audit_fixture(path)
+    metrics["reconciliation_error"] = sign * 55 * math.ulp(daily[-1]["nav"])
+    save_fixture(path, metrics, daily, trades, entries)
+    assert audit_result(path)["closed_trades"] == 2
+
+
+@pytest.mark.parametrize("error", [0.0000011, -0.0000011, 0.01, -0.01])
+def test_reconciliation_rejects_errors_above_roundoff_ceiling(tmp_path, error):
+    """场景：重构损益差超过百万分之一元或达到分币；预期仍拒绝真实差额。"""
+    path = tmp_path / "material_reconciliation"
+    metrics, *rows = audit_fixture(path)
+    metrics["reconciliation_error"] = error
+    save_fixture(path, metrics, *rows)
+    with pytest.raises(ValueError, match="reconciliation_error"):
+        audit_result(path)
 
 
 def test_entry_gap_includes_initial_boundary_before_first_entry(tmp_path):

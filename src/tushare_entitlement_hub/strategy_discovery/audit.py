@@ -83,7 +83,9 @@ def audit_result(path: Path) -> dict[str, Any]:
     daily.return与NAV不符时抛出含reversion_a及daily.return的ValueError。
     初始资本固定100万元，年化250日，入场空窗含起止边界；费用后交易收益
     从(proceeds+dividend-cost)/cost重算。未平仓股息没有导出，末端恒等式只检查
-    已导出的reconciliation_error，不以不完整字段重建持仓损益。
+    已导出的reconciliation_error，不以不完整字段重建持仓损益。该货币差额
+    容差按末端NAV的64个浮点间距缩放，下限1e-8元、上限1e-6元；例如
+    548万元账户的1.03e-8元累加舍入误差可接受，0.01元差额仍拒绝。
     """
     try:
         saved = json.loads((path / "metrics.json").read_text())
@@ -166,7 +168,9 @@ def audit_result(path: Path) -> dict[str, Any]:
         path,
         "terminal_nav_if_stale_zero",
     )
-    _equal(metrics["reconciliation_error"], 0.0, path, "reconciliation_error")
+    reconciliation_error = _number(metrics["reconciliation_error"], path, "reconciliation_error")
+    reconciliation_tolerance = max(TOLERANCE, min(1e-6, 64 * math.ulp(previous_nav)))
+    _require(abs(reconciliation_error) <= reconciliation_tolerance, path, "reconciliation_error")
     trade_returns, profits = [], []
     annual_trades: dict[str, list[float]] = {year: [] for year in annual_returns}
     for index, row in enumerate(trades):
