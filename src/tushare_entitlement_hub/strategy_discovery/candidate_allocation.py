@@ -1,5 +1,6 @@
 """候选分配的独立对照：共同资格前置、排除持仓前置、卖单条件预备。"""
 
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any, Literal
 
@@ -8,7 +9,11 @@ from numpy.typing import NDArray
 
 from ..regime_research.accounting import Distribution, Holding
 from ..regime_research.panel import Panel
-from ..regime_research.portfolio import PortfolioPolicy, simulate_portfolio
+from ..regime_research.portfolio import (
+    PortfolioPolicy,
+    PositionWeightProvider,
+    simulate_portfolio,
+)
 from .contracts import StrategyDefinition
 from .entry_timing import OpeningGapRule, opening_gap_allowed
 from .execution import (
@@ -33,6 +38,8 @@ def simulate_candidate_allocation(
     capital: float = 1_000_000,
     start: str = "20211018",
     opening_gap_rule: OpeningGapRule | None = None,
+    position_exit_provider: Callable[[Panel, Holding, int, PortfolioPolicy], str] | None = None,
+    position_weight_provider: PositionWeightProvider | None = None,
 ) -> dict[str, Any]:
     """用同一完整候选池和固定评分，独立改变候选生成的一个环节。
 
@@ -44,6 +51,9 @@ def simulate_candidate_allocation(
     仅支持本实验的单日挂单、收盘固定退出策略，拒绝盘中模型，避免隐式改变买卖。
     opening_gap_rule是附加的次开盘价格区间，例如(-.03,.01)排除大低开和追涨；
     与definition.maximum_entry_gap取交集，默认None精确保留旧行为。
+    position_exit_provider追加持仓收盘退出，不能覆盖原止损和期限；例如返回
+    'state_failure'则下一合格开盘卖出。position_weight_provider仅缩减单笔预算，
+    例如返回.03时不超过信号资产3%，不改变既有名额上限；两接口默认关闭。
     """
     if (
         mode not in {"baseline", "common_first", "holdings_first", "exit_reserve"}
@@ -133,7 +143,10 @@ def simulate_candidate_allocation(
         current_policy: PortfolioPolicy,
     ) -> str:
         """固定价格退出由原账本处理，保留策略追加退出；例无结构条件时为空字符串。"""
-        return additional_exit_reason(current, holding, day, definition)
+        reason = additional_exit_reason(current, holding, day, definition)
+        if not reason and position_exit_provider is not None:
+            reason = position_exit_provider(current, holding, day, current_policy)
+        return reason
 
     result = simulate_portfolio(
         panel,
@@ -147,6 +160,7 @@ def simulate_candidate_allocation(
         entry_filter=entry_filter,
         cancel_pending_provider=cancel_pending,
         exit_provider=close_exit,
+        position_weight_provider=position_weight_provider,
     )
     result["candidate_selections"] = selections
     result["candidate_allocation"] = mode

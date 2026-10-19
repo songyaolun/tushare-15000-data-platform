@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from numbers import Real
 from typing import Any
 
 import numpy as np
@@ -20,6 +21,7 @@ ContextCandidates = Callable[
     [Panel, int, int, "PortfolioPolicy", frozenset[int], frozenset[int]],
     list[tuple[int, str, float]],
 ]
+PositionWeightProvider = Callable[[Panel, int, int, float, int, int, "PortfolioPolicy"], float]
 
 
 @dataclass(frozen=True)
@@ -195,6 +197,7 @@ def simulate_portfolio(
     | None = None,
     context_candidate_provider: ContextCandidates | None = None,
     reserve_exit_candidates: bool = False,
+    position_weight_provider: PositionWeightProvider | None = None,
 ) -> dict[str, Any]:
     """完整逐日资金回放，返回净值、交易、敞口、成交日和陈旧报价诊断。
 
@@ -217,6 +220,10 @@ def simulate_portfolio(
     卖单至少“当前超额名额+k”笔实际成交才能参与买入，仍受真实现金/仓位/行业限制，
     默认关闭。超额名额按收盘新挂单前的持仓与待单计算，避免弱市收紧后提前补仓。
     例满仓两只均待卖时可准备两单；只卖出一只最多启用第一单，不假定第二只可卖。
+    position_weight_provider在收盘为新订单提供预算比例，接收面板、日、证券、分数、
+    候选排名、候选数及策略；排名在持仓排除前按零起计算。输出必须为正且不超过
+    policy.position_weight，例如返回.03将该笔信号预算冻结为收盘资产的3%。
+    名额仍按最大单票比例计算，开盘仍受原仓位、现金与行业限制，不强制填满剩余现金。
     """
     if capital <= 0 or len(states) != len(panel.calendar):
         raise ValueError("invalid_simulation_inputs")
@@ -507,11 +514,25 @@ def simulate_portfolio(
             else candidates(panel, day, stage, policy)
         )
         scheduled = 0
-        for security, family, score in candidate_rows:
+        for rank, (security, family, score) in enumerate(candidate_rows):
             if available_slots <= 0:
                 break
             if security not in holdings and security not in pending:
-                pending[security] = (day, family, score, stage, assets * policy.position_weight)
+                weight = (
+                    policy.position_weight
+                    if position_weight_provider is None
+                    else position_weight_provider(
+                        panel, day, security, score, rank, len(candidate_rows), policy
+                    )
+                )
+                if (
+                    isinstance(weight, bool)
+                    or not isinstance(weight, Real)
+                    or not np.isfinite(weight)
+                    or not 0 < weight <= policy.position_weight
+                ):
+                    raise ValueError("invalid_candidate_position_weight")
+                pending[security] = (day, family, score, stage, assets * weight)
                 scheduled += 1
                 if scheduled > regular_slots:
                     reserve_dependencies[day, security] = (
