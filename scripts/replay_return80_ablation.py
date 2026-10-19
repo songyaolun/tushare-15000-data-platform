@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from tushare_entitlement_hub.regime_research.attribution import evaluate_portfolio
+from tushare_entitlement_hub.regime_research.liquidity import LiquidityRule
 from tushare_entitlement_hub.strategy_discovery.audit import audit_result
 from tushare_entitlement_hub.strategy_discovery.candidate_allocation import (
     simulate_candidate_allocation,
@@ -51,7 +52,11 @@ def main():
     parser.add_argument('--position-weight', type=float, default=.05)
     parser.add_argument('--replacement-sessions', type=int, default=10)
     parser.add_argument('--capture-execution-evidence', action='store_true')
+    parser.add_argument('--maximum-daily-participation', type=float)
+    parser.add_argument('--liquidity-lookback', type=int, default=20)
     args = parser.parse_args()
+    liquidity_rule = LiquidityRule(args.maximum_daily_participation, args.liquidity_lookback) \
+        if args.maximum_daily_participation is not None else None
     parameters = ReplayParameters(
         args.take_profit, args.stop_loss, args.maximum_holding,
         args.position_weight, args.replacement_sessions,
@@ -111,6 +116,7 @@ def main():
         'replacement': asdict(rule), 'cost_multipliers': [1, 2],
         'execution_parameters': asdict(parameters),
         'capture_execution_evidence': args.capture_execution_evidence,
+        'liquidity_rule': asdict(liquidity_rule) if liquidity_rule is not None else None,
     }
     (args.output / 'protocol.json').write_text(json.dumps(manifest, indent=2))
     reports = []
@@ -127,6 +133,7 @@ def main():
             mode='exit_reserve', capital=args.capital, start=args.start,
             replacement_provider=make_replacement_provider(rule),
             capture_execution_evidence=args.capture_execution_evidence,
+            liquidity_rule=liquidity_rule,
         )
         selections = result.pop('candidate_selections')
         for selection in selections:
@@ -140,6 +147,8 @@ def main():
             'replacement_exits': sum(row['reason'] == 'replacement' for row in result['trades']),
             'turnover': result['turnover'], 'total_fees': result['fees'],
             'final_assets': result['daily'][-1]['nav'],
+            'sell_fills': len(result['trades']),
+            'fully_exited_positions': len(result['entry_days']) - result['open_positions'],
         })
         directory = args.output / name
         directory.mkdir()

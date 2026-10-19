@@ -16,6 +16,7 @@ from .accounting import (
     transaction_fee,
 )
 from .execution_evidence import ExecutionEvidence
+from .liquidity import LiquidityRule, historical_notional_limit, liquidity_sale_shares
 from .panel import Panel
 
 ContextCandidates = Callable[
@@ -213,6 +214,7 @@ def simulate_portfolio(
     position_weight_provider: PositionWeightProvider | None = None,
     replacement_provider: ReplacementProvider | None = None,
     capture_execution_evidence: bool = False,
+    liquidity_rule: LiquidityRule | None = None,
 ) -> dict[str, Any]:
     """完整逐日资金回放，返回净值、交易、敞口、成交日和陈旧报价诊断。
 
@@ -244,6 +246,8 @@ def simulate_portfolio(
     名额仍按最大单票比例计算，开盘仍受原仓位、现金与行业限制，不强制填满剩余现金。
     capture_execution_evidence=True追加成交、分红事件与逐日持仓CSV数据；默认False
     不追加返回字段。例如100股以10元成交，证据记录原始股数100和金额1000元。
+    liquidity_rule可选限制每证券日累计成交金额，只读过去成交额；卖不完的部分保留
+    原退出原因。例如1000股仅卖出100股，成本与已确认分红按10%分摊，余仓继续排队。
     """
     if capital <= 0 or len(states) != len(panel.calendar):
         raise ValueError("invalid_simulation_inputs")
@@ -263,6 +267,14 @@ def simulate_portfolio(
     entry_days: list[int] = []
     turnover, fees, rejected = 0.0, 0.0, 0
     slippage = 0.0
+    liquidity_orders: list[dict[str, Any]] = []
+    daily_notional: dict[int, float] = {}
+
+    def available_liquidity(day: int, security: int) -> float:
+        """返回该证券过去量限定的剩余日金额；例限额1000已成交200则输出800。"""
+        assert liquidity_rule is not None
+        limit = historical_notional_limit(values["raw_amount"], day, security, liquidity_rule)
+        return max(0., limit - daily_notional.get(security, 0.))
 
     def sell_position(
         security: int,
@@ -275,14 +287,32 @@ def simulate_portfolio(
         """用同一手续费、滑点及分红账本记卖出；例基准价10以max(9.995,跌停价)卖出。"""
         nonlocal cash, fees, turnover, slippage
         price = max(reference_price * (1 - policy.slippage_rate), lower_limit)
-        notional = price * holding.shares
-        slippage += (reference_price - price) * holding.shares
+        sold = holding
+        if liquidity_rule is not None:
+            if not holding.sell_reason:
+                holding.sell_reason = reason
+            limit = available_liquidity(day, security)
+            shares = liquidity_sale_shares(holding.shares, price, limit, panel.codes[security])
+            liquidity_orders.append({
+                "day": day, "security": security, "ts_code": panel.codes[security],
+                "side": "sell", "available_notional": limit,
+                "entry": holding.entry,
+                "requested_shares": holding.shares, "executed_shares": shares,
+            })
+            if shares == 0:
+                return
+            fraction = shares / holding.shares
+            sold = replace(holding, shares=shares, cost=holding.cost * fraction,
+                           dividend=holding.dividend * fraction)
+        notional = price * sold.shares
+        slippage += (reference_price - price) * sold.shares
         fee = transaction_fee(notional, calendar[day], True) * policy.fee_multiplier
         cash += notional - fee
         fees += fee
         turnover += notional
+        daily_notional[security] = daily_notional.get(security, 0.) + notional
         if evidence is not None:
-            evidence.fill(holding, day, "sell", price, reference_price, fee, cash, reason)
+            evidence.fill(sold, day, "sell", price, reference_price, fee, cash, reason)
         trades.append(
             {
                 "security": security,
@@ -292,17 +322,23 @@ def simulate_portfolio(
                 "exit": day,
                 "family": holding.family,
                 "stage": holding.stage,
-                "cost": holding.cost,
+                "cost": sold.cost,
                 "proceeds": notional - fee,
-                "dividend": holding.dividend,
-                "return": (notional - fee + holding.dividend) / holding.cost - 1,
+                "dividend": sold.dividend,
+                "return": (notional - fee + sold.dividend) / sold.cost - 1,
                 "reason": reason,
-                "shares": holding.shares,
+                "shares": sold.shares,
             }
         )
-        del holdings[security]
+        if sold.shares == holding.shares:
+            del holdings[security]
+        else:
+            holding.shares -= sold.shares
+            holding.cost -= sold.cost
+            holding.dividend -= sold.dividend
 
     for day in range(begin, len(calendar)):
+        daily_notional.clear()
         previous_fees = fees
         slippage = 0.0
         cash += book.advance(day)
@@ -389,6 +425,19 @@ def simulate_portfolio(
                 calendar[day],
                 fee_multiplier=policy.fee_multiplier,
             )
+            if liquidity_rule is not None:
+                requested_shares = shares
+                limit = available_liquidity(day, security)
+                shares = affordable_shares(
+                    min(allowance, limit), price, panel.codes[security], calendar[day],
+                    fee_multiplier=policy.fee_multiplier,
+                )
+                liquidity_orders.append({
+                    "day": day, "security": security, "ts_code": panel.codes[security],
+                    "side": "buy", "available_notional": limit,
+                    "entry": day,
+                    "requested_shares": requested_shares, "executed_shares": shares,
+                })
             if shares:
                 notional = shares * price
                 slippage += (price - opening) * shares
@@ -396,6 +445,7 @@ def simulate_portfolio(
                 cash -= notional + fee
                 fees += fee
                 turnover += notional
+                daily_notional[security] = daily_notional.get(security, 0.) + notional
                 adjusted = price * values["raw_adj_factor"][day, security]
                 holdings[security] = Holding(
                     security,
@@ -629,6 +679,7 @@ def simulate_portfolio(
     actual_assets = daily[-1]["nav"] if daily else capital
     return {
         "daily": daily,
+        **({"liquidity_orders": liquidity_orders} if liquidity_rule is not None else {}),
         **({"execution_evidence": evidence.result()} if evidence is not None else {}),
         "trades": trades,
         **(

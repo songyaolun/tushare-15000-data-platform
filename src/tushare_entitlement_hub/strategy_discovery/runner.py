@@ -131,6 +131,8 @@ def save_result(
     """
     for name, rows in result.get("execution_evidence", {}).items():
         write_csv(path / f"{name}.csv", rows)
+    if "liquidity_orders" in result:
+        write_csv(path / "liquidity_orders.csv", result["liquidity_orders"])
     write_csv(path / "trades.csv", result["trades"])
     write_csv(path / "entries.csv", [{"day": day} for day in result["entry_days"]])
     write_csv(

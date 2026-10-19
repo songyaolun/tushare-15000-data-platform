@@ -77,6 +77,25 @@ def test_observations_preserve_account_and_rebuild_daily_cash(events, tmp_path):
         broken = audit_execution(tmp_path, 10000, 1, .0005)
         assert not broken["passed"]
         assert any(error["kind"] == "fee" for error in broken["errors"])
+        oversized = [rows[0], rows[1] | {"shares": str(float(rows[1]["shares"]) * 2)}]
+        with (tmp_path / "fills.csv").open("w") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(oversized)
+        with pytest.raises(ValueError, match="sale_exceeds_remaining_shares"):
+            audit_execution(tmp_path, 10000, 1, .0005)
+        with (tmp_path / "fills.csv").open("w") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        trades = list(csv.DictReader((tmp_path / "trades.csv").open()))
+        trades[0]["ts_code"] = "600999.SH"
+        with (tmp_path / "trades.csv").open("w") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(trades[0]))
+            writer.writeheader()
+            writer.writerows(trades)
+        with pytest.raises(ValueError, match="trade_lot_mismatch"):
+            audit_execution(tmp_path, 10000, 1, .0005)
         for field, value, error in (
             ("day", "999", "evidence_outside_daily_axis"),
             ("side", "unknown", "invalid_fill_identity_or_quantity"),

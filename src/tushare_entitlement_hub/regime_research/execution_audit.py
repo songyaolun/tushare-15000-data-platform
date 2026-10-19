@@ -100,6 +100,7 @@ def audit_execution(path: Path, capital: float, fee_multiplier: float,
     cash, receivable, total_fees = capital, 0., 0.
     lots: dict[tuple[str, int], dict[str, float]] = {}
     registered: dict[tuple[str, ...], float] = {}
+    sales: list[dict[str, Any]] = []
     errors = []
     maximum_errors: dict[str, float] = defaultdict(float)
 
@@ -162,10 +163,17 @@ def audit_execution(path: Path, capital: float, fee_multiplier: float,
             daily_fees += fee
             daily_slippage += (reference - price if selling else price - reference) * shares
             if selling:
-                compare("sell_shares", shares, lots[key]["shares"], row["sequence"])
+                fraction = shares / lots[key]["shares"]
+                if fraction > 1 + 1e-10:
+                    raise ValueError("sale_exceeds_remaining_shares")
                 compare("sell_unlocked", lots[key]["locked"], 0., row["sequence"])
-                lots[key]["shares"] = 0.
-                lots[key]["proceeds"] = notional - fee
+                cost = lots[key]["cost"] * fraction
+                dividend = lots[key]["dividend"] * fraction
+                sales.append({"key": key, "exit": day, "shares": shares, "cost": cost,
+                              "dividend": dividend, "proceeds": notional - fee})
+                lots[key]["shares"] -= shares
+                lots[key]["cost"] -= cost
+                lots[key]["dividend"] -= dividend
             else:
                 lots[key] = {"shares": shares, "locked": 0., "dividend": 0.,
                              "cost": notional + fee, "proceeds": 0.}
@@ -193,10 +201,13 @@ def audit_execution(path: Path, capital: float, fee_multiplier: float,
                 "event_listing", "event_cash", "event_stock"))
             compare("registered_shares", float(row["shares"]), lots[key]["shares"], day)
             registered[identity] = float(row["shares"])
-    for row in tables["trades"]:
+    compare("sale_count", len(tables["trades"]), len(sales), "trades")
+    for row, sale in zip(tables["trades"], sales, strict=True):
         key = row["ts_code"], int(row["entry"])
-        for name in ("cost", "proceeds", "dividend"):
-            compare(f"trade_{name}", float(row[name]), lots[key][name], key)
+        if key != sale["key"]:
+            raise ValueError("trade_lot_mismatch")
+        for name in ("cost", "proceeds", "dividend", "exit", "shares"):
+            compare(f"trade_{name}", float(row[name]), sale[name], key)
     return {"passed": not errors, "errors": errors, "maximum_errors": dict(maximum_errors),
             "total_fees": total_fees, "final_cash": cash, "final_receivable": receivable,
             "lot_count": len(lots), "days": len(tables["daily"]),

@@ -8,6 +8,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ..regime_research.accounting import Distribution, Holding
+from ..regime_research.liquidity import LiquidityRule
 from ..regime_research.panel import Panel
 from ..regime_research.portfolio import (
     PortfolioPolicy,
@@ -43,6 +44,7 @@ def simulate_candidate_allocation(
     position_weight_provider: PositionWeightProvider | None = None,
     replacement_provider: ReplacementProvider | None = None,
     capture_execution_evidence: bool = False,
+    liquidity_rule: LiquidityRule | None = None,
 ) -> dict[str, Any]:
     """用同一完整候选池和固定评分，独立改变候选生成的一个环节。
 
@@ -168,6 +170,7 @@ def simulate_candidate_allocation(
         position_weight_provider=position_weight_provider,
         replacement_provider=replacement_provider,
         capture_execution_evidence=capture_execution_evidence,
+        liquidity_rule=liquidity_rule,
     )
     result["candidate_selections"] = selections
     result["candidate_allocation"] = mode
