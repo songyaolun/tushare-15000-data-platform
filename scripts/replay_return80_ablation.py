@@ -1,4 +1,4 @@
-"""Replay one score matrix against the shared 120000-CNY mainboard account protocol."""
+"""Replay frozen scores with explicit capital and account universe; never retrain."""
 
 import argparse
 import hashlib
@@ -14,7 +14,7 @@ from tushare_entitlement_hub.strategy_discovery.audit import audit_result
 from tushare_entitlement_hub.strategy_discovery.candidate_allocation import (
     simulate_candidate_allocation,
 )
-from tushare_entitlement_hub.strategy_discovery.experiment_scope import mainboard_scope_mask
+from tushare_entitlement_hub.strategy_discovery.experiment_scope import account_scope_mask
 from tushare_entitlement_hub.strategy_discovery.replacement import (
     ReplacementRule,
     make_replacement_provider,
@@ -32,6 +32,8 @@ def main():
     --scores defaults to the original model. --known-mask optionally restricts both
     baseline and experiment to an identical candidate availability matrix; --start
     sets the same fresh-account start date in both. Never infer absent values as zero.
+    Example: --capital 1000000 --scope original replays the original candidate pool;
+    defaults remain --capital 120000 --scope mainboard for earlier experiments.
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('--scores', type=Path)
@@ -40,7 +42,11 @@ def main():
     parser.add_argument('--known-mask', type=Path)
     parser.add_argument('--start', default='20211018')
     parser.add_argument('--name', default='baseline')
+    parser.add_argument('--capital', type=float, default=120000)
+    parser.add_argument('--scope', choices=('mainboard', 'original'), default='mainboard')
     args = parser.parse_args()
+    if not np.isfinite(args.capital) or args.capital <= 0:
+        raise ValueError('invalid_initial_capital')
     cache = args.cache_root
     scores_path = args.scores or cache / (
         'stockops-return80-model-20261019/scores/hgb_leaves31_rounds1600.npy'
@@ -55,7 +61,7 @@ def main():
     scores = np.load(scores_path, mmap_mode='r')
     if scores.shape != base.entry_mask.shape or np.isinf(scores).any():
         raise ValueError('invalid_score_axis')
-    scope = mainboard_scope_mask(panel.codes)
+    scope = account_scope_mask(panel.codes, args.scope)
     eligible = base.entry_mask & scope[None, :]
     if args.known_mask:
         known = np.load(args.known_mask, mmap_mode='r')
@@ -76,9 +82,10 @@ def main():
     rule = ReplacementRule(10, .01, 'momentum')
     args.output.mkdir(parents=True)
     manifest = {
-        'protocol': 'return80-mainboard-120000-ablation/v1',
-        'capital': 120000, 'start': args.start, 'end': panel.calendar[-1],
-        'scope': 'scope-v1-c0-s0', 'market_features': 'unchanged full market',
+        'protocol': 'return80-capital-scope-ablation/v2',
+        'capital': args.capital, 'start': args.start, 'end': panel.calendar[-1],
+        'scope': 'scope-v1-c0-s0' if args.scope == 'mainboard' else 'original-frozen-entry-mask',
+        'market_features': 'unchanged full market',
         'score_file': str(scores_path),
         'score_sha256': hashlib.sha256(scores_path.read_bytes()).hexdigest(),
         'known_mask': str(args.known_mask) if args.known_mask else None,
@@ -102,13 +109,13 @@ def main():
         print(json.dumps({'start': name}), flush=True)
         result = simulate_candidate_allocation(
             panel, states, events, replace(definition, name=name), policy,
-            mode='exit_reserve', capital=120000, start=args.start,
+            mode='exit_reserve', capital=args.capital, start=args.start,
             replacement_provider=make_replacement_provider(rule),
         )
         selections = result.pop('candidate_selections')
         for selection in selections:
             if not scope[selection['selected']].all():
-                raise ValueError('non_mainboard_selection')
+                raise ValueError('selection_outside_account_scope')
         for row in result['daily']:
             row['stage'] = int(original_states[row['day']])
         metrics = evaluate_portfolio(result, panel, factors) | additional_metrics(result)
@@ -122,10 +129,10 @@ def main():
         directory.mkdir()
         save_result(directory, result, {
             'strategy': configuration(definition), 'account_policy': asdict(policy),
-            'capital': 120000, 'replacement_rule': asdict(rule), 'protocol': manifest,
+            'capital': args.capital, 'replacement_rule': asdict(rule), 'protocol': manifest,
         }, metrics)
         (directory / 'selections.json').write_text(json.dumps(selections, separators=(',', ':')))
-        audited = audit_result(directory, initial_capital=120000)
+        audited = audit_result(directory, initial_capital=args.capital)
         (directory / 'audit.json').write_text(json.dumps(audited, indent=2))
         reports.append({'name': name, 'cost': multiplier, **metrics})
         (args.output / 'results.json').write_text(json.dumps(reports, indent=2))

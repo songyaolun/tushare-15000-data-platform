@@ -15,3 +15,18 @@ def mainboard_scope_mask(codes: Sequence[str]) -> NDArray[np.bool_]:
     """
     pattern = r"(?:600|601|603|605)\d{3}\.SH|(?:000|001|002|003)\d{3}\.SZ"
     return np.asarray([re.fullmatch(pattern, code) is not None for code in codes], dtype=bool)
+
+
+def account_scope_mask(codes: Sequence[str], scope: str) -> NDArray[np.bool_]:
+    """Return the extra account filter; original preserves the frozen candidate pool.
+
+    Example: codes=['600000.SH', '300001.SZ'], scope='original' returns [True, True];
+    scope='mainboard' returns [True, False]. True does not grant original eligibility:
+    the caller must intersect this mask with the unchanged historical entry mask.
+    Unknown scope names raise ValueError instead of silently expanding the universe.
+    """
+    if scope == "original":
+        return np.ones(len(codes), dtype=bool)
+    if scope == "mainboard":
+        return mainboard_scope_mask(codes)
+    raise ValueError("unknown_account_scope")
