@@ -40,6 +40,8 @@ def main():
     defaults remain --capital 120000 --scope mainboard for earlier experiments.
     --candidate-count 20 applies Top20 to both sector selection and allocation;
     its default 10 preserves the earlier daily candidate limit.
+    --opening-cash-only caps daily buy spending including fees at pre-sale cash
+    after scheduled dividend payments; the default permits same-day sale funding.
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('--scores', type=Path)
@@ -57,6 +59,7 @@ def main():
     parser.add_argument('--replacement-sessions', type=int, default=10)
     parser.add_argument('--candidate-count', type=int, default=10)
     parser.add_argument('--capture-execution-evidence', action='store_true')
+    parser.add_argument('--opening-cash-only', action='store_true')
     parser.add_argument('--maximum-daily-participation', type=float)
     parser.add_argument('--liquidity-lookback', type=int, default=20)
     parser.add_argument('--minimum-signal-liquidity', type=float)
@@ -145,6 +148,7 @@ def main():
         'replacement': asdict(rule), 'cost_multipliers': [1, 2],
         'execution_parameters': asdict(parameters),
         'capture_execution_evidence': args.capture_execution_evidence,
+        'opening_cash_only': args.opening_cash_only,
         'liquidity_rule': asdict(liquidity_rule) if liquidity_rule is not None else None,
         'minimum_signal_liquidity': args.minimum_signal_liquidity,
         'signal_liquidity_placement':
@@ -167,6 +171,7 @@ def main():
             replacement_provider=make_replacement_provider(rule),
             capture_execution_evidence=args.capture_execution_evidence,
             liquidity_rule=liquidity_rule,
+            opening_cash_only=args.opening_cash_only,
         )
         selections = result.pop('candidate_selections')
         for selection in selections:

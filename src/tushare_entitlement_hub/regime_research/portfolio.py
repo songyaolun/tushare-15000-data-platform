@@ -215,6 +215,7 @@ def simulate_portfolio(
     replacement_provider: ReplacementProvider | None = None,
     capture_execution_evidence: bool = False,
     liquidity_rule: LiquidityRule | None = None,
+    opening_cash_only: bool = False,
 ) -> dict[str, Any]:
     """完整逐日资金回放，返回净值、交易、敞口、成交日和陈旧报价诊断。
 
@@ -248,8 +249,11 @@ def simulate_portfolio(
     不追加返回字段。例如100股以10元成交，证据记录原始股数100和金额1000元。
     liquidity_rule可选限制每证券日累计成交金额，只读过去成交额；卖不完的部分保留
     原退出原因。例如1000股仅卖出100股，成本与已确认分红按10%分摊，余仓继续排队。
+    opening_cash_only=True在分红账本开盘到账后冻结可买现金，当日卖款不能补充额度；
+    各买单累计扣除金额及费用。例如开盘现金1000、卖出净收2000，仍最多花1000买入。
+    默认False保留先卖后买；到账股息按现有账本时间假设处理，不证明实际开盘到账时点。
     """
-    if capital <= 0 or len(states) != len(panel.calendar):
+    if capital <= 0 or len(states) != len(panel.calendar) or type(opening_cash_only) is not bool:
         raise ValueError("invalid_simulation_inputs")
     values, calendar = panel.values, panel.calendar
     begin = next((i for i, day in enumerate(calendar) if day >= start), len(calendar))
@@ -342,6 +346,7 @@ def simulate_portfolio(
         previous_fees = fees
         slippage = 0.0
         cash += book.advance(day)
+        opening_cash_remaining = cash
         # 先卖后买，所有卖出指令来自之前收盘；未上市送股存在时保守延后整笔退出。
         for security, holding in list(holdings.items()):
             opening = values["raw_open"][day, security]
@@ -425,7 +430,8 @@ def simulate_portfolio(
             )
             constraints = {
                 "signal_budget": budget, "position_limit": policy.position_weight * assets,
-                "cash_available": cash, "target_available": target * assets - sum(marked.values()),
+                "cash_available": opening_cash_remaining if opening_cash_only else cash,
+                "target_available": target * assets - sum(marked.values()),
                 "sector_available": policy.sector_weight * assets - sector_value,
             }
             allowance = min(constraints.values())
@@ -461,6 +467,8 @@ def simulate_portfolio(
                 slippage += (price - opening) * shares
                 fee = transaction_fee(notional, calendar[day], False) * policy.fee_multiplier
                 cash -= notional + fee
+                if opening_cash_only:
+                    opening_cash_remaining -= notional + fee
                 fees += fee
                 turnover += notional
                 daily_notional[security] = daily_notional.get(security, 0.) + notional

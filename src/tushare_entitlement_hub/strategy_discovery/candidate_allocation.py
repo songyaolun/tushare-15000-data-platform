@@ -45,6 +45,7 @@ def simulate_candidate_allocation(
     replacement_provider: ReplacementProvider | None = None,
     capture_execution_evidence: bool = False,
     liquidity_rule: LiquidityRule | None = None,
+    opening_cash_only: bool = False,
 ) -> dict[str, Any]:
     """用同一完整候选池和固定评分，独立改变候选生成的一个环节。
 
@@ -61,6 +62,8 @@ def simulate_candidate_allocation(
     replacement_provider为满仓时收盘的换出/换入配对，只有实际卖出后允许配对买入。
     例如返回.03时不超过信号资产3%，不改变既有名额上限；两接口默认关闭。
     capture_execution_evidence=True透传可选观察器，例如返回execution_evidence.fills。
+    opening_cash_only=True仅用开盘前现金及账本当日到账股息买入，不复用当天卖款；
+    例如冻结现金1000、卖出净收2000时买单含费仍最多1000。默认False保留旧行为。
     """
     if (
         mode not in {"baseline", "common_first", "holdings_first", "exit_reserve"}
@@ -171,6 +174,7 @@ def simulate_candidate_allocation(
         replacement_provider=replacement_provider,
         capture_execution_evidence=capture_execution_evidence,
         liquidity_rule=liquidity_rule,
+        opening_cash_only=opening_cash_only,
     )
     result["candidate_selections"] = selections
     result["candidate_allocation"] = mode

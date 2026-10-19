@@ -17,8 +17,11 @@ from tushare_entitlement_hub.strategy_discovery.signal_redesign import top_candi
 
 
 @pytest.mark.parametrize("count", [None, 20, 30])
-def test_cli_candidate_limit_reaches_sector_selection_and_allocation(tmp_path, monkeypatch, count):
-    """Default Top10 and explicit Top20/30 reach both masks, allocation and evidence names."""
+@pytest.mark.parametrize("opening_cash_only", [False, True])
+def test_cli_candidate_limit_reaches_sector_selection_and_allocation(
+    tmp_path, monkeypatch, count, opening_cash_only,
+):
+    """Candidate counts and both cash modes reach allocation and the frozen protocol."""
     script_path = Path(__file__).parents[1] / "scripts/replay_return80_ablation.py"
     namespace = runpy.run_path(str(script_path))
     main = namespace["main"]
@@ -47,6 +50,8 @@ def test_cli_candidate_limit_reaches_sector_selection_and_allocation(tmp_path, m
                  "--maximum-daily-participation", ".01", "--minimum-signal-liquidity", "100"]
     if count is not None:
         arguments.extend(["--candidate-count", str(count)])
+    if opening_cash_only:
+        arguments.append("--opening-cash-only")
     monkeypatch.setattr(sys, "argv", arguments)
     with pytest.raises(RuntimeError, match="allocation_boundary_reached"):
         main()
@@ -55,9 +60,11 @@ def test_cli_candidate_limit_reaches_sector_selection_and_allocation(tmp_path, m
         assert call.args[3] == 1
         assert call.kwargs["count"] == expected
     assert allocation.call_args.kwargs["count"] == expected
+    assert allocation.call_args.kwargs["opening_cash_only"] is opening_cash_only
     assert int(allocation.call_args.args[3].entry_mask[0].sum()) == min(expected, 12)
     protocol = json.loads((output / "protocol.json").read_text())
     assert protocol["execution_parameters"]["candidate_count"] == expected
+    assert protocol["opening_cash_only"] is opening_cash_only
     assert f"Top{expected};" in protocol["signal_liquidity_placement"]
     with (output / "liquidity_candidates.csv").open() as stream:
         row = next(csv.DictReader(stream))
