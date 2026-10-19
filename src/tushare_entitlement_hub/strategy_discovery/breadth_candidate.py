@@ -8,6 +8,7 @@ from numpy.typing import NDArray
 from ..regime_research.portfolio import PortfolioPolicy
 from ..strategy_optimization.features import FloatArray
 from .contracts import DEFAULT_POLICY, StrategyDefinition
+from .evidence_scoring import priority_scores
 from .signal_redesign import low_score_candidate, top_candidates
 
 
@@ -48,9 +49,7 @@ def breadth_low_score_candidate(
     definition = replace(
         definition,
         name=f"low_top{candidate_count}",
-        entry_mask=top_candidates(
-            eligible & technical_pass, definition.scores, candidate_count
-        ),
+        entry_mask=top_candidates(eligible & technical_pass, definition.scores, candidate_count),
     )
     states = (np.isfinite(breadth) & (breadth >= breadth_threshold)).astype(np.int8)
     policy = replace(
@@ -60,3 +59,31 @@ def breadth_low_score_candidate(
         allocations=(weak_allocation,) + (strong_allocation,) * 4,
     )
     return definition, states, policy
+
+
+def high_priority_breadth_candidate(
+    eligible: NDArray[np.bool_],
+    technical_pass: NDArray[np.bool_],
+    production_scores: FloatArray,
+    breadth: FloatArray,
+) -> tuple[StrategyDefinition, NDArray[np.int8], PortfolioPolicy]:
+    """把冻结广度候选输出为0到100的高分优先接口，保持全部交易规则。
+
+    输入日×证券发布资格、价量风控、旧分数及每日广度，输出策略/状态/仓位。
+    例合格旧分[10,20,30]对应新优先级[100,50,0]，从高到低选Top10。
+    并列仍并列；不合格或缺旧分为NaN。它只是现有反向排序的等价表达，
+    没有重新拟合权重或产生额外收益，100分也不代表100%胜率。固定买卖、
+    广度阈值与仓位使用breadth_low_score_candidate的已归档默认值。
+    """
+    definition, states, policy = breadth_low_score_candidate(
+        eligible, technical_pass, production_scores, breadth
+    )
+    return (
+        replace(
+            definition,
+            name="stockops_high_priority_research",
+            scores=priority_scores(definition.scores, eligible & technical_pass),
+        ),
+        states,
+        policy,
+    )

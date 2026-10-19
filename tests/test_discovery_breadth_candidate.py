@@ -57,3 +57,29 @@ def test_invalid_inputs_rejected(changes):
     inputs.update(changes)
     with pytest.raises(ValueError):
         breadth_low_score_candidate(**inputs)
+
+
+def test_high_priority_interface_preserves_selection_and_policy():
+    """场景：改用高分优先接口；预期只变分数表达与名称，候选及仓位规则不变。"""
+    from tushare_entitlement_hub.strategy_discovery.breadth_candidate import (
+        high_priority_breadth_candidate,
+    )
+    from tushare_entitlement_hub.strategy_discovery.signal_redesign import top_candidates
+
+    eligible = np.ones((2, 12), dtype=bool)
+    technical = eligible.copy()
+    scores = np.tile(np.arange(12, dtype=float), (2, 1))
+    breadth = np.array([0.3, 0.5])
+    previous, previous_states, previous_policy = breadth_low_score_candidate(
+        eligible, technical, scores, breadth
+    )
+    revised, revised_states, revised_policy = high_priority_breadth_candidate(
+        eligible, technical, scores, breadth
+    )
+    assert revised.name == "stockops_high_priority_research"
+    assert revised.scores[0, 0] == 100 and revised.scores[0, -1] == 0
+    np.testing.assert_array_equal(previous.entry_mask, revised.entry_mask)
+    np.testing.assert_array_equal(top_candidates(eligible, revised.scores, 10), previous.entry_mask)
+    np.testing.assert_array_equal(previous_states, revised_states)
+    assert previous_policy == revised_policy
+    assert previous.policy == revised.policy
