@@ -1,7 +1,7 @@
 """收盘决策、下一合格开盘成交的资金受限组合模拟。"""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from numbers import Real
 from typing import Any
 
@@ -21,6 +21,18 @@ ContextCandidates = Callable[
     [Panel, int, int, "PortfolioPolicy", frozenset[int], frozenset[int]],
     list[tuple[int, str, float]],
 ]
+ReplacementProvider = Callable[
+    [
+        Panel,
+        int,
+        "PortfolioPolicy",
+        tuple[Holding, ...],
+        tuple[tuple[int, str, float], ...],
+        frozenset[int],
+    ],
+    list[tuple[int, int]],
+]
+
 PositionWeightProvider = Callable[[Panel, int, int, float, int, int, "PortfolioPolicy"], float]
 
 
@@ -198,6 +210,7 @@ def simulate_portfolio(
     context_candidate_provider: ContextCandidates | None = None,
     reserve_exit_candidates: bool = False,
     position_weight_provider: PositionWeightProvider | None = None,
+    replacement_provider: ReplacementProvider | None = None,
 ) -> dict[str, Any]:
     """完整逐日资金回放，返回净值、交易、敞口、成交日和陈旧报价诊断。
 
@@ -223,6 +236,9 @@ def simulate_portfolio(
     position_weight_provider在收盘为新订单提供预算比例，接收面板、日、证券、分数、
     候选排名、候选数及策略；排名在持仓排除前按零起计算。输出必须为正且不超过
     policy.position_weight，例如返回.03将该笔信号预算冻结为收盘资产的3%。
+    replacement_provider只在收盘返回(卖出证券,买入证券)配对，收到持仓副本和已合格候选。
+    仅在启用条件预备、正常退出后仍满仓且没有超额持仓时使用；卖出实际成交后才准买入
+    配对候选，不允许借另一笔卖出替代。例[(0,2)]表示卖0后才可买2。
     名额仍按最大单票比例计算，开盘仍受原仓位、现金与行业限制，不强制填满剩余现金。
     """
     if capital <= 0 or len(states) != len(panel.calendar):
@@ -234,6 +250,8 @@ def simulate_portfolio(
     pending: dict[int, tuple[int, str, float, int, float]] = {}
     reserve_dependencies: dict[tuple[int, int], tuple[frozenset[int], int]] = {}
     reserve_created = reserve_waits = reserve_filled = 0
+    paired_sales: dict[tuple[int, int], int] = {}
+    replacement_decisions: list[dict[str, int]] = []
     book = DistributionBook(events)
     daily: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
@@ -298,6 +316,10 @@ def simulate_portfolio(
         for security, (confirmation, family, score, stage, budget) in list(pending.items()):
             if day > confirmation + 3:
                 del pending[security]
+                continue
+            paired_sale = paired_sales.get((confirmation, security))
+            if paired_sale is not None and paired_sale in holdings:
+                reserve_waits += 1
                 continue
             dependency = reserve_dependencies.get((confirmation, security))
             if dependency is not None:
@@ -487,6 +509,52 @@ def simulate_portfolio(
             for security, (confirmation, _, _, _, _) in list(pending.items()):
                 if cancel_pending_provider(panel, confirmation, day, security):
                     del pending[security]
+        candidates = candidate_provider if candidate_provider is not None else entry_candidates
+        candidate_rows = (
+            context_candidate_provider(
+                panel, day, stage, policy, frozenset(holdings), frozenset(pending)
+            )
+            if context_candidate_provider is not None
+            else candidates(panel, day, stage, policy)
+        )
+        pairs: list[tuple[int, int]] = []
+        capacity = int(target / policy.position_weight + 1e-8)
+        normal_outgoing = {column for column, position in holdings.items() if position.sell_reason}
+        if (
+            replacement_provider is not None
+            and reserve_exit_candidates
+            and len(holdings) + len(pending) == capacity
+            and not normal_outgoing
+        ):
+            pairs = replacement_provider(
+                panel,
+                day,
+                policy,
+                tuple(replace(position) for position in holdings.values()),
+                tuple(candidate_rows),
+                frozenset(pending),
+            )
+            sellers = [outgoing_security for outgoing_security, _ in pairs]
+            buyers = [incoming_security for _, incoming_security in pairs]
+            candidate_codes = {column for column, _, _ in candidate_rows}
+            if (
+                len(set(sellers)) != len(sellers)
+                or len(set(buyers)) != len(buyers)
+                or any(column not in holdings or holdings[column].sell_reason for column in sellers)
+                or any(
+                    column not in candidate_codes or column in holdings or column in pending
+                    for column in buyers
+                )
+            ):
+                raise ValueError("invalid_replacement_pairs")
+            for outgoing_security, incoming_security in pairs:
+                holdings[outgoing_security].sell_reason = "replacement"
+                paired_sales[day, incoming_security] = outgoing_security
+                replacement_decisions.append(
+                    {"day": day, "sell": outgoing_security, "buy": incoming_security}
+                )
+            if pairs:
+                candidate_rows = [row for row in candidate_rows if row[0] in set(buyers)]
         available_slots = max(
             0, int(target / policy.position_weight + 1e-8) - len(holdings) - len(pending)
         )
@@ -505,14 +573,6 @@ def simulate_portfolio(
                 + len(outgoing)
                 - len(pending),
             )
-        candidates = candidate_provider if candidate_provider is not None else entry_candidates
-        candidate_rows = (
-            context_candidate_provider(
-                panel, day, stage, policy, frozenset(holdings), frozenset(pending)
-            )
-            if context_candidate_provider is not None
-            else candidates(panel, day, stage, policy)
-        )
         scheduled = 0
         for rank, (security, family, score) in enumerate(candidate_rows):
             if available_slots <= 0:
@@ -536,8 +596,9 @@ def simulate_portfolio(
                 scheduled += 1
                 if scheduled > regular_slots:
                     reserve_dependencies[day, security] = (
-                        outgoing,
-                        slot_deficit + scheduled - regular_slots,
+                        (frozenset({paired_sales[day, security]}), 1)
+                        if (day, security) in paired_sales
+                        else (outgoing, slot_deficit + scheduled - regular_slots)
                     )
                     reserve_created += 1
                 available_slots -= 1
@@ -556,6 +617,11 @@ def simulate_portfolio(
     return {
         "daily": daily,
         "trades": trades,
+        **(
+            {"replacement_decisions": replacement_decisions}
+            if replacement_provider is not None
+            else {}
+        ),
         "entry_days": entry_days,
         "open_positions": len(holdings),
         "stale_value": stale_value,

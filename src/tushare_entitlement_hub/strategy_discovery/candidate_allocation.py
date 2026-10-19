@@ -12,6 +12,7 @@ from ..regime_research.panel import Panel
 from ..regime_research.portfolio import (
     PortfolioPolicy,
     PositionWeightProvider,
+    ReplacementProvider,
     simulate_portfolio,
 )
 from .contracts import StrategyDefinition
@@ -40,6 +41,7 @@ def simulate_candidate_allocation(
     opening_gap_rule: OpeningGapRule | None = None,
     position_exit_provider: Callable[[Panel, Holding, int, PortfolioPolicy], str] | None = None,
     position_weight_provider: PositionWeightProvider | None = None,
+    replacement_provider: ReplacementProvider | None = None,
 ) -> dict[str, Any]:
     """用同一完整候选池和固定评分，独立改变候选生成的一个环节。
 
@@ -53,6 +55,7 @@ def simulate_candidate_allocation(
     与definition.maximum_entry_gap取交集，默认None精确保留旧行为。
     position_exit_provider追加持仓收盘退出，不能覆盖原止损和期限；例如返回
     'state_failure'则下一合格开盘卖出。position_weight_provider仅缩减单笔预算，
+    replacement_provider为满仓时收盘的换出/换入配对，只有实际卖出后允许配对买入。
     例如返回.03时不超过信号资产3%，不改变既有名额上限；两接口默认关闭。
     """
     if (
@@ -161,6 +164,7 @@ def simulate_candidate_allocation(
         cancel_pending_provider=cancel_pending,
         exit_provider=close_exit,
         position_weight_provider=position_weight_provider,
+        replacement_provider=replacement_provider,
     )
     result["candidate_selections"] = selections
     result["candidate_allocation"] = mode
