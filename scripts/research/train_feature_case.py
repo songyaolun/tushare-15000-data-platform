@@ -20,6 +20,7 @@ from tushare_entitlement_hub.strategy_discovery.frozen_feature_combination impor
     combine_frozen_feature_blocks,
 )
 from tushare_entitlement_hub.strategy_discovery.joint_exit_scoring import exit_training_targets
+from tushare_entitlement_hub.strategy_discovery.model_capacity import resolve_model_capacity
 
 
 def digest(path: Path) -> str:
@@ -32,7 +33,9 @@ def main() -> None:
 
     Example: --spec experiment.json --case event+quality creates only that case in
     spec.output_root. Existing output fails closed, preventing silent replacement.
-    Every model uses the original full-sample labels, daily weights and parameters.
+    Every model uses the original full-sample labels and daily weights. Optional
+    spec.model_capacity explicitly overrides only tree depth, leaves or rounds;
+    omitted overrides preserve the original parameters exactly.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", type=Path, required=True)
@@ -52,6 +55,7 @@ def main() -> None:
         raise ValueError("unfrozen sklearn version")
     base_root = cache / "stockops-return80-model-20261019"
     metadata = json.loads((base_root / "models/hgb_leaves31_rounds1600.json").read_text())
+    parameters = resolve_model_capacity(metadata["parameters"], spec.get("model_capacity"))
     base_features = np.load(base_root / "features.npy", mmap_mode="r")
     axis = np.load(cache / "stockops-utility-score-20261019/candidate-axis.npz")
     panel = json.loads((cache / "p03-regime-alpha-20261018/panel/panel.json").read_text())
@@ -97,7 +101,8 @@ def main() -> None:
         "script_sha256": digest(Path(__file__)),
         "fit_rows": int(fit.sum()),
         "candidate_rows": len(features),
-        "parameters": metadata["parameters"],
+        "parameters": parameters,
+        "model_capacity": spec.get("model_capacity"),
         "sklearn_version": sklearn.__version__,
         "blocks": items,
         "placebo": placebo_audit,
@@ -107,7 +112,7 @@ def main() -> None:
     (root / "protocol.json").write_text(json.dumps(protocol, indent=2))
     started = time.monotonic()
     print(json.dumps({"fit_start": args.case, "columns": len(names)}), flush=True)
-    model = HistGradientBoostingRegressor(**metadata["parameters"])
+    model = HistGradientBoostingRegressor(**parameters)
     model.fit(features[fit], response, sample_weight=weights)
     prediction = model.predict(features)
     portable = portable_numeric_model(model, names)
