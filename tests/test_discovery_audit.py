@@ -382,14 +382,39 @@ def test_tiny_rounding_errors_are_tolerated(tmp_path):
     assert audit_result(path)["closed_trades"] == 2
 
 
+@pytest.mark.parametrize("scale", [1, 400])
 @pytest.mark.parametrize("sign", [-1, 1])
-def test_reconciliation_allows_balance_scaled_float_roundoff(tmp_path, sign):
-    """场景：百万级资产重构相差55个浮点间距；预期保留原误差且通过核账。"""
+def test_reconciliation_allows_balance_scaled_float_roundoff(tmp_path, sign, scale):
+    """场景：百万或数亿资产重构相差55个浮点间距；预期保留误差且通过核账。"""
     path = tmp_path / "balance_roundoff"
     metrics, daily, trades, entries = audit_fixture(path)
+    for row in daily:
+        row["nav"] *= scale
+        row["cash"] *= scale
+    metrics["stale_value"] *= scale
+    metrics["terminal_nav_if_stale_zero"] *= scale
     metrics["reconciliation_error"] = sign * 55 * math.ulp(daily[-1]["nav"])
     save_fixture(path, metrics, daily, trades, entries)
-    assert audit_result(path)["closed_trades"] == 2
+    assert audit_result(path, initial_capital=1_000_000 * scale)["closed_trades"] == 2
+
+
+@pytest.mark.parametrize("scale,error", [(400, "65ulp"), (1_000_000, 1.1e-5), (400, .01)])
+@pytest.mark.parametrize("sign", [-1, 1])
+def test_large_balance_reconciliation_keeps_ulp_and_absolute_limits(tmp_path, scale, error, sign):
+    """场景：大账户差额越过64间距或十万分之一元；预期双向拒绝，分币差错也拒绝。"""
+    path = tmp_path / "large_balance_error"
+    metrics, daily, trades, entries = audit_fixture(path)
+    for row in daily:
+        row["nav"] *= scale
+        row["cash"] *= scale
+    metrics["stale_value"] *= scale
+    metrics["terminal_nav_if_stale_zero"] *= scale
+    metrics["reconciliation_error"] = sign * (
+        65 * math.ulp(daily[-1]["nav"]) if error == "65ulp" else error
+    )
+    save_fixture(path, metrics, daily, trades, entries)
+    with pytest.raises(ValueError, match="reconciliation_error"):
+        audit_result(path, initial_capital=1_000_000 * scale)
 
 
 @pytest.mark.parametrize("error", [0.0000011, -0.0000011, 0.01, -0.01])

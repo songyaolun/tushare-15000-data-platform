@@ -85,8 +85,9 @@ def audit_result(path: Path, *, initial_capital: float = INITIAL_CAPITAL) -> dic
     年化250日，入场空窗含起止边界；费用后交易收益
     从(proceeds+dividend-cost)/cost重算。未平仓股息没有导出，末端恒等式只检查
     已导出的reconciliation_error，不以不完整字段重建持仓损益。该货币差额
-    容差按末端NAV的64个浮点间距缩放，下限1e-8元、上限1e-6元；例如
-    548万元账户的1.03e-8元累加舍入误差可接受，0.01元差额仍拒绝。
+    容差按末端NAV的64个浮点间距缩放，下限1e-8元、上限1e-5元，与逐笔
+    execution_audit的货币上限一致；例如5亿元账户约1.07e-6元的18个浮点
+    间距累加舍入误差可接受，超过64个间距或1e-5元的差额仍拒绝。
     """
     capital = _number(initial_capital, path, "initial_capital")
     _require(capital > 0, path, "initial_capital")
@@ -172,7 +173,7 @@ def audit_result(path: Path, *, initial_capital: float = INITIAL_CAPITAL) -> dic
         "terminal_nav_if_stale_zero",
     )
     reconciliation_error = _number(metrics["reconciliation_error"], path, "reconciliation_error")
-    reconciliation_tolerance = max(TOLERANCE, min(1e-6, 64 * math.ulp(previous_nav)))
+    reconciliation_tolerance = max(TOLERANCE, min(1e-5, 64 * math.ulp(previous_nav)))
     _require(abs(reconciliation_error) <= reconciliation_tolerance, path, "reconciliation_error")
     trade_returns, profits = [], []
     annual_trades: dict[str, list[float]] = {year: [] for year in annual_returns}
