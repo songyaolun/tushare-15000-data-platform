@@ -17,6 +17,36 @@ class ExecutionEvidence:
         self.fills: list[dict[str, Any]] = []
         self.distributions: list[dict[str, Any]] = []
         self.positions: list[dict[str, Any]] = []
+        self.order_attempts: list[dict[str, Any]] = []
+        self.allocation_states: list[dict[str, Any]] = []
+
+    def order_attempt(
+        self, day: int, security: int, confirmation: int, reason: str,
+        constraints: dict[str, float] | None = None, *, price: float | None = None,
+        requested_shares: float | None = None, executed_shares: float | None = None,
+        liquidity_available: float | None = None,
+    ) -> None:
+        """Record one reached buy attempt, retaining competing limits without attribution claims.
+
+        Example: cash=100 and sector=50 label sector as the first minimum. A paired
+        exit wait has no sizing inputs, which stay None rather than invented zero.
+        """
+        limits = constraints or {}
+        self.order_attempts.append({
+            "day": day, "date": self.panel.calendar[day], "security": security,
+            "ts_code": self.panel.codes[security], "confirmation": confirmation,
+            "reason": reason, "price": price, "requested_shares": requested_shares,
+            "executed_shares": executed_shares, "liquidity_available": liquidity_available,
+            "first_binding_constraint": min(limits, key=limits.get) if limits else "",
+            **{name: limits.get(name) for name in (
+                "signal_budget", "position_limit", "cash_available",
+                "target_available", "sector_available",
+            )},
+        })
+
+    def allocation_state(self, day: int, **values: Any) -> None:
+        """Copy closing candidate/slot diagnostics; day0 scheduled=0 remains an explicit row."""
+        self.allocation_states.append({"day": day, "date": self.panel.calendar[day], **values})
 
     def fill(
         self, holding: "Holding", day: int, side: str, price: float,
@@ -68,4 +98,5 @@ class ExecutionEvidence:
     def result(self) -> dict[str, list[dict[str, Any]]]:
         """Return named CSV tables; an empty collector returns fills/distributions/positions=[] ."""
         return {"fills": self.fills, "distributions": self.distributions,
-                "positions": self.positions}
+                "positions": self.positions, "order_attempts": self.order_attempts,
+                "allocation_states": self.allocation_states}

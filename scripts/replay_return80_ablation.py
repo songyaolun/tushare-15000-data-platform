@@ -11,10 +11,12 @@ import numpy as np
 
 from tushare_entitlement_hub.regime_research.attribution import evaluate_portfolio
 from tushare_entitlement_hub.regime_research.liquidity import LiquidityRule
+from tushare_entitlement_hub.regime_research.runner import write_csv
 from tushare_entitlement_hub.strategy_discovery.audit import audit_result
 from tushare_entitlement_hub.strategy_discovery.candidate_allocation import (
     simulate_candidate_allocation,
 )
+from tushare_entitlement_hub.strategy_discovery.candidate_liquidity import filter_signal_liquidity
 from tushare_entitlement_hub.strategy_discovery.experiment_scope import account_scope_mask
 from tushare_entitlement_hub.strategy_discovery.replacement import (
     ReplacementRule,
@@ -54,6 +56,7 @@ def main():
     parser.add_argument('--capture-execution-evidence', action='store_true')
     parser.add_argument('--maximum-daily-participation', type=float)
     parser.add_argument('--liquidity-lookback', type=int, default=20)
+    parser.add_argument('--minimum-signal-liquidity', type=float)
     args = parser.parse_args()
     liquidity_rule = LiquidityRule(args.maximum_daily_participation, args.liquidity_lookback) \
         if args.maximum_daily_participation is not None else None
@@ -86,6 +89,14 @@ def main():
         eligible &= known
     if not np.isfinite(scores[eligible]).all():
         raise ValueError('missing_scores_on_eligible_candidates')
+    original_selected = sector_mask(eligible, scores, panel.values['sector_index'], 1)
+    liquidity_candidates = []
+    if args.minimum_signal_liquidity is not None:
+        if liquidity_rule is None:
+            raise ValueError('signal_liquidity_requires_execution_rule')
+        eligible, liquidity_candidates = filter_signal_liquidity(
+            panel.values['raw_amount'], eligible, args.minimum_signal_liquidity, liquidity_rule,
+        )
     selected = sector_mask(eligible, scores, panel.values['sector_index'], 1)
     states = (np.isfinite(panel.market['breadth']) & (panel.market['breadth'] >= .4)).astype(
         np.int8
@@ -98,6 +109,15 @@ def main():
     )
     rule = ReplacementRule(parameters.replacement_sessions, .01, 'momentum')
     args.output.mkdir(parents=True)
+    for row in liquidity_candidates:
+        day, security = row['day'], row['security']
+        row.update(date=panel.calendar[day], ts_code=panel.codes[security],
+                   score=float(scores[day, security]),
+                   sector=float(panel.values['sector_index'][day, security]),
+                   original_top10=bool(original_selected[day, security]),
+                   filtered_top10=bool(selected[day, security]))
+    if liquidity_candidates:
+        write_csv(args.output / 'liquidity_candidates.csv', liquidity_candidates)
     manifest = {
         'protocol': 'return80-capital-scope-ablation/v2',
         'capital': args.capital, 'start': args.start, 'end': panel.calendar[-1],
@@ -117,6 +137,8 @@ def main():
         'execution_parameters': asdict(parameters),
         'capture_execution_evidence': args.capture_execution_evidence,
         'liquidity_rule': asdict(liquidity_rule) if liquidity_rule is not None else None,
+        'minimum_signal_liquidity': args.minimum_signal_liquidity,
+        'signal_liquidity_placement': 'before sector Top10; common qualification after, no refill',
     }
     (args.output / 'protocol.json').write_text(json.dumps(manifest, indent=2))
     reports = []

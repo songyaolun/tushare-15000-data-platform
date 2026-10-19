@@ -127,7 +127,8 @@ def test_empty_evidence_and_unknown_market_observation():
     panel = test_portfolio_economic.economic_panel.__wrapped__()
     collector = ExecutionEvidence(panel)
     collector.snapshot(0, {})
-    assert collector.result() == {"fills": [], "distributions": [], "positions": []}
+    assert collector.result() == {"fills": [], "distributions": [], "positions": [],
+                                  "order_attempts": [], "allocation_states": []}
     panel.values["raw_amount"][1, 0] = np.nan
     result = simulate_portfolio(
         panel, np.zeros(len(panel.calendar), dtype=np.int8), [],
@@ -135,3 +136,20 @@ def test_empty_evidence_and_unknown_market_observation():
         capture_execution_evidence=True,
     )
     assert np.isnan(result["execution_evidence"]["fills"][0]["raw_amount"])
+
+
+def test_order_diagnostics_distinguish_waits_and_competing_budgets():
+    """A blocked pair has unknown budgets; a sized order retains every competing amount."""
+    panel = test_portfolio_economic.economic_panel.__wrapped__()
+    collector = ExecutionEvidence(panel)
+    collector.order_attempt(2, 0, 1, "paired_exit_wait")
+    collector.order_attempt(2, 1, 1, "sizing_zero", {
+        "signal_budget": 1000, "position_limit": 1000, "cash_available": 900,
+        "target_available": 700, "sector_available": 50,
+    }, price=10, requested_shares=0, executed_shares=0, liquidity_available=10000)
+    collector.allocation_state(2, scheduled=0, unused_slots=1)
+    rows = collector.result()["order_attempts"]
+    assert rows[0]["cash_available"] is None
+    assert rows[1]["first_binding_constraint"] == "sector_available"
+    assert rows[1]["liquidity_available"] == 10000
+    assert collector.result()["allocation_states"][0]["unused_slots"] == 1

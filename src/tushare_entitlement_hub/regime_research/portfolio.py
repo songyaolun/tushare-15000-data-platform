@@ -358,16 +358,22 @@ def simulate_portfolio(
                 sell_position(security, holding, day, opening, lower, holding.sell_reason)
         for security, (confirmation, family, score, stage, budget) in list(pending.items()):
             if day > confirmation + 3:
+                if evidence is not None:
+                    evidence.order_attempt(day, security, confirmation, "expired")
                 del pending[security]
                 continue
             paired_sale = paired_sales.get((confirmation, security))
             if paired_sale is not None and paired_sale in holdings:
+                if evidence is not None:
+                    evidence.order_attempt(day, security, confirmation, "paired_exit_wait")
                 reserve_waits += 1
                 continue
             dependency = reserve_dependencies.get((confirmation, security))
             if dependency is not None:
                 outgoing, required_sales = dependency
                 if len(outgoing - holdings.keys()) < required_sales:
+                    if evidence is not None:
+                        evidence.order_attempt(day, security, confirmation, "reserve_exit_wait")
                     reserve_waits += 1
                     continue
             opening, upper = (
@@ -380,12 +386,18 @@ def simulate_portfolio(
                 or not np.isfinite(upper)
                 or opening >= upper
             ):
+                if evidence is not None:
+                    evidence.order_attempt(day, security, confirmation, "opening_untradable")
                 continue
             if entry_filter is not None and not entry_filter(panel, confirmation, day, security):
+                if evidence is not None:
+                    evidence.order_attempt(day, security, confirmation, "entry_filter")
                 del pending[security]
                 continue
             sector = values["sector_index"][day - 1, security]
             if not np.isfinite(sector) or sector < 0:
+                if evidence is not None:
+                    evidence.order_attempt(day, security, confirmation, "unknown_sector")
                 del pending[security]
                 continue
             price = min(opening * (1 + policy.slippage_rate), upper)
@@ -411,13 +423,12 @@ def simulate_portfolio(
                 for column, amount in marked.items()
                 if values["sector_index"][day - 1, column] == sector
             )
-            allowance = min(
-                budget,
-                policy.position_weight * assets,
-                cash,
-                target * assets - sum(marked.values()),
-                policy.sector_weight * assets - sector_value,
-            )
+            constraints = {
+                "signal_budget": budget, "position_limit": policy.position_weight * assets,
+                "cash_available": cash, "target_available": target * assets - sum(marked.values()),
+                "sector_available": policy.sector_weight * assets - sector_value,
+            }
+            allowance = min(constraints.values())
             shares = affordable_shares(
                 allowance,
                 price,
@@ -425,8 +436,9 @@ def simulate_portfolio(
                 calendar[day],
                 fee_multiplier=policy.fee_multiplier,
             )
+            requested_shares = shares
+            limit = None
             if liquidity_rule is not None:
-                requested_shares = shares
                 limit = available_liquidity(day, security)
                 shares = affordable_shares(
                     min(allowance, limit), price, panel.codes[security], calendar[day],
@@ -438,6 +450,12 @@ def simulate_portfolio(
                     "entry": day,
                     "requested_shares": requested_shares, "executed_shares": shares,
                 })
+            if evidence is not None:
+                evidence.order_attempt(
+                    day, security, confirmation, "filled" if shares else "sizing_zero",
+                    constraints, price=price, requested_shares=requested_shares,
+                    executed_shares=shares, liquidity_available=limit,
+                )
             if shares:
                 notional = shares * price
                 slippage += (price - opening) * shares
@@ -580,6 +598,11 @@ def simulate_portfolio(
             if context_candidate_provider is not None
             else candidates(panel, day, stage, policy)
         )
+        candidate_count = len(candidate_rows)
+        fresh_candidate_count = sum(
+            security not in holdings and security not in pending
+            for security, _, _ in candidate_rows
+        )
         pairs: list[tuple[int, int]] = []
         capacity = int(target / policy.position_weight + 1e-8)
         normal_outgoing = {column for column, position in holdings.items() if position.sell_reason}
@@ -665,6 +688,14 @@ def simulate_portfolio(
                     )
                     reserve_created += 1
                 available_slots -= 1
+        if evidence is not None:
+            evidence.allocation_state(
+                day, target_exposure=target, actual_exposure=invested / assets,
+                cash=cash, nav=assets, positions=len(holdings),
+                queued_positions=len(outgoing), regular_slots=regular_slots,
+                unused_slots=available_slots, candidate_count=candidate_count,
+                fresh_candidate_count=fresh_candidate_count, scheduled=scheduled,
+            )
     stale_value = sum(
         position.shares * position.price
         for position in holdings.values()
