@@ -42,6 +42,7 @@ def simulate_candidate_allocation(
     position_exit_provider: Callable[[Panel, Holding, int, PortfolioPolicy], str] | None = None,
     position_weight_provider: PositionWeightProvider | None = None,
     replacement_provider: ReplacementProvider | None = None,
+    capture_execution_evidence: bool = False,
 ) -> dict[str, Any]:
     """用同一完整候选池和固定评分，独立改变候选生成的一个环节。
 
@@ -57,6 +58,7 @@ def simulate_candidate_allocation(
     'state_failure'则下一合格开盘卖出。position_weight_provider仅缩减单笔预算，
     replacement_provider为满仓时收盘的换出/换入配对，只有实际卖出后允许配对买入。
     例如返回.03时不超过信号资产3%，不改变既有名额上限；两接口默认关闭。
+    capture_execution_evidence=True透传可选观察器，例如返回execution_evidence.fills。
     """
     if (
         mode not in {"baseline", "common_first", "holdings_first", "exit_reserve"}
@@ -165,6 +167,7 @@ def simulate_candidate_allocation(
         exit_provider=close_exit,
         position_weight_provider=position_weight_provider,
         replacement_provider=replacement_provider,
+        capture_execution_evidence=capture_execution_evidence,
     )
     result["candidate_selections"] = selections
     result["candidate_allocation"] = mode

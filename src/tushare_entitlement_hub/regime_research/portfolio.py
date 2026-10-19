@@ -15,6 +15,7 @@ from .accounting import (
     affordable_shares,
     transaction_fee,
 )
+from .execution_evidence import ExecutionEvidence
 from .panel import Panel
 
 ContextCandidates = Callable[
@@ -211,6 +212,7 @@ def simulate_portfolio(
     reserve_exit_candidates: bool = False,
     position_weight_provider: PositionWeightProvider | None = None,
     replacement_provider: ReplacementProvider | None = None,
+    capture_execution_evidence: bool = False,
 ) -> dict[str, Any]:
     """完整逐日资金回放，返回净值、交易、敞口、成交日和陈旧报价诊断。
 
@@ -240,6 +242,8 @@ def simulate_portfolio(
     仅在启用条件预备、正常退出后仍满仓且没有超额持仓时使用；卖出实际成交后才准买入
     配对候选，不允许借另一笔卖出替代。例[(0,2)]表示卖0后才可买2。
     名额仍按最大单票比例计算，开盘仍受原仓位、现金与行业限制，不强制填满剩余现金。
+    capture_execution_evidence=True追加成交、分红事件与逐日持仓CSV数据；默认False
+    不追加返回字段。例如100股以10元成交，证据记录原始股数100和金额1000元。
     """
     if capital <= 0 or len(states) != len(panel.calendar):
         raise ValueError("invalid_simulation_inputs")
@@ -252,7 +256,8 @@ def simulate_portfolio(
     reserve_created = reserve_waits = reserve_filled = 0
     paired_sales: dict[tuple[int, int], int] = {}
     replacement_decisions: list[dict[str, int]] = []
-    book = DistributionBook(events)
+    evidence = ExecutionEvidence(panel) if capture_execution_evidence else None
+    book = DistributionBook(events, evidence)
     daily: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
     entry_days: list[int] = []
@@ -276,6 +281,8 @@ def simulate_portfolio(
         cash += notional - fee
         fees += fee
         turnover += notional
+        if evidence is not None:
+            evidence.fill(holding, day, "sell", price, reference_price, fee, cash, reason)
         trades.append(
             {
                 "security": security,
@@ -405,6 +412,10 @@ def simulate_portfolio(
                     observed=day,
                 )
                 entry_days.append(day)
+                if evidence is not None:
+                    evidence.fill(
+                        holdings[security], day, "buy", price, opening, fee, cash, "entry"
+                    )
                 if dependency is not None:
                     reserve_filled += 1
             else:
@@ -471,6 +482,8 @@ def simulate_portfolio(
             if target == 0:
                 pending.clear()
         book.record(day, holdings)
+        if evidence is not None:
+            evidence.snapshot(day, holdings)
         beta = (
             sum(
                 position.shares
@@ -616,6 +629,7 @@ def simulate_portfolio(
     actual_assets = daily[-1]["nav"] if daily else capital
     return {
         "daily": daily,
+        **({"execution_evidence": evidence.result()} if evidence is not None else {}),
         "trades": trades,
         **(
             {"replacement_decisions": replacement_decisions}

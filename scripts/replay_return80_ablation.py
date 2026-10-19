@@ -50,6 +50,7 @@ def main():
     parser.add_argument('--maximum-holding', type=int, default=30)
     parser.add_argument('--position-weight', type=float, default=.05)
     parser.add_argument('--replacement-sessions', type=int, default=10)
+    parser.add_argument('--capture-execution-evidence', action='store_true')
     args = parser.parse_args()
     parameters = ReplayParameters(
         args.take_profit, args.stop_loss, args.maximum_holding,
@@ -109,6 +110,7 @@ def main():
         'sample': 'full-sample fit and selection; not out-of-sample validation',
         'replacement': asdict(rule), 'cost_multipliers': [1, 2],
         'execution_parameters': asdict(parameters),
+        'capture_execution_evidence': args.capture_execution_evidence,
     }
     (args.output / 'protocol.json').write_text(json.dumps(manifest, indent=2))
     reports = []
@@ -124,6 +126,7 @@ def main():
             panel, states, events, replace(definition, name=name), policy,
             mode='exit_reserve', capital=args.capital, start=args.start,
             replacement_provider=make_replacement_provider(rule),
+            capture_execution_evidence=args.capture_execution_evidence,
         )
         selections = result.pop('candidate_selections')
         for selection in selections:

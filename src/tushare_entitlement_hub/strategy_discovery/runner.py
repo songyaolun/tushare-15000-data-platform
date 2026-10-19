@@ -129,6 +129,8 @@ def save_result(
 
     未有metrics的半成品重跑，不从CSV推断已完成，现金收益与市值每天同时可审计。
     """
+    for name, rows in result.get("execution_evidence", {}).items():
+        write_csv(path / f"{name}.csv", rows)
     write_csv(path / "trades.csv", result["trades"])
     write_csv(path / "entries.csv", [{"day": day} for day in result["entry_days"]])
     write_csv(

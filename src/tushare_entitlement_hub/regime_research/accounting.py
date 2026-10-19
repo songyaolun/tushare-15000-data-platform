@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from ..strategy_optimization.dataset import read_envelope
+from .execution_evidence import ExecutionEvidence
 
 
 @dataclass(frozen=True)
@@ -139,14 +140,17 @@ def load_distributions(raw: Path, calendar: list[str], codes: list[str]) -> list
 class DistributionBook:
     """保存登记权益、应收现金和未上市送股；现金红利统一预扣20%作为保守税费假设。"""
 
-    def __init__(self, events: list[Distribution]) -> None:
+    def __init__(
+        self, events: list[Distribution], evidence: ExecutionEvidence | None = None
+    ) -> None:
         """建立登记日事件索引及空账本；输入[]输出无应收款账本。"""
         self.records: dict[int, list[Distribution]] = {}
         for event in events:
             self.records.setdefault(event.record, []).append(event)
         self.entitlements: list[tuple[Distribution, Holding, float]] = []
-        self.receivables: list[tuple[int, float]] = []
-        self.locked_shares: list[tuple[int, Holding, float]] = []
+        self.receivables: list[tuple[Distribution, Holding, float]] = []
+        self.locked_shares: list[tuple[Distribution, Holding, float]] = []
+        self.evidence = evidence
 
     def record(self, day: int, holdings: dict[int, Holding]) -> None:
         """登记日收盘记录现有股数；例如100股、每股1元，次日确认80元税后权益。"""
@@ -154,6 +158,8 @@ class DistributionBook:
             holding = holdings.get(event.security)
             if holding is not None:
                 self.entitlements.append((event, holding, holding.shares))
+                if self.evidence is not None:
+                    self.evidence.distribution("record", day, event, holding, holding.shares, 0)
 
     def advance(self, day: int) -> float:
         """开盘前确认除权权益并支付到期现金、解锁送股；返回今日到账现金。
@@ -168,24 +174,32 @@ class DistributionBook:
                 holding.dividend += cash
                 holding.shares += stock
                 holding.locked += stock
+                if self.evidence is not None:
+                    self.evidence.distribution("entitlement", day, event, holding, stock, cash)
                 if cash:
-                    self.receivables.append((event.pay, cash))
+                    self.receivables.append((event, holding, cash))
                 if stock:
-                    self.locked_shares.append((event.listing, holding, stock))
+                    self.locked_shares.append((event, holding, stock))
             else:
                 remaining.append((event, holding, shares))
         self.entitlements = remaining
-        paid = sum(amount for due, amount in self.receivables if due <= day)
-        self.receivables = [(due, amount) for due, amount in self.receivables if due > day]
+        paid = sum(amount for event, _, amount in self.receivables if event.pay <= day)
+        if self.evidence is not None:
+            for event, holding, amount in self.receivables:
+                if event.pay <= day:
+                    self.evidence.distribution("payment", day, event, holding, 0, amount)
+        self.receivables = [row for row in self.receivables if row[0].pay > day]
         locked = []
-        for due, holding, shares in self.locked_shares:
-            if due <= day:
+        for event, holding, shares in self.locked_shares:
+            if event.listing <= day:
                 holding.locked = max(0.0, holding.locked - shares)
+                if self.evidence is not None:
+                    self.evidence.distribution("unlock", day, event, holding, shares, 0)
             else:
-                locked.append((due, holding, shares))
+                locked.append((event, holding, shares))
         self.locked_shares = locked
         return paid
 
     def outstanding(self) -> float:
         """返回未到账现金权益总额；例如两笔80和20应收输出100，不能用于买入。"""
-        return sum(amount for _, amount in self.receivables)
+        return sum(amount for _, _, amount in self.receivables)
