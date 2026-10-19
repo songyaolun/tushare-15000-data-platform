@@ -10,6 +10,7 @@ from ..regime_research.accounting import Distribution, Holding
 from ..regime_research.panel import Panel
 from ..regime_research.portfolio import PortfolioPolicy, simulate_portfolio
 from .contracts import StrategyDefinition
+from .entry_timing import OpeningGapRule, opening_gap_allowed
 from .execution import (
     additional_exit_reason,
     common_candidate_eligibility,
@@ -31,6 +32,7 @@ def simulate_candidate_allocation(
     count: int = 10,
     capital: float = 1_000_000,
     start: str = "20211018",
+    opening_gap_rule: OpeningGapRule | None = None,
 ) -> dict[str, Any]:
     """用同一完整候选池和固定评分，独立改变候选生成的一个环节。
 
@@ -40,6 +42,8 @@ def simulate_candidate_allocation(
     预备单依赖实际卖出笔数激活，不能提前释放现金，挂单仅次日有效。
     返回逐日实际候选选择和原账户结果，方便核对信号、成交、费用与名额。
     仅支持本实验的单日挂单、收盘固定退出策略，拒绝盘中模型，避免隐式改变买卖。
+    opening_gap_rule是附加的次开盘价格区间，例如(-.03,.01)排除大低开和追涨；
+    与definition.maximum_entry_gap取交集，默认None精确保留旧行为。
     """
     if (
         mode not in {"baseline", "common_first", "holdings_first", "exit_reserve"}
@@ -107,8 +111,15 @@ def simulate_candidate_allocation(
 
     def entry_filter(current: Panel, confirmation: int, day: int, security: int) -> bool:
         """次日开盘检查追价，不读取日后结果；例超过信号价2%则取消该订单。"""
-        return day == confirmation + 1 and entry_gap_allowed(
-            current, confirmation, day, security, definition.maximum_entry_gap
+        return (
+            day == confirmation + 1
+            and entry_gap_allowed(
+                current, confirmation, day, security, definition.maximum_entry_gap
+            )
+            and (
+                opening_gap_rule is None
+                or opening_gap_allowed(current, confirmation, day, security, opening_gap_rule)
+            )
         )
 
     def cancel_pending(current: Panel, confirmation: int, day: int, security: int) -> bool:
