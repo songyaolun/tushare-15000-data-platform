@@ -19,6 +19,7 @@ from tushare_entitlement_hub.strategy_discovery.replacement import (
     ReplacementRule,
     make_replacement_provider,
 )
+from tushare_entitlement_hub.strategy_discovery.replay_parameters import ReplayParameters
 from tushare_entitlement_hub.strategy_discovery.runner import (
     additional_metrics,
     configuration,
@@ -44,7 +45,16 @@ def main():
     parser.add_argument('--name', default='baseline')
     parser.add_argument('--capital', type=float, default=120000)
     parser.add_argument('--scope', choices=('mainboard', 'original'), default='mainboard')
+    parser.add_argument('--take-profit', type=float, default=.045)
+    parser.add_argument('--stop-loss', type=float, default=.08)
+    parser.add_argument('--maximum-holding', type=int, default=30)
+    parser.add_argument('--position-weight', type=float, default=.05)
+    parser.add_argument('--replacement-sessions', type=int, default=10)
     args = parser.parse_args()
+    parameters = ReplayParameters(
+        args.take_profit, args.stop_loss, args.maximum_holding,
+        args.position_weight, args.replacement_sessions,
+    )
     if not np.isfinite(args.capital) or args.capital <= 0:
         raise ValueError('invalid_initial_capital')
     cache = args.cache_root
@@ -76,10 +86,11 @@ def main():
     )
     definition = replace(
         base, entry_mask=selected, scores=scores, maximum_entry_gap=.05,
-        policy=replace(base.policy, take_profit=.045, stop_loss=.08,
-                       maximum_holding=30, take_profit_enabled=True),
+        policy=replace(base.policy, take_profit=parameters.take_profit,
+                       stop_loss=parameters.stop_loss,
+                       maximum_holding=parameters.maximum_holding, take_profit_enabled=True),
     )
-    rule = ReplacementRule(10, .01, 'momentum')
+    rule = ReplacementRule(parameters.replacement_sessions, .01, 'momentum')
     args.output.mkdir(parents=True)
     manifest = {
         'protocol': 'return80-capital-scope-ablation/v2',
@@ -97,13 +108,15 @@ def main():
         'scope_securities': int(scope.sum()), 'mature_fit_scope': 'original full market',
         'sample': 'full-sample fit and selection; not out-of-sample validation',
         'replacement': asdict(rule), 'cost_multipliers': [1, 2],
+        'execution_parameters': asdict(parameters),
     }
     (args.output / 'protocol.json').write_text(json.dumps(manifest, indent=2))
     reports = []
     for multiplier in (1, 2):
         name = f'{args.name}_cost{multiplier}'
         policy = replace(
-            account_policy, allocations=(.15, 1., 1., 1., 1.), position_weight=.05,
+            account_policy, allocations=(.15, 1., 1., 1., 1.),
+            position_weight=parameters.position_weight,
             sector_weight=.4, fee_multiplier=multiplier, slippage_rate=.0005 * multiplier,
         )
         print(json.dumps({'start': name}), flush=True)
