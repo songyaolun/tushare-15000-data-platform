@@ -38,6 +38,8 @@ def main():
     sets the same fresh-account start date in both. Never infer absent values as zero.
     Example: --capital 1000000 --scope original replays the original candidate pool;
     defaults remain --capital 120000 --scope mainboard for earlier experiments.
+    --candidate-count 20 applies Top20 to both sector selection and allocation;
+    its default 10 preserves the earlier daily candidate limit.
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('--scores', type=Path)
@@ -53,6 +55,7 @@ def main():
     parser.add_argument('--maximum-holding', type=int, default=30)
     parser.add_argument('--position-weight', type=float, default=.05)
     parser.add_argument('--replacement-sessions', type=int, default=10)
+    parser.add_argument('--candidate-count', type=int, default=10)
     parser.add_argument('--capture-execution-evidence', action='store_true')
     parser.add_argument('--maximum-daily-participation', type=float)
     parser.add_argument('--liquidity-lookback', type=int, default=20)
@@ -62,7 +65,7 @@ def main():
         if args.maximum_daily_participation is not None else None
     parameters = ReplayParameters(
         args.take_profit, args.stop_loss, args.maximum_holding,
-        args.position_weight, args.replacement_sessions,
+        args.position_weight, args.replacement_sessions, args.candidate_count,
     )
     if not np.isfinite(args.capital) or args.capital <= 0:
         raise ValueError('invalid_initial_capital')
@@ -89,7 +92,9 @@ def main():
         eligible &= known
     if not np.isfinite(scores[eligible]).all():
         raise ValueError('missing_scores_on_eligible_candidates')
-    original_selected = sector_mask(eligible, scores, panel.values['sector_index'], 1)
+    original_selected = sector_mask(
+        eligible, scores, panel.values['sector_index'], 1, count=parameters.candidate_count,
+    )
     liquidity_candidates = []
     if args.minimum_signal_liquidity is not None:
         if liquidity_rule is None:
@@ -97,7 +102,9 @@ def main():
         eligible, liquidity_candidates = filter_signal_liquidity(
             panel.values['raw_amount'], eligible, args.minimum_signal_liquidity, liquidity_rule,
         )
-    selected = sector_mask(eligible, scores, panel.values['sector_index'], 1)
+    selected = sector_mask(
+        eligible, scores, panel.values['sector_index'], 1, count=parameters.candidate_count,
+    )
     states = (np.isfinite(panel.market['breadth']) & (panel.market['breadth'] >= .4)).astype(
         np.int8
     )
@@ -114,8 +121,10 @@ def main():
         row.update(date=panel.calendar[day], ts_code=panel.codes[security],
                    score=float(scores[day, security]),
                    sector=float(panel.values['sector_index'][day, security]),
-                   original_top10=bool(original_selected[day, security]),
-                   filtered_top10=bool(selected[day, security]))
+                   **{f'original_top{parameters.candidate_count}':
+                      bool(original_selected[day, security]),
+                      f'filtered_top{parameters.candidate_count}':
+                      bool(selected[day, security])})
     if liquidity_candidates:
         write_csv(args.output / 'liquidity_candidates.csv', liquidity_candidates)
     manifest = {
@@ -138,7 +147,8 @@ def main():
         'capture_execution_evidence': args.capture_execution_evidence,
         'liquidity_rule': asdict(liquidity_rule) if liquidity_rule is not None else None,
         'minimum_signal_liquidity': args.minimum_signal_liquidity,
-        'signal_liquidity_placement': 'before sector Top10; common qualification after, no refill',
+        'signal_liquidity_placement':
+            f'before sector Top{parameters.candidate_count}; common qualification after, no refill',
     }
     (args.output / 'protocol.json').write_text(json.dumps(manifest, indent=2))
     reports = []
@@ -152,7 +162,8 @@ def main():
         print(json.dumps({'start': name}), flush=True)
         result = simulate_candidate_allocation(
             panel, states, events, replace(definition, name=name), policy,
-            mode='exit_reserve', capital=args.capital, start=args.start,
+            mode='exit_reserve', count=parameters.candidate_count,
+            capital=args.capital, start=args.start,
             replacement_provider=make_replacement_provider(rule),
             capture_execution_evidence=args.capture_execution_evidence,
             liquidity_rule=liquidity_rule,

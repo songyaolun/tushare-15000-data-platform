@@ -17,6 +17,7 @@ class ReplayParameters:
     maximum_holding: int = 30
     position_weight: float = 0.05
     replacement_sessions: int = 10
+    candidate_count: int = 10
 
     def __post_init__(self) -> None:
         """Reject non-finite thresholds, leverage and invalid session counts.
@@ -32,3 +33,5 @@ class ReplayParameters:
         for value in (self.maximum_holding, self.replacement_sessions):
             if type(value) is not int or not 1 <= value <= 30:
                 raise ValueError("invalid_replay_sessions")
+        if type(self.candidate_count) is not int or self.candidate_count < 1:
+            raise ValueError("invalid_replay_candidate_count")

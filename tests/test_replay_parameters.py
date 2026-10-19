@@ -11,7 +11,7 @@ def test_defaults_reproduce_frozen_execution_contract():
     """The default configuration exactly preserves the established baseline."""
     assert asdict(ReplayParameters()) == {
         "take_profit": .045, "stop_loss": .08, "maximum_holding": 30,
-        "position_weight": .05, "replacement_sessions": 10,
+        "position_weight": .05, "replacement_sessions": 10, "candidate_count": 10,
     }
 
 
@@ -43,3 +43,19 @@ def test_position_weight_cannot_exceed_preserved_sector_limit():
     """The fixed 40% sector limit remains binding even without leverage."""
     with pytest.raises(ValueError, match="invalid_replay_sector_weight"):
         ReplayParameters(position_weight=.41)
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, True, "20", None])
+def test_invalid_candidate_count_fails_before_replay(value):
+    """Candidate limits reject nonpositive counts and non-integers before data loading."""
+    with pytest.raises(ValueError, match="invalid_replay_candidate_count"):
+        ReplayParameters(candidate_count=value)
+
+
+@pytest.mark.parametrize("count", [1, 10, 20, 30])
+def test_candidate_count_preserves_other_execution_controls(count):
+    """A positive candidate count changes candidate supply without changing budgets or exits."""
+    parameters = ReplayParameters(candidate_count=count)
+    assert parameters.candidate_count == count
+    assert parameters.position_weight == .05
+    assert parameters.take_profit == .045
