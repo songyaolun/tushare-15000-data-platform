@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 from threadpoolctl import threadpool_limits
 
+from tushare_entitlement_hub.progress import progress_phase
 from tushare_entitlement_hub.strategy_discovery.feature_experiments import (
     stratified_feature_placebo,
 )
@@ -17,6 +18,8 @@ from tushare_entitlement_hub.strategy_discovery.feature_importance import (
     daily_diagnostics,
     tree_usage,
 )
+from tushare_entitlement_hub.strategy_discovery.native_prediction import predict_native_batches
+from tushare_entitlement_hub.strategy_discovery.permutation_audit import permutation_strata_audit
 
 
 def digest(path: Path) -> str:
@@ -61,7 +64,8 @@ def main() -> None:
     if np.isinf(features).any() or not np.isfinite(labels[mature, 0]).all():
         raise ValueError("invalid feature or mature label values")
     entries = [("feature", name, [index])
-               for index, name in enumerate(protocol["feature_names"])]
+               for index, name in enumerate(protocol["feature_names"])
+               if not protocol.get("groups_only", False)]
     entries += [("group", name, columns) for name, columns in protocol["groups"].items()]
     expected = {(name, kind, feature_name, seed): columns
                 for name in protocol["models"] for kind, feature_name, columns in entries
@@ -78,6 +82,7 @@ def main() -> None:
     total = len(protocol["models"]) * len(entries) * len(protocol["seeds"])
     completed = 0
     started = time.monotonic()
+    chunk_rows = protocol.get("prediction_chunk_rows", len(features))
     np.savez(output / "sample-axis.npz", days=days, securities=axis["securities"][selected],
              common=common, mature=mature, original_rows=np.flatnonzero(selected))
     for name, paths in protocol["models"].items():
@@ -86,7 +91,8 @@ def main() -> None:
         usage = tree_usage(model, protocol["feature_names"])
         (output / f"{name}-usage.json").write_text(json.dumps(usage, indent=2))
         with threadpool_limits(limits=protocol["threads"], user_api="openmp"):
-            baseline = model.predict(features)
+            with progress_phase("native_baseline", model=name, rows=len(features)):
+                baseline = predict_native_batches(model, features, chunk_rows=chunk_rows)
             frozen = np.load(paths["predictions"], mmap_mode="r")[selected]
             if not np.array_equal(baseline, frozen):
                 raise ValueError("native baseline differs from frozen predictions")
@@ -111,12 +117,20 @@ def main() -> None:
                                         | (np.isnan(changed[:, columns])
                                            & np.isnan(features[:, columns])))
                         audit["value_changed_rows"] = int(np.any(differences, axis=1).sum())
-                        prediction = model.predict(changed)
+                        with progress_phase("native_permutation", model=name, name=feature_name,
+                                            seed=seed, completed=completed, total=total):
+                            prediction = predict_native_batches(
+                                model, changed, chunk_rows=chunk_rows,
+                            )
                         record = {"model": name, "kind": kind, "name": feature_name,
                                   "columns": columns, "seed": seed, "permutation": audit,
                                   "days": daily_diagnostics(baseline, prediction, days, sectors,
                                                             common, labels[:, 0], mature),
                                   "seconds": time.monotonic() - step_start}
+                        if protocol.get("audit_by_day", False):
+                            record["strata_by_day"] = permutation_strata_audit(
+                                features[:, columns], changed[:, columns], days,
+                            )
                         stream.write(json.dumps(record, allow_nan=False) + "\n")
                         stream.flush()
                         completed += 1

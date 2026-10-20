@@ -126,3 +126,15 @@ def test_command_rejects_invalid_resume(protocol_fixture, monkeypatch, failure):
     protocol["resume_records"] = [str(resume)]
     with pytest.raises(ValueError, match="resumed record"):
         execute_fixture(protocol, path, monkeypatch)
+
+
+def test_command_groups_only_includes_daily_strata_evidence(protocol_fixture, monkeypatch):
+    """Scenario: expanded validation uses groups only; expect two records and daily audits."""
+    protocol, path = protocol_fixture
+    protocol.update(groups_only=True, audit_by_day=True)
+    execute_fixture(protocol, path, monkeypatch)
+    records = [json.loads(line) for line in (Path(protocol["output"])
+               / "fixture-permutation.jsonl").read_text().splitlines()]
+    assert len(records) == 2
+    assert all(row["kind"] == "group" for row in records)
+    assert all(len(row["strata_by_day"]) == 2 for row in records)
