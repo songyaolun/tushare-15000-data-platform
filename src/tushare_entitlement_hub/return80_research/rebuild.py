@@ -1,5 +1,6 @@
 """Rebuild the original research candidate axis and features from explicit local sources."""
 
+import gzip
 import hashlib
 import json
 from collections.abc import Iterator
@@ -56,7 +57,8 @@ def read_source_envelope(path: Path) -> dict[str, Any]:
     Credentials are rejected before hashing; the context belongs to one reconstruction call.
     """
     raw = path.read_bytes()
-    envelope: dict[str, Any] = json.loads(raw)
+    decoded = gzip.decompress(raw) if raw.startswith(b"\x1f\x8b") else raw
+    envelope: dict[str, Any] = json.loads(decoded)
     assert_public(envelope)
     hashes = _SOURCE_HASHES.get()
     if hashes is not None:
@@ -72,17 +74,41 @@ def read_envelope(path: Path) -> list[dict[str, Any]]:
     return response_records(read_source_envelope(path)["response"])
 
 
+def source_paths(roots: list[Path], api: str) -> list[Path]:
+    """List plain or compressed public archives once; example daily/*.json.gz is accepted."""
+    return sorted(
+        {
+            path
+            for root in roots
+            for pattern in ("*.json", "*.json.gz")
+            for path in (root / api).glob(pattern)
+        }
+    )
+
+
 def source_records(roots: list[Path], api: str) -> Iterator[dict[str, Any]]:
     """Stream declared API directories without executing any cached Python.
 
     Example: roots=[source/raw] reads source/raw/daily/*.json. Missing API fails;
     identical duplicate rows are handled by the consumer, conflicting versions are explicit.
     """
-    paths = sorted({path for root in roots for path in (root / api).glob("*.json")})
+    paths = source_paths(roots, api)
     if not paths:
         raise ValueError("missing_source_api:" + api)
-    for path in paths:
+    for file_index, path in enumerate(paths):
         yield from read_envelope(path)
+        if (file_index + 1) % 100 == 0:
+            print(
+                json.dumps(
+                    {
+                        "stage": "feature_inputs",
+                        "api": api,
+                        "completed": file_index + 1,
+                        "total": len(paths),
+                    }
+                ),
+                flush=True,
+            )
 
 
 def supplemental_arrays(panel: Any, roots: list[Path]) -> dict[str, Any]:
@@ -97,7 +123,7 @@ def supplemental_arrays(panel: Any, roots: list[Path]) -> dict[str, Any]:
     arrays = {}
     for api, names in SUPPLEMENT_FIELDS.items():
         current = {name: np.full(shape, np.nan) for name in names}
-        paths = sorted({path for root in roots for path in (root / api).glob("*.json")})
+        paths = source_paths(roots, api)
         if not paths:
             raise ValueError("missing_source_api:" + api)
         seen: dict[Any, Any] = {}

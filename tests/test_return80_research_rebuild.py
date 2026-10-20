@@ -423,3 +423,28 @@ def test_signal_progress_counts_securities(tmp_path, capsys):
     panel.values = {key: np.repeat(value, 100, axis=1) for key, value in panel.values.items()}
     rebuild.build_signals(panel, source, roots, benchmark, tmp_path / "signals")
     assert '"completed": 100, "total": 100' in capsys.readouterr().out
+
+
+def test_compressed_archives_keep_byte_hash_and_progress(tmp_path, capsys):
+    """Legacy gzip files and renamed links retain encoded-byte hashes and actual input counts."""
+    import gzip
+    import hashlib
+
+    source = tmp_path / "forecast_vip/source.json.gz"
+    source.parent.mkdir()
+    payload = {"response": {"code": 0, "data": {"fields": ["x"], "items": [[1]]}}}
+    encoded = gzip.compress(json.dumps(payload).encode())
+    source.write_bytes(encoded)
+    for index in range(99):
+        (source.parent / f"copy-{index}.json").hardlink_to(source)
+    token = rebuild._SOURCE_HASHES.set({})
+    try:
+        rows = list(rebuild.source_records([tmp_path], "forecast_vip"))
+        assert rows == [{"x": 1}] * 100
+        assert (
+            rebuild._SOURCE_HASHES.get()[str(source.resolve())]
+            == hashlib.sha256(encoded).hexdigest()
+        )
+    finally:
+        rebuild._SOURCE_HASHES.reset(token)
+    assert '"completed": 100' in capsys.readouterr().out
