@@ -37,7 +37,9 @@ class ExecutionEvidence:
             "ts_code": self.panel.codes[security], "confirmation": confirmation,
             "reason": reason, "price": price, "requested_shares": requested_shares,
             "executed_shares": executed_shares, "liquidity_available": liquidity_available,
-            "first_binding_constraint": min(limits, key=limits.get) if limits else "",
+            "first_binding_constraint": (
+                min(limits, key=lambda name: limits[name]) if limits else ""
+            ),
             **{name: limits.get(name) for name in (
                 "signal_budget", "position_limit", "cash_available",
                 "target_available", "sector_available",

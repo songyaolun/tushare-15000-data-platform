@@ -1,7 +1,9 @@
 """Rebuild the original research candidate axis and features from explicit local sources."""
 
+import hashlib
 import json
 from collections.abc import Iterator
+from contextvars import ContextVar
 from dataclasses import asdict, replace
 from importlib.resources import files
 from pathlib import Path
@@ -11,15 +13,16 @@ import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 
 from ..progress import progress_phase
+from ..raw import assert_public
 from ..regime_research.accounting import load_distributions
 from ..regime_research.panel import load_panel
+from ..research_history.collection import response_records
 from ..strategy_discovery.contracts import DEFAULT_POLICY
 from ..strategy_discovery.nonlinear_scoring import nonlinear_input_features
 from ..strategy_discovery.replay_inputs import file_digest, write_replay_inputs
 from ..strategy_discovery.sector import _sector_features
 from ..strategy_discovery.trade_labels import independent_trade_label
 from ..strategy_discovery.training_weights import daily_equal_training_weights
-from ..strategy_optimization.dataset import read_envelope
 from .dataset import save_dataset
 
 SIGNAL_FIELDS = (
@@ -39,6 +42,34 @@ SUPPLEMENT_FIELDS = {
     "moneyflow": ("buy_lg_amount", "sell_lg_amount", "buy_elg_amount", "sell_elg_amount"),
     "stock_st": ("is_st",),
 }
+
+
+_SOURCE_HASHES: ContextVar[dict[str, str] | None] = ContextVar(
+    "rebuild_source_hashes", default=None
+)
+
+
+def read_source_envelope(path: Path) -> dict[str, Any]:
+    """Parse public bytes once and audit exactly those bytes, rejecting source revision drift.
+
+    Example: a repeated source changing during reconstruction fails before dataset publication.
+    Credentials are rejected before hashing; the context belongs to one reconstruction call.
+    """
+    raw = path.read_bytes()
+    envelope: dict[str, Any] = json.loads(raw)
+    assert_public(envelope)
+    hashes = _SOURCE_HASHES.get()
+    if hashes is not None:
+        key, digest = str(path.resolve()), hashlib.sha256(raw).hexdigest()
+        if key in hashes and hashes[key] != digest:
+            raise ValueError("rebuild_source_changed_during_read")
+        hashes[key] = digest
+    return envelope
+
+
+def read_envelope(path: Path) -> list[dict[str, Any]]:
+    """Read an audited public response; example fields=['x'],items=[[1]] returns [{'x':1}]."""
+    return response_records(read_source_envelope(path)["response"])
 
 
 def source_records(roots: list[Path], api: str) -> Iterator[dict[str, Any]]:
@@ -70,16 +101,16 @@ def supplemental_arrays(panel: Any, roots: list[Path]) -> dict[str, Any]:
         if not paths:
             raise ValueError("missing_source_api:" + api)
         seen: dict[Any, Any] = {}
-        for path in paths:
-            envelope = json.loads(path.read_text())
+        for file_index, path in enumerate(paths):
+            envelope = read_source_envelope(path)
+            rows = response_records(envelope["response"])
             day = envelope.get("parameters", envelope.get("params", {})).get("trade_date")
             if api == "stock_st" and day in dates:
                 # Only a completed, successful source partition proves the negative list.
-                read_envelope(path)
                 if day not in seen:
                     current["is_st"][dates[day]] = 0
                     seen[day] = True
-            for row in read_envelope(path):
+            for row in rows:
                 source_date = row.get("trade_date", day)
                 if source_date not in dates or row["ts_code"] not in codes:
                     continue
@@ -93,6 +124,18 @@ def supplemental_arrays(panel: Any, roots: list[Path]) -> dict[str, Any]:
                 seen[key] = values
                 for name, value in zip(names, values, strict=True):
                     current[name][index, column] = np.nan if value is None else value
+            if (file_index + 1) % 100 == 0:
+                print(
+                    json.dumps(
+                        {
+                            "stage": "supplemental_inputs",
+                            "api": api,
+                            "completed": file_index + 1,
+                            "total": len(paths),
+                        }
+                    ),
+                    flush=True,
+                )
         arrays.update(current)
     return arrays
 
@@ -393,6 +436,15 @@ def build_labels(panel: Any, axis: dict[str, Any], events: list[Any]) -> Any:
 
 
 def rebuild_matrices(specification: Path, output: Path) -> Path:
+    """Run one isolated source audit; example a changed raw file rejects the whole rebuild."""
+    token = _SOURCE_HASHES.set({})
+    try:
+        return _run_rebuild(specification, output)
+    finally:
+        _SOURCE_HASHES.reset(token)
+
+
+def _run_rebuild(specification: Path, output: Path) -> Path:
     """Rebuild 47 columns, labels and portable replay from explicitly named source roots.
 
     Example: spec declares panel, source_dataset, raw_roots, benchmark, members and
@@ -418,6 +470,21 @@ def rebuild_matrices(specification: Path, output: Path) -> Path:
     manifest = json.loads((source / "dataset.json").read_text())
     if panel.calendar != manifest["calendar"] or panel.codes != manifest["securities"]:
         raise ValueError("rebuild_source_axis_mismatch")
+    source_hashes = _SOURCE_HASHES.get()
+    if source_hashes is not None:
+        panel_manifest = read_source_envelope(panel_root / "panel.json")
+        read_source_envelope(source / "dataset.json")
+        binary_paths = [source / (code + ".npz") for code in panel.codes]
+        binary_paths += [
+            panel_root / f"{group}-{name}.npy"
+            for group in ("values", "signals", "market")
+            for name in panel_manifest[group]
+        ]
+        for path in binary_paths:
+            source_hashes[str(path.resolve())] = file_digest(path)
+        for path in resolve(spec["distributions"]).glob("*.json"):
+            if path.name.startswith("dividend-") or path.name == "distribution-resolutions.json":
+                read_source_envelope(path)
     output.mkdir(parents=True)
     with progress_phase("rebuild_signals"):
         matrices, st_flags = build_signals(
@@ -487,12 +554,23 @@ def rebuild_matrices(specification: Path, output: Path) -> Path:
         "source_fingerprint": manifest["source_fingerprint"],
         "domain_revision": "6d6313634734fa7d06cd3414a169fa61e0adb4d9",
     }
+    source_hashes = _SOURCE_HASHES.get() or {}
+    for filename, expected in source_hashes.items():
+        if file_digest(Path(filename)) != expected:
+            raise ValueError("rebuild_source_changed_before_publication")
+    (output / "raw-source-hashes.json").write_text(json.dumps(source_hashes, indent=2) + "\n")
+    provenance["raw_source_manifest_sha256"] = file_digest(output / "raw-source-hashes.json")
     result = save_dataset(output / "training", arrays, provenance)
     (output / "distributions.json").write_text(json.dumps([asdict(event) for event in events]))
-    write_replay_inputs(panel_root, {
-        "panel/panel.json": panel_root/"panel.json",
-        "eligible.npy": output/"eligible.npy",
-        "technical_risk.npy": output/"signals/technical_risk.npy",
-        "legacy_scores.npy": output/"legacy_scores.npy",
-    }, events, output/"replay")
+    write_replay_inputs(
+        panel_root,
+        {
+            "panel/panel.json": panel_root / "panel.json",
+            "eligible.npy": output / "eligible.npy",
+            "technical_risk.npy": output / "signals/technical_risk.npy",
+            "legacy_scores.npy": output / "legacy_scores.npy",
+        },
+        events,
+        output / "replay",
+    )
     return result

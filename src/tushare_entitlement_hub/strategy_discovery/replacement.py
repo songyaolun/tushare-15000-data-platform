@@ -1,7 +1,9 @@
 """用截至收盘的持仓衰退事实触发退出或满仓替换，不比较新旧入场分数。"""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import isfinite
+from typing import Any
 
 from ..regime_research.accounting import Holding
 from ..regime_research.panel import Panel
@@ -69,7 +71,9 @@ def fading_position(panel: Panel, holding: Holding, day: int, rule: ReplacementR
     return True
 
 
-def make_fading_exit(rule: ReplacementRule):
+def make_fading_exit(
+    rule: ReplacementRule,
+) -> Callable[[Panel, Holding, int, PortfolioPolicy], str]:
     """创建衰退退出对照，持仓达到规则即退出；例未衰退返回空字符串。"""
 
     def close_exit(panel: Panel, holding: Holding, day: int, policy: PortfolioPolicy) -> str:
@@ -79,14 +83,16 @@ def make_fading_exit(rule: ReplacementRule):
     return close_exit
 
 
-def make_replacement_provider(rule: ReplacementRule):
+def make_replacement_provider(rule: ReplacementRule) -> Callable[..., list[tuple[int, int]]]:
     """创建满仓换仓回调；例最久未走强的持仓0与合格高分候选2配对为[(0,2)]。
 
     候选按已冻结排序输入。优先替换持有时间长者，同日入场按证券序；不读取未来价格。
     新候选分数仅设入场门槛，不解释为它与现有持仓的剩余收益差。
     """
 
-    def replacements(panel, day, policy, holdings, candidates, pending):
+    def replacements(
+        panel: Panel, day: int, policy: Any, holdings: Any, candidates: Any, pending: Any
+    ) -> list[tuple[int, int]]:
         """从持仓副本和合格候选返回唯一配对；例无衰退持仓或无新候选返回[]。"""
         held_codes = {holding.security for holding in holdings}
         outgoing = sorted(

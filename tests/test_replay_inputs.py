@@ -118,3 +118,16 @@ def test_file_digest_empty_and_streamed(tmp_path):
     for payload in (b'', b'x' * (1024 * 1024 + 1)):
         path.write_bytes(payload)
         assert file_digest(path) == hashlib.sha256(payload).hexdigest()
+
+
+def test_explicit_export_rejects_existing_output_and_wrong_roles(tmp_path):
+    """Explicit exports reject stale destinations and incomplete file-role mappings."""
+    from tushare_entitlement_hub.strategy_discovery.replay_inputs import write_replay_inputs
+
+    cache_fixture(tmp_path / "cache")
+    panel = tmp_path / "cache/p03-regime-alpha-20261018/panel"
+    with pytest.raises(ValueError, match="fresh_replay_output"):
+        write_replay_inputs(panel, {}, [], tmp_path)
+    with pytest.raises(ValueError, match="invalid_replay_file_roles"):
+        write_replay_inputs(panel, {}, [], tmp_path / "out")
+    assert not (tmp_path / "out").exists()

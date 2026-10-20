@@ -95,3 +95,22 @@ def test_cli_native_training_and_resource_failures(tmp_path, monkeypatch):
     resources["available_memory_bytes"] = 1
     with pytest.raises(ValueError, match="insufficient_training_memory"):
         training.train(data, tmp_path / "memory", rounds=1)
+
+
+def test_memory_cgroups_and_ancestor_paths(tmp_path):
+    """Container remaining memory is bounded by each ancestor, including v1 layouts."""
+    (tmp_path / "memory.max").write_text("1000")
+    (tmp_path / "memory.current").write_text("200")
+    nested = tmp_path / "team/job"
+    nested.mkdir(parents=True)
+    membership = tmp_path / "membership"
+    membership.write_text("0::/team/job\n")
+    assert nested in training.cgroup_directories(tmp_path, membership)
+    assert tmp_path / "team" in training.cgroup_directories(tmp_path, membership)
+    assert training.cgroup_memory_available(tmp_path) == [800]
+    (tmp_path / "memory.max").write_text("max")
+    assert training.cgroup_memory_available(tmp_path) == []
+    (tmp_path / "memory.max").write_text("bad")
+    assert training.cgroup_memory_available(tmp_path) == []
+    missing = tmp_path / "not-present"
+    assert tmp_path in training.cgroup_directories(tmp_path, missing)

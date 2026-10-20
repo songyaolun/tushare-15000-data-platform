@@ -20,7 +20,7 @@ def audit_capacity(fills: list[dict[str, str]]) -> dict[str, Any]:
     Invalid amounts retain their row and denominator; daily evidence never proves
     open-auction/minute capacity and is never fed back into order decisions.
     """
-    observations = []
+    observations: list[dict[str, Any]] = []
     anomalies = []
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for row in fills:
@@ -54,11 +54,11 @@ def audit_capacity(fills: list[dict[str, str]]) -> dict[str, Any]:
         if amount != group["daily_amount_thousand_cny"]:
             group["daily_amount_thousand_cny"] = math.nan
     aggregate = []
-    for row in grouped.values():
-        amount = row["daily_amount_thousand_cny"]
-        row["participation"] = (row["notional_cny"] / (amount * 1000)
-                                if math.isfinite(amount) and amount > 0 else None)
-        aggregate.append(row)
+    for grouped_row in grouped.values():
+        amount = grouped_row["daily_amount_thousand_cny"]
+        grouped_row["participation"] = (grouped_row["notional_cny"] / (amount * 1000)
+                                       if math.isfinite(amount) and amount > 0 else None)
+        aggregate.append(grouped_row)
     ratios = [row["participation"] for row in observations if row["participation"] is not None]
     return {"fill_count": len(fills), "known_amount_fill_count": len(ratios),
             "unknown_amount_fill_count": len(fills) - len(ratios),
@@ -86,7 +86,9 @@ def audit_execution(path: Path, capital: float, fee_multiplier: float,
     dates = {int(row["day"]): row["date"] for row in tables["daily"]}
     if not dates or list(dates) != sorted(dates) or len(dates) != len(tables["daily"]):
         raise ValueError("invalid_daily_axis")
-    by_day = {name: defaultdict(list) for name in ("fills", "distributions", "positions")}
+    by_day: dict[str, dict[int, list[dict[str, str]]]] = {
+        name: defaultdict(list) for name in ("fills", "distributions", "positions")
+    }
     for name in by_day:
         for row in tables[name]:
             if dates.get(int(row["day"])) != row["date"]:

@@ -16,14 +16,12 @@ from ..strategy_discovery.replay_inputs import file_digest
 from .dataset import load_dataset, map_predictions
 
 
-def cpu_quotas(root: Path = Path("/sys/fs/cgroup")) -> list[float]:
-    """Read visible v1/v2 cgroup quotas, including ancestors; unlimited gives [].
-
-    Example: cpu.max='200000 100000' contributes two CPUs. Container roots and
-    process-specific nested paths are both inspected; inaccessible files remain unknown.
-    """
-    directories = {root, root / "cpu", root / "cpu,cpuacct"}
-    membership = Path("/proc/self/cgroup")
+def cgroup_directories(
+    root: Path,
+    membership: Path = Path("/proc/self/cgroup"),
+) -> list[Path]:
+    """Enumerate visible process cgroups and ancestors; example nested quotas are not skipped."""
+    directories = {root, root / "cpu", root / "cpu,cpuacct", root / "memory"}
     if membership.exists():
         for line in membership.read_text().splitlines():
             _, controllers, relative = line.split(":", 2)
@@ -35,8 +33,35 @@ def cpu_quotas(root: Path = Path("/sys/fs/cgroup")) -> list[float]:
                     if current == root:
                         break
                     current = current.parent
+    return sorted(directories)
+
+
+def cgroup_memory_available(root: Path = Path("/sys/fs/cgroup")) -> list[int]:
+    """Return bounded memory remaining at each v1/v2 cgroup; unlimited gives no bound.
+
+    Example: limit=1GiB and current=256MiB leaves 768MiB even on a large host.
+    """
+    available = []
+    for directory in cgroup_directories(root):
+        for limit_name, current_name in (
+            ("memory.max", "memory.current"),
+            ("memory.limit_in_bytes", "memory.usage_in_bytes"),
+        ):
+            limit, current = directory / limit_name, directory / current_name
+            if not limit.is_file() or not current.is_file():
+                continue
+            try:
+                if limit.read_text().strip() != "max":
+                    available.append(max(0, int(limit.read_text()) - int(current.read_text())))
+            except (OSError, ValueError):
+                continue
+    return available
+
+
+def cpu_quotas(root: Path = Path("/sys/fs/cgroup")) -> list[float]:
+    """Read visible ancestor v1/v2 CPU quotas; example cpu.max='200000 100000' gives two."""
     quotas = []
-    for directory in sorted(directories):
+    for directory in cgroup_directories(root):
         maximum = directory / "cpu.max"
         quota = directory / "cpu.cfs_quota_us"
         period = directory / "cpu.cfs_period_us"
@@ -77,13 +102,15 @@ def inspect_resources() -> dict[str, Any]:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         devices = []
     memory = psutil.virtual_memory()
+    memory_limits = cgroup_memory_available()
     return {
         "affinity": affinity,
         "cgroup_cpu_quotas": quotas,
         "cpu_limit": max(1, math.floor(maximum)),
         "load_average": list(os.getloadavg()),
         "cpu_busy_percent": psutil.cpu_percent(interval=0.1),
-        "available_memory_bytes": memory.available,
+        "available_memory_bytes": min([memory.available, *memory_limits]),
+        "cgroup_memory_available_bytes": memory_limits,
         "gpu_inventory": devices,
         "algorithm_gpu_supported": False,
         "thread_environment": {
@@ -102,7 +129,7 @@ def select_threads(
     resource: dict[str, Any],
     ceiling: int,
 ) -> tuple[int, list[dict[str, Any]]]:
-    """Time equal four-round probes on up to 8192 actual rows and verify predictions.
+    """Time equal four-round probes on all actual fit rows and verify predictions.
 
     Example: if two threads beat one and four, returns (2, timings). All probes use
     the same deterministic input/seed; BLAS is capped at one to prevent nesting.
@@ -116,7 +143,7 @@ def select_threads(
     idle = max(1, math.floor(resource["cpu_limit"] * (1 - resource["cpu_busy_percent"] / 100)))
     maximum = min(ceiling, resource["cpu_limit"], idle)
     candidates = sorted({1, maximum, *(value for value in (2, 4, 8, 16) if value <= maximum)})
-    rows = np.linspace(0, len(features) - 1, min(8192, len(features)), dtype=int)
+    rows = np.linspace(0, len(features) - 1, len(features), dtype=int)
     sample, response, sample_weight = features[rows], targets[rows], weights[rows]
     settings = {**parameters, "max_iter": min(4, parameters["max_iter"]), "verbose": 0}
     timings: list[dict[str, Any]] = []
@@ -172,8 +199,6 @@ def train(dataset: Path, output: Path, *, rounds: int, thread_ceiling: int = 16)
         "verbose": 1,
     }
     features = arrays["X"][arrays["fit_indices"]]
-    if not len(features):
-        raise ValueError("empty_training_targets")
     output.mkdir(parents=True)
     with progress_phase("thread_selection"):
         threads, timings = select_threads(

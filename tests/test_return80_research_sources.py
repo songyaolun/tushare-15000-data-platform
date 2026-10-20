@@ -172,3 +172,60 @@ def test_changed_raw_page_rejected_before_normalization(tmp_path):
     assert file_digest(raw) != manifest["partitions"][0]["files"][0]["sha256"]
     with pytest.raises(ValueError, match="changed_source_raw"):
         materialize_sources(bootstrap, collection, tmp_path / "output")
+
+
+@pytest.mark.parametrize("damage", ["schema", "api", "quality", "page-fields"])
+def test_materialization_rechecks_source_contracts(tmp_path, damage):
+    """Valid hashes cannot excuse wrong API/schema, wrong-date history or changing page fields."""
+    bootstrap = bootstrap_fixture(tmp_path / "bootstrap")
+    api = "daily" if damage == "quality" else "index_daily"
+    parameters = {"trade_date": "20261019"} if api == "daily" else {"ts_code": "000300.SH"}
+    collection = collect_fixture(tmp_path / "collection", [request(api, parameters)], [[]])
+    manifest_path = collection / "collection.json"
+    manifest = json.loads(manifest_path.read_text())
+    item = manifest["partitions"][0]["files"][0]
+    raw = collection / item["path"]
+    envelope = json.loads(raw.read_text())
+    if damage == "schema":
+        manifest["schema"] = "unknown"
+        error = "invalid_source_collection"
+    elif damage == "api":
+        envelope["api_name"] = "wrong"
+        error = "source_api_mismatch"
+    elif damage == "quality":
+        fields = envelope["response"]["data"]["fields"]
+        row = dict.fromkeys(fields, 1.0) | {"ts_code": "000001.SZ", "trade_date": "20261020"}
+        envelope["response"]["data"]["items"] = [[row[field] for field in fields]]
+        error = "source_history_quality_failed"
+    else:
+        second = collection / "second.json"
+        changed = json.loads(json.dumps(envelope))
+        changed["response"]["data"]["fields"] = ["ts_code"]
+        second.write_text(json.dumps(changed))
+        manifest["partitions"][0]["files"].append(
+            {"path": "second.json", "sha256": file_digest(second)}
+        )
+        error = "source_page_schema_changed"
+    raw.write_text(json.dumps(envelope))
+    item["sha256"] = file_digest(raw)
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match=error):
+        materialize_sources(bootstrap, collection, tmp_path / "output")
+
+
+def test_empty_catalog_and_empty_history_partitions(tmp_path, capsys):
+    """Empty bootstrap cannot expand; empty termination pages stay archived but out of history."""
+    bootstrap = bootstrap_fixture(tmp_path / "bootstrap")
+    with pytest.raises(ValueError, match="incomplete_bootstrap"):
+        make_plan(tmp_path / "plan.json", start="20200101", end="20200102", bootstrap=bootstrap)
+    collection = collect_fixture(
+        tmp_path / "collection", [request("daily", {"trade_date": "20261019"})], [[]]
+    )
+    path = collection / "collection.json"
+    manifest = json.loads(path.read_text())
+    # 500 completed empty partitions exercise the operator progress boundary without live calls.
+    manifest["partitions"] *= 500
+    path.write_text(json.dumps(manifest))
+    materialize_sources(bootstrap, collection, tmp_path / "sources")
+    assert not (tmp_path / "sources/history/raw/daily").exists()
+    assert '"completed": 500' in capsys.readouterr().out

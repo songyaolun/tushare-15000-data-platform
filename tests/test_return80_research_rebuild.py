@@ -121,6 +121,7 @@ def test_rebuilt_signals_equal_public_function_and_units(tmp_path):
     axis = {"days": np.array([149]), "securities": np.array([0]), "common": np.array([True])}
     patterns = np.zeros((150, 1), dtype=np.uint32)
     patterns[149, 0] = 1
+    del panel.values["extension_atr"]
     values, names = rebuild.baseline_features(
         panel, source, matrices, axis, patterns, np.full((150, 1), 12.34, dtype=np.float32)
     )
@@ -170,6 +171,9 @@ def test_candidate_scope_common_and_rounded_old_scores():
     assert axis["securities"].tolist() == [0, 1]
     assert axis["common"].tolist() == [True, False]
     assert eligible.tolist() == [[True, True, False]] and scores.dtype == np.float32
+    panel.calendar = ["20211017"]
+    early, _, _, _ = rebuild.candidate_axis(panel, matrices, np.zeros(shape), master, members)
+    assert len(early["days"]) == 0
     with pytest.raises(ValueError, match="conflicting_security_master"):
         rebuild.candidate_axis(
             panel,
@@ -194,7 +198,10 @@ def test_original_label_statuses_and_no_zero_fill():
     assert labels[0, 3] in (1, 2, 3)
 
 
-def test_complete_rebuild_has_47_columns_and_relocatable_replay(tmp_path):
+@pytest.mark.parametrize("source_changes", [False, True])
+def test_complete_rebuild_has_47_columns_and_relocatable_replay(
+    tmp_path, monkeypatch, source_changes
+):
     """Fresh synthetic raw history runs all reconstruction phases without private scripts."""
     from datetime import date, timedelta
 
@@ -292,6 +299,20 @@ def test_complete_rebuild_has_47_columns_and_relocatable_replay(tmp_path):
             }
         )
     )
+    if source_changes:
+        original_labels = rebuild.build_labels
+
+        def labels_then_revision(*args):
+            """Revise a consumed raw file after labels; publication must reject the new bytes."""
+            labels = original_labels(*args)
+            benchmark.write_text(benchmark.read_text() + " ")
+            return labels
+
+        monkeypatch.setattr(rebuild, "build_labels", labels_then_revision)
+        with pytest.raises(ValueError, match="source_changed_before_publication"):
+            rebuild.rebuild_matrices(spec, tmp_path / "rebuilt")
+        assert not (tmp_path / "rebuilt/training/dataset.json").exists()
+        return
     result = rebuild.rebuild_matrices(spec, tmp_path / "rebuilt")
     arrays, manifest = load_dataset(result.parent)
     assert arrays["X"].shape[1] == 47 and len(arrays["fit_indices"]) > 0
@@ -300,3 +321,105 @@ def test_complete_rebuild_has_47_columns_and_relocatable_replay(tmp_path):
     verified_replay_manifest(result.parent.parent / "replay")
     with pytest.raises(ValueError, match="existing_output"):
         rebuild.rebuild_matrices(spec, tmp_path / "rebuilt")
+
+
+def test_source_audit_rejects_changed_bytes_and_resets_context(tmp_path):
+    """One rebuild context hashes parsed bytes, rejects revisions, and never leaks into the next."""
+    source = tmp_path / "public.json"
+    envelope(source, "fixture", [{"x": 1}])
+    token = rebuild._SOURCE_HASHES.set({})
+    try:
+        assert rebuild.read_envelope(source) == [{"x": 1}]
+        hashes = dict(rebuild._SOURCE_HASHES.get())
+        assert str(source.resolve()) in hashes
+        envelope(source, "fixture", [{"x": 2}])
+        with pytest.raises(ValueError, match="source_changed_during_read"):
+            rebuild.read_envelope(source)
+    finally:
+        rebuild._SOURCE_HASHES.reset(token)
+    spec = tmp_path / "bad.json"
+    spec.write_text("{}")
+    with pytest.raises(ValueError, match="invalid_rebuild_spec"):
+        rebuild.rebuild_matrices(spec, tmp_path / "failed")
+    assert rebuild._SOURCE_HASHES.get() is None
+
+
+def test_supplemental_scope_partition_and_progress(tmp_path, capsys):
+    """Out-of-axis records are ignored, date conflicts fail, and 100 files emit a real count."""
+    panel, _, roots, _ = fixture(tmp_path, 100)
+    row = {"ts_code": "outside.SZ", "trade_date": panel.calendar[0], "pre_close": None}
+    envelope(roots[0] / "daily" / "outside.json", "daily", [row])
+    rebuild.supplemental_arrays(panel, roots)
+    assert '"completed": 100' in capsys.readouterr().out
+    row["ts_code"] = panel.codes[0]
+    envelope(roots[0] / "daily" / "outside.json", "daily", [row], {"trade_date": panel.calendar[1]})
+    with pytest.raises(ValueError, match="partition_date_mismatch"):
+        rebuild.supplemental_arrays(panel, roots)
+    with pytest.raises(ValueError, match="missing_source_api:daily"):
+        rebuild.supplemental_arrays(panel, [tmp_path / "empty"])
+
+
+def test_short_history_and_incomplete_benchmark(tmp_path):
+    """Under-26-bar securities keep missing technical values; duplicate benchmark is rejected."""
+    panel, source, roots, benchmark = fixture(tmp_path, 3)
+    matrices, _ = rebuild.build_signals(panel, source, roots, benchmark, tmp_path / "short")
+    assert np.isnan(matrices["atr"]).all()
+    rows = rebuild.read_envelope(benchmark)
+    envelope(benchmark, "index_daily", rows + [rows[0]])
+    with pytest.raises(ValueError, match="incomplete_or_duplicate_benchmark"):
+        rebuild.build_signals(panel, source, roots, benchmark, tmp_path / "bad")
+
+
+def test_rebuild_axis_mismatch_rejected_before_computation(tmp_path):
+    """Declared panel/security axes must match even when each manifest can be parsed."""
+    panel = tmp_path / "panel"
+    source = tmp_path / "source"
+    panel.mkdir()
+    source.mkdir()
+    (panel / "panel.json").write_text(
+        json.dumps({"calendar": [], "codes": [], "values": [], "signals": [], "market": []})
+    )
+    (source / "dataset.json").write_text(json.dumps({"calendar": ["20211018"], "securities": []}))
+    spec = tmp_path / "spec.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "schema": "return80-rebuild/v1",
+                "panel": "panel",
+                "source_dataset": "source",
+                "raw_roots": [],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="rebuild_source_axis_mismatch"):
+        rebuild.rebuild_matrices(spec, tmp_path / "output")
+
+
+def test_labels_include_corporate_actions_and_progress(capsys):
+    """Dated dividends reach independent labels; progress counts every processed row."""
+    from tushare_entitlement_hub.regime_research.accounting import Distribution
+
+    panel, _ = allocation_fixture()
+    panel.values["raw_close"][2, 0] = 12.0
+    axis = {
+        "days": np.zeros(10000, dtype=int),
+        "securities": np.zeros(10000, dtype=int),
+        "common": np.zeros(10000, dtype=bool),
+    }
+    axis["common"][0] = True
+    event = Distribution(0, 1, 2, 2, 2, 0.1, 0.0)
+    labels = rebuild.build_labels(panel, axis, [event])
+    assert labels[0, 3] == 3 and np.isfinite(labels[0, 0])
+    assert (labels[1:, 3] == 0).all()
+    assert '"completed": 10000' in capsys.readouterr().out
+
+
+def test_signal_progress_counts_securities(tmp_path, capsys):
+    """Multi-security reconstruction reports completed securities, not elapsed percentages."""
+    panel, source, roots, benchmark = fixture(tmp_path, 30)
+    panel.codes = [f"{index:06d}.SZ" for index in range(1, 101)]
+    for code in panel.codes[1:]:
+        (source / (code + ".npz")).hardlink_to(source / "000001.SZ.npz")
+    panel.values = {key: np.repeat(value, 100, axis=1) for key, value in panel.values.items()}
+    rebuild.build_signals(panel, source, roots, benchmark, tmp_path / "signals")
+    assert '"completed": 100, "total": 100' in capsys.readouterr().out
