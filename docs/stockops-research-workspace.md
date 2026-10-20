@@ -13,7 +13,8 @@
 ```bash
 git clone https://github.com/songyaolun/tushare-15000-data-platform.git
 cd tushare-15000-data-platform
-git switch feat/return80-research-portability
+git switch main
+git pull --ff-only
 git pull --ff-only
 git rev-parse HEAD
 env -u PYTHONPATH uv sync --frozen --python 3.11 --extra rebuild --extra training
@@ -28,7 +29,18 @@ env -u PYTHONPATH uv run --frozen --extra rebuild --extra training return80-rese
 研究代码与 StockOps App 分开安装。App 是每日运行与推送入口，本仓负责数据研究和训练；
 新机器无需安装 App，也无需设置跨仓 `PYTHONPATH`。
 
-已交付103MB ZIP解压后：
+已有冻结数据可通过两个本地导出包搬运到另一台机器，不要求两机在同一内网：
+
+| 文件 | 用途 | 字节数与 SHA256 |
+|---|---|---|
+| `half126-training-20261020.zip` | 原47列、候选轴、标签和权重，约103MB | `103398538`；`588734d35352918a58d733665f45bb52431c73766f7c19b5a47c3b59dc0f2e0a` |
+| `half126-replay-20261020.zip` | 完整回放输入与旧模型原生分数，约895MB | `895200806`；`0de7b1a981602930284b0afff2d4b1a811979aa97de955f0ea395b34c638257e` |
+
+本机导出位于 `~/stockops-exports/`，它是本地路径，不能当作新机器的下载URL。
+传输后用 `shasum -a 256 文件名.zip` 核对，再解压。ZIP不含原始接口全历史；需要
+新增数据时仍按后面的采集计划取数。数据不进入Git。
+
+训练包解压后：
 
 ```bash
 uv run --frozen return80-research import-training --bundle /你的路径/half126-training-20261020 --output /你的路径/research/training
@@ -41,7 +53,9 @@ uv run --frozen return80-research import-training --bundle /你的路径/half126
 
 ## 新增Tushare数据和特征
 
-采集复用现有HTTPS Client、RawStore、限流、重试和完整分页。传公开JSON计划，不传Token：
+采集复用现有HTTPS Client、RawStore、限流、重试和完整分页。凭据统一使用
+`data/secrets/tushare.env`，按[README 的凭据约定](../README.md#tushare-凭据约定)
+在本机配置；命令显式传入路径，程序不自动加载。传公开JSON计划，不传Token：
 
 ```json
 {"schema":"return80-collection-plan/v1","requests":[{"api":"daily_basic","parameters":{"trade_date":"20261016"},"fields":["ts_code","trade_date","turnover_rate"],"primary_key":["ts_code","trade_date"],"page_size":3000,"maximum_pages":10}]}
@@ -51,7 +65,7 @@ uv run --frozen return80-research import-training --bundle /你的路径/half126
 报告身份主键，不能假设ts_code/end_date就足以区分所有版本。接口是否授权以实际返回为准。
 
 ```bash
-uv run --frozen return80-research collect --plan plan.json --output raw-study --credential-file /你的私有目录/tushare.env --live
+uv run --frozen return80-research collect --plan plan.json --output raw-study --credential-file data/secrets/tushare.env --live
 ```
 
 默认每分钟60次，可用`--rate-per-minute`调整。无`--live`失败关闭。每分区保留原始响应、
@@ -88,7 +102,10 @@ uv run --frozen return80-research export-replay --cache-root /原机器缓存 --
 
 这一步在已有原数据的机器运行一次，再通过操作者选择的文件传输方式搬运整个目录。
 它包含约 1.8GB 行情面板及候选、旧评分、公司行动，每个文件有 SHA。
-103MB 训练 ZIP 不包含回放行情。若不搬运行情，可以在新机执行后文重建流程，
+回放包已将这个目录打包；解压得到 `half126-replay-20261020/` 和
+`half126-baseline-20261020/`。前者给 `replay --dataset`，后者的 `scores.npy` 给
+`--scores` 即可回放旧模型；其 `protocol.json` 保存分数SHA和原配置。训练 ZIP
+不包含回放行情。若不搬运行情，可以在新机执行后文重建流程，
 使用它生成的 `rebuilt/replay`；这属于新数据版本，须与同次生成的训练数据配套。
 
 训练后保存全部候选预测到predictions.npy，再映射并按原配置回放：
@@ -123,9 +140,9 @@ StockOps domain源码，而不是依赖旁边恰好存在的成员checkout。精
 # 先生成目录/日历请求；以下写的目录均由操作者指定。
 uv run --frozen --extra rebuild return80-research make-plan --start 20200101 --end 20261016 --output bootstrap-plan.json
 # 真采集要显式--live，密钥文件为本机私有文件；不要把Token写进命令。
-uv run --frozen --extra rebuild return80-research collect --plan bootstrap-plan.json --output bootstrap --credential-file /private/tushare.env --live
+uv run --frozen --extra rebuild return80-research collect --plan bootstrap-plan.json --output bootstrap --credential-file data/secrets/tushare.env --live
 uv run --frozen --extra rebuild return80-research make-plan --start 20200101 --end 20261016 --bootstrap bootstrap --output history-plan.json
-uv run --frozen --extra rebuild return80-research collect --plan history-plan.json --output history-collection --credential-file /private/tushare.env --live
+uv run --frozen --extra rebuild return80-research collect --plan history-plan.json --output history-collection --credential-file data/secrets/tushare.env --live
 uv run --frozen --extra rebuild return80-research materialize-sources --bootstrap bootstrap --collection history-collection --output sources
 uv run --frozen --extra rebuild return80-research prepare-sources --sources sources --output prepared
 uv run --frozen --extra rebuild return80-research rebuild-matrices --spec prepared/rebuild.json --output rebuilt
