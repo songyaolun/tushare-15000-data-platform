@@ -124,7 +124,7 @@ MKL 均为 1；这不是算法要求。机器有 64 核 affinity，各级 cgroup
 检查点固定三个产物SHA。范围修订独立记录于`verification-policy-pre-registration.json`，
 旧训练和进度版本仍分别保留，不覆盖其协议或源码证据。
 
-本次旧三个进程仍只有protocol，模型/原生分数仅在内存；旧函数无安全中途导出入口。
+政策修订时，旧三个进程只有protocol，模型/原生分数仅在内存；旧函数无安全中途导出入口。
 不注入进程代码、不破坏模型、不为跳过便携校验重新训练，因而无法即时解除这次已进入的
 循环。这是旧代码持久化顺序的限制，不再把全量便携校验解释成研究收益比较的政策要求。
 
@@ -133,3 +133,20 @@ MKL 均为 1；这不是算法要求。机器有 64 核 affinity，各级 cgroup
 保存同一portable模型和逐字节相同native scores；模拟便携检查失败后，原生检查点与
 三份产物哈希仍有效且没有成功portable审计。新增模块语句/分支目标100%。未改回放
 计算，不重跑已通过的等权8账户；无UI/跨端变化，浏览器仍not applicable。
+
+## 最终执行结果与本次适用性
+
+2026-10-20本轮完成全部32账户、24套独立核账和192个可用窗口SQL复算，均通过。
+三个模型维持47列、51200树、490655成熟训练行，原程序全量便携误差均为零；
+本轮未重启模型。最终完整性核对1774输入、71原源码及后续74/75源码快照链，
+产物清单包含980项，后处理11步退出码均为0。新政策实现固定为
+`7329e53f78efb9f42027091faa03dda09938a1c4`，原执行revision仍为
+`3dcb683b336dae12fab7d3c3f8f801db0feab18a`。
+
+证据：`recent-weighting/all-results.json`、`final-integrity.json`、
+`artifact-manifest.json`、`postprocess-results.json`及各arm的账户CSV、
+`audit-results-*.json`、`period-sql-*.json`。完整结果写入
+`docs/stockops-recent-weighting-20261020.md`，未删除较早年份退化或不利成本账户。
+本次最终提交仅更新报告、重建指南与验收记录，可执行行为变化为not applicable；
+沿用已通过门禁，不重复训练、等权回放或全量测试。未改UI，浏览器/跨端不适用，
+未进行Mac实机验证；开发分支和MR更新之外没有新增外部副作用。

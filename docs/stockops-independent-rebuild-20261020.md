@@ -1,7 +1,9 @@
 # 在独立机器上重建 Return80 的 47 列研究数据
 
 本文面向只能访问 GitHub、使用自己 Tushare 凭据的机器。核验基于开发分支
-`feat/return80-annual250-astra` 的 `3dcb683b336dae12fab7d3c3f8f801db0feab18a`。
+`feat/return80-annual250-astra` 的原训练执行版本
+`3dcb683b336dae12fab7d3c3f8f801db0feab18a`；资源/进度和有界校验入口已更新至
+`7329e53f78efb9f42027091faa03dda09938a1c4`，以下新参数按此版本使用。
 本轮只读取既有离线数据，没有执行下文的联网采集，也没有在另一台机器完成全链路验收。
 
 **当前分支具备通用原始数据采集、研究特征库和冻结矩阵训练入口，但尚不具备从空目录
@@ -16,6 +18,7 @@
 git clone --branch feat/return80-annual250-astra \
   https://github.com/songyaolun/tushare-15000-data-platform.git
 cd tushare-15000-data-platform
+git checkout 7329e53f78efb9f42027091faa03dda09938a1c4
 git rev-parse HEAD
 env -u PYTHONPATH uv sync --frozen --python 3.11
 env -u PYTHONPATH uv run --frozen tushare-hub --help
@@ -43,9 +46,10 @@ OMP/BLAS/MKL设置，用同一输入做有界短测并核对数值一致性，�
 所属路径向上核对`cpu.max`，不能只看宿主机核心数。GPU驱动可用时以`nvidia-smi`核验。
 已运行任务改变设置前先评估重启成本，不为了补日志重新训练已完成拟合的模型。
 
-新训练默认输出框架迭代和fit/native_predict/portable_verify阶段，长阶段30秒心跳；
-`--training-verbose 0`只关框架逐轮信息，`--quiet-progress`关闭新增细节。当前已加载的
-旧任务不能热加轮数日志，只能报告真实进程观测和上一次经证据确认的阶段。研究观察入口：
+新训练默认输出框架迭代和fit/native_predict/native_checkpoint/portable_verify阶段，
+长阶段30秒心跳；`--training-verbose 0`只关框架逐轮信息，`--quiet-progress`关闭新增
+细节。已经加载旧源码的任务不能热加轮数日志，只能报告真实进程观测和上一次经证据
+确认的阶段。研究观察入口：
 
 ```bash
 env -u PYTHONPATH uv run --frozen --python 3.11 python \
@@ -59,8 +63,8 @@ env -u PYTHONPATH uv run --frozen --python 3.11 python \
 512行，包含首尾、各列有限值最小/最大值、首个/最后NaN及均匀代表行。预算不足以容纳
 边界时拒绝，不丢边界；检查范围与行索引SHA写入审计。原生模型/全预测/评分矩阵先落盘，
 检查点哈希写完后才进行便携导出。`--portable-validation full`仅在选定交付模型或
-导出器变更时显式使用；有界检查通过不等于完整portable认证。本轮已启动的旧进程没有
-安全中途导出接口，无法靠修改磁盘代码跳过已进入的循环，不能直接kill后重新训练。
+导出器变更时显式使用；有界检查通过不等于完整portable认证。本轮旧进程当时没有
+安全中途导出接口，无法靠修改磁盘代码跳过已进入的循环，最终保留原进程完成了计算。
 
 先导入仓库提供的公开接口目录，再查看实际登记结果：
 
