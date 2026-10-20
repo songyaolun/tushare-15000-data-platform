@@ -13,12 +13,17 @@ from tushare_entitlement_hub.store import digest
 
 
 def test_projection_keeps_legacy_bytes_and_serializes_root_once(monkeypatch):
-    """指标、贡献、门禁、共用正反证及父血缘的完整投影与旧头字节相同，每结果只序列化根一次。"""
+    """场景：显式旧产品及模型版本；预期：完整投影保持旧版字节，每结果只序列化根一次。"""
     _, results = rich_research_results(1)
     first = results[0]
     result = replace(
         first,
-        envelope=replace(first.envelope, contrary_evidence=first.envelope.evidence_refs),
+        envelope=replace(
+            first.envelope,
+            product_id="equity_research_candidates/v1",
+            model_version="equity-research/v1",
+            contrary_evidence=first.envelope.evidence_refs,
+        ),
         parent_result_ids=("parent-one",),
         predicate_results={"second": Truth.UNKNOWN, "first": Truth.TRUE},
     )

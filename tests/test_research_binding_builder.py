@@ -745,7 +745,7 @@ def test_daily_business_date_uses_market_date_across_utc_midnight(tmp_path):
 def test_builder_only_projects_consumer_numeric_fields(tmp_path):
     """只有消费注册选中的数值字段参与证书和缺口统计，其他数值列不扩大配置范围。
 
-    输入daily含open/high/low/change等非消费数值，投影排除这些列且审计不记录其单位缺口。
+    输入daily含右侧结构需要的high/low及非消费open/change，投影保留前者并排除后者。
     """
     from test_research_binding_fixture import AS_OF, write_reference
 
@@ -765,9 +765,11 @@ def test_builder_only_projects_consumer_numeric_fields(tmp_path):
         "trade_date",
         "amount",
         "vol",
+        "high",
+        "low",
     }
     result = build_research_config(write_reference(tmp_path), AS_OF)
-    excluded = {"open", "high", "low", "change"}
+    excluded = {"open", "change"}
     certificates = {
         item.field for item in result.config.foundation.certifications if item.source_api == "daily"
     }

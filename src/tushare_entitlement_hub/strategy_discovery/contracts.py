@@ -1,0 +1,87 @@
+"""策略发现的统一契约；数组按交易日×证券排列。"""
+
+from dataclasses import dataclass
+
+import numpy as np
+from numpy.typing import NDArray
+
+from ..regime_research.portfolio import PortfolioPolicy
+from ..strategy_optimization.features import FloatArray
+from .profit_protection import ProfitProtection
+
+DEFAULT_POLICY = PortfolioPolicy(switching=False, stage_allocation=False, force_rebalance=False)
+
+
+@dataclass(frozen=True)
+class StrategyDefinition:
+    """绑定独立入场、排名和退出，默认总仓90%、单票5%、行业25%。
+
+    例StrategyDefinition('volume', 'volume', mask, scores)使用默认仓位政策；
+    maximum_entry_gap=.03拒绝相对信号日绝对复权收盘高开超过3%的订单，
+    trailing_stop=.08表示任意市场阶段从持仓最高复权收盘回撤8%触发退出。
+    intraday_exits=True启用T+1日线OHLC固定止盈止损，默认False保留收盘退出模型。
+    entry_invalidation_mask单独控制入场禁止和挂单撤销；例如全False矩阵允许
+    exit_mask仅退出持仓。默认None兼容旧行为，入场禁止/撤单仍沿用exit_mask。
+    profit_protection可指定激活后收盘利润保护，默认None不改变既有退出行为。
+    maximum_pending_sessions默认3保持原待单时钟，设为1则只允许次市场日开盘买入。
+    mask和scores形状必须一致；调用方负责保持数组不变及信号计算的因果性。
+    """
+
+    name: str
+    family: str
+    entry_mask: NDArray[np.bool_]
+    scores: FloatArray
+    policy: PortfolioPolicy = DEFAULT_POLICY
+    exit_mask: NDArray[np.bool_] | None = None
+    maximum_entry_gap: float | None = None
+    trailing_stop: float = 0.0
+    intraday_exits: bool = False
+    entry_invalidation_mask: NDArray[np.bool_] | None = None
+    profit_protection: ProfitProtection | None = None
+    maximum_pending_sessions: int = 3
+
+    def __post_init__(self) -> None:
+        """检查矩阵、策略开关和退出阈值，错误配置在执行前失败。
+
+        例maximum_entry_gap=-.01或entry_mask为一维数组均抛出ValueError。
+        entry_invalidation_mask若非None，须为同形布尔矩阵，例如浮点矩阵会被拒绝。
+        分数允许NaN代表不可排名，执行时会排除这些证券。
+        """
+        if (
+            not self.name
+            or not self.family
+            or self.entry_mask.ndim != 2
+            or self.entry_mask.dtype != np.bool_
+            or self.scores.shape != self.entry_mask.shape
+            or not np.issubdtype(self.scores.dtype, np.floating)
+            or (
+                self.exit_mask is not None
+                and (
+                    self.exit_mask.shape != self.entry_mask.shape
+                    or self.exit_mask.dtype != np.bool_
+                )
+            )
+            or (
+                self.entry_invalidation_mask is not None
+                and (
+                    self.entry_invalidation_mask.shape != self.entry_mask.shape
+                    or self.entry_invalidation_mask.dtype != np.bool_
+                )
+            )
+            or self.policy.switching
+            or self.policy.stage_allocation
+            or self.policy.force_rebalance
+            or not 0 <= self.trailing_stop < 1
+            or not isinstance(self.intraday_exits, bool)
+            or type(self.maximum_pending_sessions) is not int
+            or not 1 <= self.maximum_pending_sessions <= 3
+            or (
+                self.profit_protection is not None
+                and not isinstance(self.profit_protection, ProfitProtection)
+            )
+            or (
+                self.maximum_entry_gap is not None
+                and (not np.isfinite(self.maximum_entry_gap) or self.maximum_entry_gap < 0)
+            )
+        ):
+            raise ValueError("invalid_strategy_definition")

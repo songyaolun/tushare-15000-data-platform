@@ -20,6 +20,27 @@ Build a production-oriented Python platform that maximizes the useful coverage o
 - Separate points-based interfaces, independently purchased interfaces, deprecated interfaces, and empirically unavailable interfaces.
 - Do not claim an interface is covered until its catalog policy, ingestion path, quality gate, tests, and information consumer are all present.
 
+## 训练资源与进度硬规则
+
+- 每次新训练前实时检查 CPU affinity、各级 cgroup CPU 配额、可用内存、已有负载，
+  以及 GPU 型号/显存、框架和算法是否真正支持该 GPU；同时记录 OMP、BLAS、MKL
+  线程设置。不能沿用旧机器的核数、额度或空闲状态。
+- 用同一实际输入做有界短测，核对数值一致性后选择单模型线程数与模型并行数。
+  禁止无依据单线程，也不得照搬其他机器的设置或为满载而制造资源争抢。
+  本次16线程及测得加速比只适用于本次测量，不是所有机器的固定默认。
+- 训练、原生预测、可移植推理、账户回放和核账必须及时输出真实阶段、已完成数量、
+  总数量（可知时）、耗时、心跳和明确失败阶段。训练轮数使用框架支持的真实日志；
+  CPU活跃、心跳、估算耗时都不能冒充完成百分比。
+- 已运行任务变更并行或日志前，先评估重启损失和安全接入点。已加载函数不会随磁盘
+  修改自动获得新日志；不得为补日志重启已完成拟合的任务。原执行源码/协议留快照，
+  新执行版本单独冻结，不覆盖原证据。临时暂停调度必须恢复并回读确认。
+- 资源不足、权限受限或算法不支持加速时，报告实测约束及可用方案；不虚构GPU支持、
+  轮数进度或剩余时间。日志只记公开任务元数据，不输出凭据、样本内容或异常私密载荷。
+- 研究收益比较默认使用原生模型分数；先保存原生模型、完整预测及其哈希检查点，再做
+  固定代表行、有限值极端和NaN边界的有界便携一致性检查。不得对每个研究arm强制运行
+  全量独立portable预测。完整校验只在选定交付模型或导出器变更时显式运行；未全量验证
+  的portable文件不得称为已完整认证。输入、标签、账本和交易规则核验继续保留。
+
 ## Delivery rules
 
 - Implement changes on a feature branch and create a Merge Request targeting `main`.

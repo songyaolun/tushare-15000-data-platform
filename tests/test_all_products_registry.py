@@ -12,13 +12,13 @@ from tushare_entitlement_hub.product_foundation.registry import load_registry
 
 
 def test_registry_has_exact_unique_matrix_entries_and_callable_handlers():
-    """场景：权威消费矩阵；预期：206项归属默认13产品，另有三个显式排名产品。"""
+    """场景：权威消费矩阵；预期：206项归属统一13产品，不再注册三套周期排名。"""
     entries = registry.registrations()
     matrix = {entry.api: entry for entry in load_registry()}
     assert len(entries) == len({entry.spec.api for entry in entries}) == 206
     assert {entry.spec.product for entry in entries} == set(registry.DEFAULT_PRODUCTS)
     assert len(registry.DEFAULT_PRODUCTS) == 13
-    assert len(registry.PRODUCTS) == 16
+    assert len(registry.PRODUCTS) == 13
     assert (
         Counter(
             entry.spec.product for entry in entries if entry.spec.product in registry.NEW_PRODUCTS
@@ -68,9 +68,6 @@ def test_handler_resolver_rejects_missing_callable(monkeypatch):
         (("P03",), ("P04", "P06", "P07", "P03")),
         (("P13",), ("P04", "P06", "P07", "P13")),
         (("P03", "P13"), ("P04", "P06", "P07", "P03", "P13")),
-        (("P03S",), ("P04", "P06", "P07", "P03S")),
-        (("P03M",), ("P04", "P06", "P03M")),
-        (("P03L",), ("P04", "P06", "P03L")),
     ],
 )
 def test_product_selection_expands_dependencies_and_deduplicates(selection, expected):
@@ -89,10 +86,11 @@ def test_all_and_portfolio_selection_cover_thirteen_products():
 
 
 def test_optional_rankings_reuse_explicit_source_products():
-    """场景：三个可选榜单读取原有来源；预期：短中期复用P03，长期另读取P04三表。"""
-    assert registry.source_products("P03S") == frozenset({"P03"})
-    assert registry.source_products("P03M") == frozenset({"P03"})
-    assert registry.source_products("P03L") == frozenset({"P03", "P04"})
+    """场景：统一P03读取自身来源；预期：三榜不再是有效选择。"""
+    assert registry.source_products("P03") == frozenset({"P03"})
+    for alias in ("P03S", "P03M", "P03L"):
+        with pytest.raises(ValueError, match="unknown_all_products_selection"):
+            registry.select_products((alias,))
     assert registry.source_products("P05") == frozenset({"P05"})
 
 
