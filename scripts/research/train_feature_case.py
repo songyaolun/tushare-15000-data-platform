@@ -21,6 +21,7 @@ from tushare_entitlement_hub.strategy_discovery.frozen_feature_combination impor
 )
 from tushare_entitlement_hub.strategy_discovery.joint_exit_scoring import exit_training_targets
 from tushare_entitlement_hub.strategy_discovery.model_capacity import resolve_model_capacity
+from tushare_entitlement_hub.strategy_discovery.training_weights import daily_equal_training_weights
 
 
 def digest(path: Path) -> str:
@@ -34,6 +35,8 @@ def main() -> None:
     Example: --spec experiment.json --case event+quality creates only that case in
     spec.output_root. Existing output fails closed, preventing silent replacement.
     Every model uses the original full-sample labels and daily weights. Optional
+    spec.half_life_sessions applies predeclared trading-session decay; spec.training_cutoff
+    defaults to the final panel date and rejects any selected label not yet mature.
     spec.model_capacity explicitly overrides only tree depth, leaves or rounds;
     omitted overrides preserve the original parameters exactly.
     """
@@ -67,9 +70,11 @@ def main() -> None:
     if int(fit.sum()) != spec["fit_rows"]:
         raise ValueError("changed mature fit axis")
     response = targets[mature[closed], 0]
-    _, inverse, counts = np.unique(axis["days"][fit], return_inverse=True, return_counts=True)
-    weights = 1 / counts[inverse].astype(float)
-    weights /= weights.mean()
+    weights, weight_audit = daily_equal_training_weights(
+        axis["days"][fit], labels[fit, 2], calendar,
+        cutoff=spec.get("training_cutoff", calendar[-1]),
+        half_life_sessions=spec.get("half_life_sessions"),
+    )
     items = [spec["baseline_additional"]] + [
         spec["groups"][key] for key in spec["cases"][args.case]
     ]
@@ -106,6 +111,7 @@ def main() -> None:
         "sklearn_version": sklearn.__version__,
         "blocks": items,
         "placebo": placebo_audit,
+        "training_weights": weight_audit,
         "historical_pit_certified": False,
         "sample": "full five-year fit and selection; no financial holdout",
     }
