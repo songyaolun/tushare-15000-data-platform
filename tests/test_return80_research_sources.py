@@ -70,6 +70,9 @@ def test_plans_require_valid_dates_and_use_explicit_historical_partitions(tmp_pa
         item["api"] == "income_vip" and item["parameters"]["period"] == "20241231"
         for item in requests
     )
+    assert {
+        item["api"] for item in requests if item["parameters"].get("period") == "20260930"
+    } == {"forecast_vip", "fina_indicator_vip", "income_vip"}
     assert len([item for item in requests if item["api"] == "daily"]) == 2
     assert all("cashflow" not in item["api"] for item in requests)
     for start, end in [("bad", "20261020"), ("20261021", "20261020")]:

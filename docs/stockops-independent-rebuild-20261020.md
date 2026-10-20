@@ -1,119 +1,30 @@
 # 在独立机器上重建 Return80 的 47 列研究数据
 
-本文面向只能访问 GitHub、使用自己 Tushare 凭据的机器。核验基于开发分支
-`feat/return80-annual250-astra` 的原训练执行版本
-`3dcb683b336dae12fab7d3c3f8f801db0feab18a`；资源/进度和有界校验入口已更新至
-`7329e53f78efb9f42027091faa03dda09938a1c4`，以下新参数按此版本使用。
-本轮只读取既有离线数据，没有执行下文的联网采集，也没有在另一台机器完成全链路验收。
+本文保留原 half126 训练的逐列公式、数据范围及历史来源，原执行版本为
+`3dcb683b336dae12fab7d3c3f8f801db0feab18a`。跨机器的现行命令、安装方式与产物契约
+以 [独立研究机工作流](stockops-research-workspace.md) 为准；验收见
+[研究迁移 E2E](e2e/return80-research-portability.md)。
 
-**当前分支具备通用原始数据采集、研究特征库和冻结矩阵训练入口，但尚不具备从空目录
-生成本轮全部 47 列、标签和收益账户的一键入口。** 部分生产者仍在私有实验脚本或其他
-研究分支中。下文给出实际命令、逐列公式、数据范围及缺口；不能把本机缓存路径当成
-远程机器能够下载的文件。GPU 不改变数据口径；本轮使用 CPU 的 sklearn HGB，未实现
-或验证 GPU 训练替代方案。
-
-## 获取代码与准备环境
-
-```bash
-git clone --branch feat/return80-annual250-astra \
-  https://github.com/songyaolun/tushare-15000-data-platform.git
-cd tushare-15000-data-platform
-git checkout 7329e53f78efb9f42027091faa03dda09938a1c4
-git rev-parse HEAD
-env -u PYTHONPATH uv sync --frozen --python 3.11
-env -u PYTHONPATH uv run --frozen tushare-hub --help
-env -u PYTHONPATH uv run --frozen tushare-hub reference build --help
-env -u PYTHONPATH uv run --frozen tushare-hub ingest plan --help
-```
-
-交付时须核对 GitHub 与 Codebase 同一分支的精确 SHA；不以分支名代替版本固定。
-`uv.lock` 固定项目依赖，但当前模型还要求 `scikit-learn==1.9.1`，它不在项目基础依赖中。
-模型命令须显式加 `--with scikit-learn==1.9.1`；离线执行再加 `--offline`，前提是该机器
-已经下载对应包。新机器不能假定本机 uv 缓存存在。清除 `PYTHONPATH`，不要用另一份
-源码覆盖已安装模块来掩盖缺依赖。
+`feat/return80-research-portability` 已补入原特征计算器，发布采集、规范化、面板、
+47 列/标签重建和回放入口。原私有脚本只作为历史血缘记录，新入口不执行它们。
+重建使用固定 StockOps domain 依赖，训练使用 `training` extra 的 sklearn 1.9.1。
+本次使用本地归档和离线 fixture 验收，没有执行真实联网采集或 GPU 训练。
 
 Tushare 凭据放在仓库外、权限为 `0600` 的 dotenv 文件，内容键为 `TUSHARE_TOKEN`。
 命令只传文件路径；读取实现为 `src/tushare_entitlement_hub/credentials.py`。
 使用自己的实际接口权限和频率限制；15000 积分或目录中存在接口不等于所有接口均获授权。
 
-## 原始下载入口及其边界
+## 下载与训练入口
 
-每次新训练先实时检查CPU affinity、cgroup各级配额、可用内存和已有负载，再确认GPU
-型号/显存以及所用算法是否支持GPU；GPU存在不等于sklearn HGB能够使用它。记录
-OMP/BLAS/MKL设置，用同一输入做有界短测并核对数值一致性，再选择模型并行数和每模型
-线程数。本次3×16只适用于当前64核机器的实测，不是跨机器固定配置。Linux可用
-`lscpu`、`taskset -pc $$`、`cat /proc/self/cgroup`、`free -h`、`ps`查看资源；沿cgroup
-所属路径向上核对`cpu.max`，不能只看宿主机核心数。GPU驱动可用时以`nvidia-smi`核验。
-已运行任务改变设置前先评估重启成本，不为了补日志重新训练已完成拟合的模型。
+现行可执行步骤集中维护在独立研究机工作流中：先生成 bootstrap 计划并采集目录和
+交易日历，再按这些真实实体扩展历史计划。采集完成后转换成既有 history、dataset
+和 panel，最后重建候选、47 列、标签、权重和回放输入。可选新特征独立生成，再按
+证券及信号日追加。新机自己取得的数据不写回原实验归档。
 
-新训练默认输出框架迭代和fit/native_predict/native_checkpoint/portable_verify阶段，
-长阶段30秒心跳；`--training-verbose 0`只关框架逐轮信息，`--quiet-progress`关闭新增
-细节。已经加载旧源码的任务不能热加轮数日志，只能报告真实进程观测和上一次经证据
-确认的阶段。研究观察入口：
-
-```bash
-env -u PYTHONPATH uv run --frozen --python 3.11 python \
-  scripts/research/watch_return80_progress.py --root /你的研究产物目录 --pid 你的进程号
-```
-
-该观察器适用本次四模型32账户目录协议；只读转发日志及已保存的完成数，不下载数据，
-不启动任务，不以CPU活跃或elapsed冒充完成百分比。实际运行请把目录和PID替换为本机值。
-
-研究默认`--portable-validation bounded`：回放使用完整native scores，便携检查最多
-512行，包含首尾、各列有限值最小/最大值、首个/最后NaN及均匀代表行。预算不足以容纳
-边界时拒绝，不丢边界；检查范围与行索引SHA写入审计。原生模型/全预测/评分矩阵先落盘，
-检查点哈希写完后才进行便携导出。`--portable-validation full`仅在选定交付模型或
-导出器变更时显式使用；有界检查通过不等于完整portable认证。本轮旧进程当时没有
-安全中途导出接口，无法靠修改磁盘代码跳过已进入的循环，最终保留原进程完成了计算。
-
-先导入仓库提供的公开接口目录，再查看实际登记结果：
-
-```bash
-mkdir -p "$HOME/return80-rebuild"
-env -u PYTHONPATH uv run --frozen tushare-hub \
-  --db "$HOME/return80-rebuild/hub.duckdb" \
-  catalog sync --fixture fixtures/catalog/official
-env -u PYTHONPATH uv run --frozen tushare-hub \
-  --db "$HOME/return80-rebuild/hub.duckdb" catalog list
-```
-
-目录 fixture 不等于市场数据。若目标接口未登记，须先核验目录政策；公开文档更新入口是
-`catalog sync --online`，它会联网。下面是**明确范围的真实采集命令示例**，仅下载两个
-交易日的 `daily`，不声称已覆盖五年全市场：
-
-```bash
-env -u PYTHONPATH uv run --frozen tushare-hub \
-  --db "$HOME/return80-rebuild/hub.duckdb" \
-  ingest plan daily 2026-10-15 2026-10-16 --live \
-  --output "$HOME/return80-rebuild/daily-plan.json"
-env -u PYTHONPATH uv run --frozen tushare-hub \
-  --db "$HOME/return80-rebuild/hub.duckdb" \
-  ingest run "$HOME/return80-rebuild/daily-plan.json" --live \
-  --credential-file "$HOME/.config/tushare/credentials.env" \
-  --raw-directory "$HOME/return80-rebuild/raw"
-```
-
-`reference build` 也可按接口声明全部分区，生成通用原始页、Parquet 和 DuckDB。
-参数文件为 `{ "接口名": {"参数": "值"} }`，同一接口多个分区可用对象数组。
-例如 `{"stock_basic":[{"list_status":"L"},{"list_status":"D"},{"list_status":"P"}]}`
-声明三个证券状态；完整性仍须按返回分页、状态和字段核验。已有目录与参数文件后执行：
-
-```bash
-env -u PYTHONPATH uv run --frozen tushare-hub \
-  --db "$HOME/return80-rebuild/hub.duckdb" \
-  reference build --live --apis stock_basic \
-  --credential-file "$HOME/.config/tushare/credentials.env" \
-  --parameters "$HOME/return80-rebuild/stock-basic-parameters.json" \
-  --output "$HOME/return80-rebuild/reference"
-env -u PYTHONPATH uv run --frozen tushare-hub \
-  reference rebuild --output "$HOME/return80-rebuild/reference"
-```
-
-最后一条为离线回建。通用采集器不会自动把这些目录转换成本轮 `history.duckdb`、
-`panel.json` 或候选矩阵。`strategy-optimize collect-history` 要求现成交易日历，
-`regime-research collect` 要求现成 `dataset.json`；`signal-research run` 读取已认证的
-`history_root`，不是空目录下载器。`strategy-discovery prepare` 生成通用研究特征，
-也不直接生成本轮 36 列或 47 列。上述入口的事实来源为对应包的 `cli.py`。
+`return80-research train` 实时检查本机资源，使用实际训练输入短测线程数，输出
+阶段、框架轮数及长阶段心跳。先保存原生模型和完整分数，不自动执行全量便携校验。
+旧 `scripts/research/train_feature_case.py` 与进度观察器继续服务历史实验协议，
+不作为新机默认入口。GPU 存在不代表当前 sklearn HGB 能使用它。
 
 ## 原始数据范围与完整性
 
@@ -141,7 +52,7 @@ env -u PYTHONPATH uv run --frozen tushare-hub \
 
 财务来源清单还包含 `cashflow_vip` 的 86 页、218900 行。原 3 列质量构建器读取了它，
 但当前 47 列已删除 `cash_profit_backing`，只保留质量前两列；新的最小构建器可以不依赖
-现金流，现有私有构建路径仍会读取。不能因历史清单里有现金流就把现金列加回模型。
+现金流；旧实验构建路径仍会读取。不能因历史清单里有现金流就把现金列加回模型。
 
 每次采集保存接口、完整参数、offset/limit、返回行数、观察时间、原始响应 SHA256，
 分页至真实结束并检查截断、重复主键及冲突。逐证券日核对上市、退市、停牌、应有行情、
@@ -217,10 +128,10 @@ A 为元成交额，M 为上述主力净额，VR 为 `daily_basic.volume_ratio`�
 前9%且至少3家。成员区间为 `in_date<=T<out_date`，空 out_date 仍在；并列不强拆。
 它们与第13–16列的行业聚合口径分开保存，不能相互替换。
 
-上述信号的实际生产者为私有 `stockops-pit-validation-20261018/batch.py` 的
+上述信号的原归档生产者为 `stockops-pit-validation-20261018/batch.py` 的
 `stock_signals` 及 `stockops-pit-redesign-20261018/export_candidates.py` 的
-`sector_hits`；Spring、抗跌还调用 StockOps 的 `local_strategies.py`。当前开发分支
-没有这些完整生产者，表格不应被误读为已发布实现。
+`sector_hits`；Spring、抗跌还调用 StockOps 的 `local_strategies.py`。现行重建复用
+固定 domain 的 `stock_signals`、`sector_signal_hits` 和评分函数，具体 SHA 见迁移 E2E。
 
 | 序号 | 列名 | 公式、可见时间与缺失 |
 |---|---|---|
@@ -272,7 +183,7 @@ capitalization、已知行业、当日原始amount≥20000千元及涨跌停带�
 `2**(-(截止日索引−信号日索引)/H)`，最后除以全体均值。等权不乘衰减，H只取126/252/504。
 全五年样本内拟合；2026空仓重置不使模型变成2026年初可知。
 
-## 当前九份训练输入与尚未发布的生产链
+## 原归档输入与现行重建入口
 
 下列均是本机冻结中间产物的相对缓存路径，**不是下载地址**：
 
@@ -288,25 +199,22 @@ capitalization、已知行业、当日原始amount≥20000千元及涨跌停带�
 | `stockops-cash-quality-audit-20261020/quality-without-cash.npy` | 2质量列 |
 | `stockops-next-experiments-20261019/valuation/candidate-features.npy` | 1估值列 |
 
-训练入口为 `scripts/research/train_feature_case.py`，要求已生成且SHA匹配的spec及输入。
-spec中的 `candidate_sectors.npy` 只供 `event_placebo` 使用，本轮半衰期案例不读取。
-完整回放还需要panel全部 signals/values/market数组、旧eligible/scores/technical_risk/
-frozen-inference、分红与distribution-resolutions，以及私有context/sector-cap脚本。
-`scripts/replay_return80_ablation.py` 当前仍通过 `runpy` 读取这些私有脚本；九文件不能
-替代回放数据。独立核源另外读取认证的 `history.duckdb`。
+`scripts/research/train_feature_case.py` 保留旧 spec 兼容。现行入口为
+`return80-research import-training` 或 `rebuild-matrices`，输出统一 `training/` 数据集，
+再由 `train` 训练。旧 spec 中的 `candidate_sectors.npy` 只供 `event_placebo` 使用，
+本轮半衰期案例不读取。九份训练输入不含回放所需的完整行情；回放使用独立 `replay/`
+目录，包含 panel 全部数组、eligible、legacy_scores、technical_risk 和分红。
 
-| 缺口 | 当前事实及补齐验收 |
+| 原先缺少的部分 | 现行入口与来源 |
 |---|---|
-| 原始数据→认证history→dataset/panel | 通用采集目录与研究消费者之间缺少本轮完整、无本机路径的编排；须发布完整参数/分页/规范化/覆盖审计入口，再从空目录验证 |
-| 20信号、旧评分与候选轴 | 上述batch/export/labels脚本及冻结strategies配置未进入本分支；还依赖StockOps模块及其精确revision，不能只复制20个名字 |
-| 筹码与预告6列 | `chip_features.py` 在筹码研究checkout，`earnings_features.py`及`research_history/earnings_audit.py`在预告checkout；合并6列的可调用生产者未在当前分支找到 |
-| 事件2列 | `forecast_event_reaction.py`与私有event/build.py未进入本分支；原source revision为 `662ccd39b3c397467dc0245daed9819acaaf39e7` |
-| 财务与估值3列 | `financial_quality_features.py`、`financial_quality_artifacts.py`及构建包装不在本分支；原source revision为 `2f8fa58f2c42b1228eab363259ae21ba3775611e` |
-| 标签与收益回放 | 私有long-label生产者和context/sector-cap编排仍未移植；须发布参数化入口及离线测试，不能把本机绝对路径当安装步骤 |
+| 原始数据与面板编排 | `make-plan`、`collect`、`materialize-sources`、`prepare-sources` |
+| 20 信号、旧评分与候选轴 | `return80_research.rebuild`，复用固定 domain 的信号与评分函数 |
+| 筹码、预告和事件 | 计算器与原测试已移入研究库；47 列重建调用固定 domain 的附加特征函数 |
+| 财务与估值 | 计算器与原测试已移入；重建只保留原两列质量及一列估值，不加回现金质量列 |
+| 标签与收益回放 | `build_labels` 复用独立成交标签；`replay` 与 `replay_inputs` 消除缓存脚本依赖 |
 
-这些源revision只说明当时材料来源；本文未验证它们均已推送GitHub、依赖可安装或与当前
-开发分支相容。正式补齐时先提交依赖实现及测试，再固定已推送SHA，最后在无本机缓存、
-无PYTHONPATH环境验收。当前研究输入不因补入口而重抓或改写。
+具体依赖 SHA、离线测试与真实归档核对结果统一维护在研究迁移 E2E 计划中。
+原归档不因补入口而改写；所有重建和实验产物写入新目录。
 
 ## 重建结果应如何验收
 
@@ -321,6 +229,6 @@ frozen-inference、分红与distribution-resolutions，以及私有context/secto
 需要精确重现旧收益时，必须有合法取得的原版本原始快照及全部生产代码；本机缓存
 并未作为远程可下载包交付。
 
-本页属于命令与数据血缘说明，不新增可执行行为；浏览器/跨端验收不适用。完整实验
-门禁见 [近期加权E2E计划](e2e/annual250-recent-weighting-20261020.md)。新机器的联网
+本页属于命令与数据血缘说明，不新增可执行行为；浏览器/跨端验收不适用。现行迁移
+门禁见 [研究迁移E2E计划](e2e/return80-research-portability.md)。新机器的联网
 下载属于独立执行阶段；本轮没有运行行情API、部署、通知、真实交易或调度注册。

@@ -3,8 +3,8 @@
 面向 15,000 积分账户的可审计数据平台。持续登记接口与权益，按政策采集、保留历史版本，并生成信息产品与覆盖债务。独立购买接口和不确定文档不会被误计为已开通。
 
 ```bash
-uv sync --all-extras --dev
-uv run tushare-hub --help
+uv sync --frozen --all-extras --dev
+uv run --frozen --all-extras tushare-hub --help
 uv run --no-project bash scripts/demo.sh
 ```
 
@@ -20,6 +20,8 @@ uv run --no-project bash scripts/demo.sh
 - [产品加工基础层](docs/产品加工基础层.md)
 - [产品说明书](docs/产品说明书.md)
 - [股票研究闭环](docs/股票研究闭环.md)
+- [StockOps 独立研究机工作流](docs/stockops-research-workspace.md)
+- [Return80 47 列公式与历史数据范围](docs/stockops-independent-rebuild-20261020.md)
 - [P03 MACD 独立条件回测](docs/P03-MACD独立条件回测.md)
 - [P03 量价、主题与买卖点优化](docs/P03量价与主题优化.md)
 - [P03 市场阶段与组合归因](docs/P03市场阶段与组合归因.md)
@@ -30,9 +32,9 @@ uv run --no-project bash scripts/demo.sh
 - [跨市场与融资研究](docs/跨市场与融资研究.md)
 
 ```bash
-uv run ruff check .
-uv run mypy
-uv run pytest --cov=tushare_entitlement_hub --cov-report=term-missing --cov-fail-under=100
+uv run --frozen --all-extras ruff check .
+uv run --frozen --all-extras mypy
+uv run --frozen --all-extras pytest -m "not resource_intensive" --cov=src/tushare_entitlement_hub --cov-report=term-missing --cov-fail-under=100
 ```
 
 官方目录来自 [Tushare 接口文档](https://tushare.pro/document/2) 和 [积分与独立权限总表](https://tushare.pro/document/1?doc_id=290)。固定快照与抓取清单位于 fixtures/catalog/official。线上文档同步需显式执行 `catalog sync --online`；真实数据请求另需显式 live 选项。

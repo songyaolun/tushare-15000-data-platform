@@ -1,14 +1,32 @@
 # StockOps 独立研究机工作流
 
-本指南对应 `feat/return80-research-portability` 开发阶段。当前已实现冻结数据导入、
-显式原始采集计划、日频新特征、按日期证券拼接、预测矩阵映射和无私有脚本的收益回放。
-原始47列从零重建和训练便捷入口仍在本任务后续节点验收；不能将此阶段称为全部完成。
+另一台机器只需 GitHub 代码、uv 和自己的数据目录。研究入口已提供原始数据采集、
+47 列与标签重建、训练、新特征追加和收益回放；不需要复制开发机缓存中的 Python 脚本。
+最终验收记录见 [E2E 计划](e2e/return80-research-portability.md)。
+
+已有冻结训练包时，先走下文的导入流程，最快开始训练。要增加数据、重算特征或更新日期，
+走“从原始数据重建”流程。重新下载得到供应商当前提供的历史版本，应单独冻结，
+不能因为日期相同就假定与旧归档、旧收益完全一致。
 
 ## 安装与数据
 
-使用GitHub研究仓代码及冻结uv环境：`uv sync --frozen --python 3.11 --extra training`。
-训练额外依赖固定 `scikit-learn==1.9.1`；数据命令本身不需要sklearn。
-`uv run --frozen return80-research --help` 列出已安装入口，不需要执行仓库外脚本。
+```bash
+git clone https://github.com/songyaolun/tushare-15000-data-platform.git
+cd tushare-15000-data-platform
+git switch feat/return80-research-portability
+git pull --ff-only
+git rev-parse HEAD
+env -u PYTHONPATH uv sync --frozen --python 3.11 --extra rebuild --extra training
+env -u PYTHONPATH uv run --frozen --extra rebuild --extra training return80-research --help
+```
+
+按最终交付记录的完整 SHA 固定代码，后续更新也应记录新 SHA。安装需要访问 GitHub
+及包源；`rebuild` 的三个 StockOps 依赖已固定提交，GitHub SSH 访问需在新机器配置好。
+只导入数据训练时可以省去 `--extra rebuild`。每次 `uv run` 仍须带需要的 extra，
+避免 uv 将刚安装的可选依赖同步移除。训练依赖固定 `scikit-learn==1.9.1`。
+
+研究代码与 StockOps App 分开安装。App 是每日运行与推送入口，本仓负责数据研究和训练；
+新机器无需安装 App，也无需设置跨仓 `PYTHONPATH`。
 
 已交付103MB ZIP解压后：
 
@@ -68,9 +86,10 @@ change/return比较端点，return要求正分母。只消费该交易日可用�
 uv run --frozen return80-research export-replay --cache-root /原机器缓存 --output replay-data
 ```
 
-这一步在已有原数据的机器运行一次；将replay-data整体复制到新机器。约1.8GB行情面板
-加候选/旧评分/公司行动，清单中固定每个文件SHA。新机器不需要原缓存里的run.py。
-当前冻结训练ZIP未包含这个回放目录，需要另行搬运。
+这一步在已有原数据的机器运行一次，再通过操作者选择的文件传输方式搬运整个目录。
+它包含约 1.8GB 行情面板及候选、旧评分、公司行动，每个文件有 SHA。
+103MB 训练 ZIP 不包含回放行情。若不搬运行情，可以在新机执行后文重建流程，
+使用它生成的 `rebuilt/replay`；这属于新数据版本，须与同次生成的训练数据配套。
 
 训练后保存全部候选预测到predictions.npy，再映射并按原配置回放：
 
@@ -85,7 +104,9 @@ uv run --frozen return80-research replay --dataset replay-data --scores scores.n
 
 ## 当前迁移证据
 
-真实520690×47矩阵导入通过；490655成熟训练标签和原126日权重保持一致。
+真实520690×47矩阵导入通过。从原始归档重建后，全部47列、490655成熟训练行、
+标签和126日权重逐项一致；41份回放输入的SHA也一致。重建验收发现并补齐了原训练
+已用的20260930财务补充分区，按原清单核对来源，未手改任何特征值。
 在新导出目录运行原half126分数、100万元/原范围/Top15/2%/1%历史成交限额，正常及
 双成本的9类CSV各自与原归档逐字节一致，共18份。包含daily、trades、entries、fills、
 order_attempts、positions、distributions、allocation_states、liquidity_orders。
@@ -93,7 +114,7 @@ order_attempts、positions、distributions、allocation_states、liquidity_order
 证据在本机`~/stockops-exports/research-portability-validation/replay-parity.json`。
 这验证数据迁移及移入源码没有改变这两个账户，不等于验证GPU训练或新数据提高收益。
 
-## 本轮新增的重建与训练命令
+## 从原始数据重建
 
 安装：`uv sync --frozen --extra rebuild --extra training`。重建复用已经推送的固定
 StockOps domain源码，而不是依赖旁边恰好存在的成员checkout。精确依赖见E2E计划。
@@ -117,6 +138,39 @@ uv run --frozen --extra training return80-research train --dataset rebuilt/train
 XGBoost/LightGBM/CatBoost可直接消费dataset中的X、fit_indices、y和sample_weight，
 预测完整候选轴后使用`map-predictions`接入相同回放。当前未验证任何GPU框架。
 
-重建产物包括`training/`与`replay/`，不是只有特征矩阵。采集按日、证券、报告期
+重建同时产出`training/`和完整`replay/`目录。采集按日、证券、报告期
 和历史成员分页，原文留存，未知值不填零。供应商今天返回的历史修订可能与原
 归档不同；新下载结果要形成新冻结版本，不能自动宣称重现旧收益。
+
+## 给 GPU 训练程序的数据约定
+
+`training/dataset.json` 列出每个 NPY 文件的 SHA 与列名。先用
+`return80_research.dataset.load_dataset()` 检查，再交给训练框架：
+
+```python
+from pathlib import Path
+import numpy as np
+from tushare_entitlement_hub.return80_research.dataset import load_dataset
+
+arrays, manifest = load_dataset(Path("rebuilt/training"))
+fit_features = arrays["X"][arrays["fit_indices"]]
+fit_targets = arrays["y"]
+fit_weights = arrays["sample_weight"]
+# 用目标框架训练，再对 arrays["X"] 的全部行预测，保持原顺序。
+# np.save("predictions.npy", predictions, allow_pickle=False)
+```
+
+`X` 为全部候选的 float32 矩阵，NaN 表示缺失；`y` 和 `sample_weight` 已是成熟训练
+子集。标签的独立交易止盈为 4%，共享组合回放止盈为 4.5%，两者不可混用。
+目标 GPU 框架及驱动由该机器单独验证，本项目未把 XGBoost、LightGBM 或 CatBoost
+加入冻结环境，也未声称已验证它们的 GPU 训练。另建实验环境时应固定框架版本，保存
+模型参数、数据清单 SHA 和资源记录，预测后仍接同一回放入口比较。
+
+当前重建固定原研究口径：47 列、2021-10-18 起候选、成熟标签、126 交易日半衰期、
+全样本拟合。新增数据源本身不会改变这些规则。训练入口只保存原生模型和预测，
+不自动重跑全量独立预测校验或账户回放；成功以 `complete.json` 为准。失败保留中间
+产物供定位，重新执行请选择新输出目录。采集分区支持校验后续跑。
+
+历史归档支持普通JSON和gzip压缩文件，哈希固定实际文件字节。复现原实验前应依据
+原sources/protocol清单核对全部报告期和补充分区；通用历史计划会覆盖截止日前最新
+季度，不能凭目录名称挑选旧缓存。完整来源、原始行数和SHA随验收证据保存。
