@@ -12,6 +12,38 @@ uv run --no-project bash scripts/demo.sh
 
 真实接入支持按账户批量验证全部公共只读接口，目录中的独立权限、未知权限、停更或文档待复核标签不会阻止探测。成功证据用于放行后续采集，文档事实保留。参见[真实接口接入](docs/真实接口接入.md)，其中说明批量扫描、已有凭据复用、原始样本和 `pro_bar` 的 HTTPS 组合适配。
 
+## Tushare 凭据约定
+
+本库统一将本地凭据放在 `data/secrets/tushare.env`，文件内使用 `TUSHARE_TOKEN` 键。从仓库根目录执行真实探测、下载和采集命令时，显式传入相对路径 `--credential-file data/secrets/tushare.env`；凭据路径采用位置参数的入口也使用同一路径。当前程序不会自动加载该文件，后续命令、脚本和 Agent 执行都应遵守此约定。
+
+在新机器上首次配置时，创建文件并限制访问权限；已有文件直接复用，不重复复制凭据：
+
+```bash
+mkdir -p data/secrets
+chmod 700 data/secrets
+touch data/secrets/tushare.env
+chmod 600 data/secrets/tushare.env
+vi data/secrets/tushare.env
+```
+
+在文件中写入 `TUSHARE_TOKEN=你的实际token`，将占位文字替换为实际值。真实请求前只检查文件存在且可读取，不显示凭据。`data/` 已被 Git 忽略；Token 不进入聊天、日志、Git、共享云盘或项目指引。
+
+以下命令先导入本地接口目录，再对交易日历做一次小范围真实验证；第二条命令会实际访问 Tushare：
+
+```bash
+uv run tushare-hub --db data/live.duckdb catalog sync \
+  --fixture fixtures/catalog/official
+uv run tushare-hub --db data/live.duckdb capability survey \
+  --live \
+  --credential-file data/secrets/tushare.env \
+  --apis trade_cal \
+  --output data/live-smoke
+```
+
+此约定只规定存放路径和调用方式，不代表凭据已配置，也不自动授权全量采集或其他真实任务。
+
+## 项目文档与检查
+
 - [架构说明](docs/架构说明.md)
 - [运行手册](docs/运行手册.md)
 - [安全说明](docs/安全说明.md)
