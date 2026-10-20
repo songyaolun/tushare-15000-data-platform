@@ -20,6 +20,12 @@ dependencies = [
 
 [project.scripts]
 tushare-hub = "tushare_entitlement_hub.cli:app"
+return80-research = "tushare_entitlement_hub.return80_research.cli:main"
+
+[project.optional-dependencies]
+training = [
+    "scikit-learn==1.9.1",
+]
 
 [dependency-groups]
 dev = ["pytest>=8.3,<10", "pytest-cov>=6,<8", "ruff>=0.11,<1", "mypy>=1.15,<2", "types-beautifulsoup4", "types-Markdown"]

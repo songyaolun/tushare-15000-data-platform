@@ -5,7 +5,6 @@ import json
 import runpy
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
@@ -37,9 +36,8 @@ def test_cli_candidate_limit_reaches_sector_selection_and_allocation(
     expected = 10 if count is None else count
     selected = top_candidates(definition.entry_mask, definition.scores, expected)
     sector_selection = Mock(return_value=selected)
-    cached_loader = Mock(side_effect=[{"context": Mock(return_value=context)},
-                                      {"sector_capped_mask": sector_selection}])
-    monkeypatch.setitem(main.__globals__, "runpy", SimpleNamespace(run_path=cached_loader))
+    monkeypatch.setitem(main.__globals__, "load_replay_context", Mock(return_value=context))
+    monkeypatch.setitem(main.__globals__, "sector_capped_mask", sector_selection)
     liquidity_filter = Mock(return_value=(definition.entry_mask, [{"day": 0, "security": 0}]))
     monkeypatch.setitem(main.__globals__, "filter_signal_liquidity", liquidity_filter)
     allocation = Mock(side_effect=RuntimeError("allocation_boundary_reached"))
