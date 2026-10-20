@@ -89,7 +89,9 @@ def daily_percentiles(values: FloatArray) -> FloatArray:
     return result
 
 
-def build_dataset(history_database: Path, sector_root: Path, output: Path) -> Path:
+def build_dataset(
+    history_database: Path, sector_root: Path, output: Path, *, end_date: str = "20261016"
+) -> Path:
     """只读原行情与补采行业，输出逐证券特征和剔除本股的行业统计，支持完整复用。
 
     例如同业六只均有行情，输出某股sector_peers=5；只剩四只同业则群动条件不可用。
@@ -115,7 +117,7 @@ def build_dataset(history_database: Path, sector_root: Path, output: Path) -> Pa
             raise ValueError("history_manifest_missing")
         source_manifest = json.loads(entry[0])
         assert_complete_history(source_manifest)
-        calendar = [day for day in source_manifest["trading_dates"] if day <= "20261016"]
+        calendar = [day for day in source_manifest["trading_dates"] if day <= end_date]
         membership, diagnostics = membership_matrix(member_rows, calendar, sectors)
         shape = (len(sectors), len(calendar))
         aggregate = {

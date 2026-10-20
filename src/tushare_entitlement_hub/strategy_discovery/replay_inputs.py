@@ -145,8 +145,11 @@ def load_replay_context(root: Path) -> tuple[Any, ...]:
             root / "p03-regime-alpha-20261018/raw", panel.calendar, panel.codes
         )
     original_states = classify_regimes(
-        panel.market["index"], panel.market["breadth"], panel.market["advancing"],
-        panel.market["amount"], panel.market["limit_down"],
+        panel.market["index"],
+        panel.market["breadth"],
+        panel.market["advancing"],
+        panel.market["amount"],
+        panel.market["limit_down"],
     )
     return (
         panel,
@@ -169,7 +172,7 @@ def export_replay_inputs(cache: Path, output: Path) -> Path:
     if output.exists():
         raise ValueError("fresh_replay_output_required")
     context = load_replay_context(cache)
-    panel, events = context[0], context[4]
+    events = context[4]
     source_panel = cache / "p03-regime-alpha-20261018/panel"
     files = {
         "panel/panel.json": source_panel / "panel.json",
@@ -178,6 +181,31 @@ def export_replay_inputs(cache: Path, output: Path) -> Path:
         / "stockops-pit-validation-20261018/matrices/technical_risk.npy",
         "legacy_scores.npy": cache / "stockops-pit-redesign-20261018/scores.npy",
     }
+    return write_replay_inputs(source_panel, files, events, output)
+
+
+def write_replay_inputs(
+    source_panel: Path,
+    input_files: dict[str, Path],
+    events: list[Distribution],
+    output: Path,
+) -> Path:
+    """Freeze a declared panel/candidate/corporate-action closure without a legacy layout.
+
+    Example: rebuilt eligible/technical/legacy-score paths produce a relocatable replay
+    directory. All panel arrays are copied and hashed, then the loader verifies the closure.
+    """
+    if output.exists():
+        raise ValueError("fresh_replay_output_required")
+    panel = load_panel(source_panel)
+    files = dict(input_files)
+    if set(files) != {
+        "panel/panel.json",
+        "eligible.npy",
+        "technical_risk.npy",
+        "legacy_scores.npy",
+    }:
+        raise ValueError("invalid_replay_file_roles")
     metadata = json.loads((source_panel / "panel.json").read_text())
     for group in ("values", "signals", "market"):
         for name in metadata[group]:

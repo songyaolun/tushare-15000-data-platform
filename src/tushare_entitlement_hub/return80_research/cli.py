@@ -46,6 +46,26 @@ def main(argv: list[str] | None = None) -> None:
     command.add_argument("--credential-file", type=Path)
     command.add_argument("--rate-per-minute", type=float, default=60.0)
     command.add_argument("--live", action="store_true")
+    command = commands.add_parser("make-plan")
+    command.add_argument("--start", required=True)
+    command.add_argument("--end", required=True)
+    command.add_argument("--bootstrap", type=Path)
+    command.add_argument("--output", type=Path, required=True)
+    command = commands.add_parser("materialize-sources")
+    command.add_argument("--bootstrap", type=Path, required=True)
+    command.add_argument("--collection", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command = commands.add_parser("prepare-sources")
+    command.add_argument("--sources", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command = commands.add_parser("rebuild-matrices")
+    command.add_argument("--spec", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command = commands.add_parser("train")
+    command.add_argument("--dataset", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--rounds", type=int, required=True)
+    command.add_argument("--thread-ceiling", type=int, default=16)
     commands.add_parser("replay", add_help=False)
     args, remaining = parser.parse_known_args(argv)
     if args.command == "replay":
@@ -65,6 +85,28 @@ def main(argv: list[str] | None = None) -> None:
         result = export_replay_inputs(args.cache_root, args.output)
     elif args.command == "build-daily-features":
         result = build_daily_block(args.dataset, args.collection, args.recipe, args.output)
+    elif args.command == "make-plan":
+        from .sources import make_plan
+
+        result = make_plan(args.output, start=args.start, end=args.end, bootstrap=args.bootstrap)
+    elif args.command == "materialize-sources":
+        from .sources import materialize_sources
+
+        result = materialize_sources(args.bootstrap, args.collection, args.output)
+    elif args.command == "prepare-sources":
+        from .sources import prepare_sources
+
+        result = prepare_sources(args.sources, args.output)
+    elif args.command == "rebuild-matrices":
+        from .rebuild import rebuild_matrices
+
+        result = rebuild_matrices(args.spec, args.output)
+    elif args.command == "train":
+        from .training import train
+
+        result = train(
+            args.dataset, args.output, rounds=args.rounds, thread_ceiling=args.thread_ceiling
+        )
     else:
         load_collection_plan(args.plan)
         if not args.live:

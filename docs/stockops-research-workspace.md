@@ -92,3 +92,31 @@ order_attempts、positions、distributions、allocation_states、liquidity_order
 
 证据在本机`~/stockops-exports/research-portability-validation/replay-parity.json`。
 这验证数据迁移及移入源码没有改变这两个账户，不等于验证GPU训练或新数据提高收益。
+
+## 本轮新增的重建与训练命令
+
+安装：`uv sync --frozen --extra rebuild --extra training`。重建复用已经推送的固定
+StockOps domain源码，而不是依赖旁边恰好存在的成员checkout。精确依赖见E2E计划。
+
+```bash
+# 先生成目录/日历请求；以下写的目录均由操作者指定。
+uv run --frozen --extra rebuild return80-research make-plan --start 20200101 --end 20261016 --output bootstrap-plan.json
+# 真采集要显式--live，密钥文件为本机私有文件；不要把Token写进命令。
+uv run --frozen --extra rebuild return80-research collect --plan bootstrap-plan.json --output bootstrap --credential-file /private/tushare.env --live
+uv run --frozen --extra rebuild return80-research make-plan --start 20200101 --end 20261016 --bootstrap bootstrap --output history-plan.json
+uv run --frozen --extra rebuild return80-research collect --plan history-plan.json --output history-collection --credential-file /private/tushare.env --live
+uv run --frozen --extra rebuild return80-research materialize-sources --bootstrap bootstrap --collection history-collection --output sources
+uv run --frozen --extra rebuild return80-research prepare-sources --sources sources --output prepared
+uv run --frozen --extra rebuild return80-research rebuild-matrices --spec prepared/rebuild.json --output rebuilt
+# 显式选择训练轮数；下面只是四轮运行示例，不等于正式模型的容量。
+uv run --frozen --extra training return80-research train --dataset rebuilt/training --output model-smoke --rounds 4 --thread-ceiling 16
+```
+
+训练会检查当前机器资源，使用实际输入做有界线程对比并核对分数一致，再运行
+指定轮数。默认HGB走CPU；GPU信息只作为资源记录，未宣称HGB支持GPU。
+XGBoost/LightGBM/CatBoost可直接消费dataset中的X、fit_indices、y和sample_weight，
+预测完整候选轴后使用`map-predictions`接入相同回放。当前未验证任何GPU框架。
+
+重建产物包括`training/`与`replay/`，不是只有特征矩阵。采集按日、证券、报告期
+和历史成员分页，原文留存，未知值不填零。供应商今天返回的历史修订可能与原
+归档不同；新下载结果要形成新冻结版本，不能自动宣称重现旧收益。

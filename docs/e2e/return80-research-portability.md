@@ -48,3 +48,32 @@ Python3.11+uv冻结安装，软件测试不联网也不需要Token。可选真�
 `~/stockops-exports/research-portability-validation/`。未重训51200轮，未请求行情API。
 可复用操作与当前边界见`docs/stockops-research-workspace.md`；后续训练与完整原特征重建
 节点尚未完成，不能据此关闭整个交付。阶段覆盖率仍有错误分支待补齐，最终门禁继续要求。
+
+## 原始重建与训练入口（本轮新增，最终集成验收继续）
+
+适用 revision：本节随 `feat/return80-research-portability` 的重建入口提交；最终交付
+记录使用最终 commit，不使用本地 PYTHONPATH。新增可选 `rebuild` 依赖：
+
+- stockops-contracts `292fdebc3f22fe48e2b3e637c4491dfe58d1e81b`
+- stockops-data `3a122705f57de8d024241aa2bae9abd0a12feec9`
+- stockops-domain `6d6313634734fa7d06cd3414a169fa61e0adb4d9`
+
+依赖顺序为 contracts → data → domain → 研究库；根 uv 锁覆盖成员自身旧依赖。
+TA-Lib 从0.6.8升级至0.7.1以满足冻结domain依赖。纯计算、原策略优化测试及
+原始响应到面板的离线测试通过；真实全轴旧归档数值比较仍在执行。
+
+新增离线用例覆盖：明确空ST与缺日的区别、冲突补充行、原始单位转换、20信号
+与固定生产函数一致、科创排除/创业保留、共同资格失败保留候选、4/8/30标签
+状态、300天合成数据端到端47列与可搬迁回放、历史日期不再被10/16硬截断、
+原始页篡改、派生面板源篡改、CPU/cgroup/内存检查、线程短测、单轮原生模型及
+预测检查点。32项相关用例通过，10个定向源码文件mypy通过。
+
+执行：`uv sync --frozen --extra rebuild --extra training --group dev`，再运行
+`uv run --frozen --extra rebuild --extra training pytest tests/test_return80_research_*.py tests/test_replay_inputs.py -q`。
+新训练的轮数为必填参数；验收只运行合成数据单轮，禁止隐式启动51200轮。
+本轮无UI变更，桌面/手机浏览器 not applicable；不会改变StockOps推送快照。
+所有采集均使用FakeTransport，真实Tushare仅在操作者显式指定`collect --live`时执行。
+研究入口没有飞书、发布、券商交易或调度注册能力。
+
+最终通过标准还包括：五年旧轴/47列/标签/权重核对、独立冻结安装、来源清单
+和新机使用文档、全仓门禁及主线集成。不以本阶段通过代替最终验收。
