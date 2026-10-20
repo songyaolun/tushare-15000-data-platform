@@ -153,3 +153,39 @@ def test_order_diagnostics_distinguish_waits_and_competing_budgets():
     assert rows[1]["first_binding_constraint"] == "sector_available"
     assert rows[1]["liquidity_available"] == 10000
     assert collector.result()["allocation_states"][0]["unused_slots"] == 1
+
+
+@pytest.mark.parametrize("reason", [
+    "expired", "opening_untradable", "entry_filter", "unknown_sector",
+])
+def test_blocked_entry_records_reason_without_inventing_fills(reason):
+    """Blocked orders retain their reason; only a temporary opening block may fill later.
+
+    Example: missing opens on days 1–3 expire on day 4 with no purchase; an
+    unavailable industry after a one-day wait cancels the order without a fill.
+    """
+    panel = test_portfolio_economic.economic_panel.__wrapped__()
+    if reason == "expired":
+        panel.values["raw_open"][1:4, 0] = np.nan
+    elif reason in {"opening_untradable", "unknown_sector"}:
+        panel.values["raw_open"][1, 0] = np.nan
+        if reason == "unknown_sector":
+            panel.values["sector_index"][1, 0] = np.nan
+    result = simulate_portfolio(
+        panel, np.zeros(len(panel.calendar), dtype=np.int8), [],
+        PortfolioPolicy(switching=False, stage_allocation=False,
+                        position_weight=1, sector_weight=1, maximum_holding=2,
+                        non_stage_allocation=1),
+        capital=10000, start=panel.calendar[0], capture_execution_evidence=True,
+        entry_filter=(lambda *_arguments: False) if reason == "entry_filter" else None,
+    )
+    evidence = result["execution_evidence"]
+    rejected = [row for row in evidence["order_attempts"] if row["reason"] == reason]
+    assert len(rejected) == 1
+    assert rejected[0]["confirmation"] == 0
+    purchases = [row for row in evidence["fills"] if row["side"] == "buy"]
+    if reason == "opening_untradable":
+        assert len(purchases) == 1 and purchases[0]["day"] == 2
+    else:
+        assert not purchases
+        assert all(row["cash"] == 10000 for row in result["daily"])

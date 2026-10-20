@@ -95,5 +95,19 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run --frozen --all-extras pytest -m 
 `training-rebuild-parity.json`、`replay-input-rebuild-parity.json`。既有18份两成本
 回放CSV已逐字节核对，不对相同输入与实现重复运行回放。
 
-全仓门禁：执行中。剩余通过标准为全仓pytest与100%语句覆盖通过，再集成主线。
+全仓门禁通过：5948 passed、3 deselected，耗时4826.17秒；3项为既有CI规则
+排除的资源压力测试。全仓运行后，补充订单过期、开盘不可成交、入场过滤和行业缺失
+四种取消/等待原因测试，确认不伪造成交、临时开盘阻断仅允许后续可成交日买入。
+相关证据/核账18项、换仓及训练边界45项全部通过。
+
+覆盖率汇总只使用最终源码对应的行号：移除运行期间变更模块的旧记录，分别使用
+最终gzip重建测试、核账/执行证据/换仓/训练定向测试刷新。合并后225个源码文件、
+20804条语句全部覆盖，`coverage report --fail-under=100`退出0；缺失语句为0。
+原有8条排除语句未增加。证据为`pytest-all.log`、`coverage-final.json`、
+`merge-coverage.py`和`final-gates.json`。
+
+已同步GitHub主分支`0d0781b3766ca79b09a5b4e0d52b6ae662f23ac4`新增的凭据说明，
+保留统一的`data/secrets/tushare.env`路径。训练包103398538字节、回放包895200806
+字节，完整SHA与跨机器使用步骤见独立研究机指南。PR4通过门禁后以保留提交的方式
+集成到GitHub研究主线，Codebase及StockOps App不属于本次同步范围。
 纯文档与计划断言更新不改变已验证实现；相关节点的浏览器验收 not applicable。
