@@ -22,7 +22,6 @@ from .consumption_registry import (
 )
 from .models import (
     ALL_EQUITY_PRODUCT_IDS,
-    CANDIDATE_RANKING_PRODUCT_IDS,
     PRODUCT_IDS,
     RULE_VERSION,
     ResearchConfig,
@@ -432,10 +431,8 @@ def _verify_run(
     run_id = metadata["run_id"]
     selection = metadata["selection"]
     required_products = set(selection)
-    if required_products & {PRODUCT_IDS[4], PRODUCT_IDS[5], CANDIDATE_RANKING_PRODUCT_IDS[0]}:
+    if required_products & {PRODUCT_IDS[4], PRODUCT_IDS[5]}:
         required_products.update(PRODUCT_IDS[1:4])
-    if required_products & set(CANDIDATE_RANKING_PRODUCT_IDS[1:]):
-        required_products.update(PRODUCT_IDS[1:3])
     if (
         not selection
         or selection != sorted(set(selection))

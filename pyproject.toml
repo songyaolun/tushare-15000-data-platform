@@ -7,10 +7,40 @@ name = "tushare-entitlement-hub"
 version = "0.1.0"
 description = "可审计、离线优先的 Tushare Pro 权益平台"
 requires-python = ">=3.11"
-dependencies = ["duckdb>=1.2,<2", "httpx>=0.28,<1", "typer>=0.16,<1", "beautifulsoup4>=4.13,<5", "markdown>=3.8,<4"]
+dependencies = [
+    "duckdb>=1.2,<2",
+    "httpx>=0.28,<1",
+    "typer>=0.16,<1",
+    "beautifulsoup4>=4.13,<5",
+    "markdown>=3.8,<4",
+    "ta-lib>=0.7.1,<0.8",
+    "numpy>=2,<2.4",
+    "matplotlib>=3.10,<3.11",
+]
 
 [project.scripts]
 tushare-hub = "tushare_entitlement_hub.cli:app"
+return80-research = "tushare_entitlement_hub.return80_research.cli:main"
+
+[project.optional-dependencies]
+training = [
+    "psutil>=7.2.2",
+    "scikit-learn==1.9.1",
+    "threadpoolctl>=3.7.0",
+]
+
+rebuild = ["stockops-domain>=0.1.0,<0.2"]
+
+[tool.uv]
+override-dependencies = [
+  "stockops-contracts @ git+ssh://git@github.com/songyaolun/stockops-contracts.git@292fdebc3f22fe48e2b3e637c4491dfe58d1e81b",
+  "stockops-data @ git+ssh://git@github.com/songyaolun/stockops-data.git@3a122705f57de8d024241aa2bae9abd0a12feec9",
+]
+
+[tool.uv.sources]
+stockops-contracts = { git = "ssh://git@github.com/songyaolun/stockops-contracts.git", rev = "292fdebc3f22fe48e2b3e637c4491dfe58d1e81b" }
+stockops-data = { git = "ssh://git@github.com/songyaolun/stockops-data.git", rev = "3a122705f57de8d024241aa2bae9abd0a12feec9" }
+stockops-domain = { git = "ssh://git@github.com/songyaolun/stockops-domain.git", rev = "6d6313634734fa7d06cd3414a169fa61e0adb4d9" }
 
 [dependency-groups]
 dev = ["pytest>=8.3,<10", "pytest-cov>=6,<8", "ruff>=0.11,<1", "mypy>=1.15,<2", "types-beautifulsoup4", "types-Markdown"]

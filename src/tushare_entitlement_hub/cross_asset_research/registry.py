@@ -18,11 +18,10 @@ from ..equity_research.consumption_registry import (
     load_consumption_registry,
     resolve_consumer,
 )
-from ..equity_research.models import CANDIDATE_RANKING_PRODUCT_IDS
 from ..product_foundation.registry import ConsumerSpec, load_registry, validate_registry
 from ..store import digest
 
-VERSION = "all-products-consumption/v2"
+VERSION = "all-products-consumption/v3"
 NEW_PRODUCTS = {
     "P02": "theme_opportunities/v1",
     "P05": "expectation_revision/v1",
@@ -32,16 +31,8 @@ NEW_PRODUCTS = {
     "P11": "financing_tail_risk/v1",
     "P12": "portfolio_diagnostics/v1",
 }
-RANKING_PRODUCTS = dict(
-    zip(("P03S", "P03M", "P03L"), CANDIDATE_RANKING_PRODUCT_IDS, strict=True)
-)
-PRODUCTS = dict(sorted((EQUITY_PRODUCTS | NEW_PRODUCTS | RANKING_PRODUCTS).items()))
-DEFAULT_PRODUCTS = frozenset(PRODUCTS) - frozenset(RANKING_PRODUCTS)
-RANKING_SOURCE_PRODUCTS = {
-    "P03S": frozenset({"P03"}),
-    "P03M": frozenset({"P03"}),
-    "P03L": frozenset({"P03", "P04"}),
-}
+PRODUCTS = dict(sorted((EQUITY_PRODUCTS | NEW_PRODUCTS).items()))
+DEFAULT_PRODUCTS = frozenset(PRODUCTS)
 HANDLERS = {
     "P02": "themes.build_theme_opportunities",
     "P05": "expectations.build_expectation_revision",
@@ -57,9 +48,9 @@ EXPECTED_COUNTS = {"P02": 22, "P05": 7, "P08": 18, "P09": 19, "P10": 26, "P11": 
 def source_products(product: str) -> frozenset[str]:
     """返回一个可执行产品直接读取的登记来源产品集合。
 
-    例如 P03L 返回 ``{'P03', 'P04'}`` 以读取估值和三年财务；普通 P05 返回自身。
+    例如统一 P03 返回自身来源；P04/P06/P07 通过依赖闭包分别读取。
     """
-    return RANKING_SOURCE_PRODUCTS.get(product, frozenset({product}))
+    return frozenset({product})
 
 
 @dataclass(frozen=True)
@@ -114,9 +105,7 @@ def fingerprint() -> str:
 
     无参数输入得到 64 位摘要；字段、处理器、旧消费版本变化均改变结果。
     """
-    return digest(
-        [VERSION, EQUITY_VERSION, PRODUCTS, [asdict(item) for item in registrations()]]
-    )
+    return digest([VERSION, EQUITY_VERSION, PRODUCTS, [asdict(item) for item in registrations()]])
 
 
 def validate_handlers() -> None:
@@ -137,32 +126,25 @@ def validate_handlers() -> None:
 def select_products(selection: tuple[str, ...]) -> tuple[str, ...]:
     """解析别名、展开真实依赖并按稳定顺序返回产品别名。
 
-    空输入返回原有十三产品；P03S/M/L 只在显式选择时运行。P03/P03S
-    展开 P04/P06/P07，P03M/P03L 展开 P04/P06，P12 扩展原有十三产品。
+    空输入返回十三产品；统一 P03 展开 P04/P06/P07，旧三榜入口拒绝。
+    P12 展开全部默认产品。
     """
     reverse = {value: key for key, value in PRODUCTS.items()}
     selected = (
-        {reverse.get(item, item) for item in selection}
-        if selection
-        else set(DEFAULT_PRODUCTS)
+        {reverse.get(item, item) for item in selection} if selection else set(DEFAULT_PRODUCTS)
     )
     if not selected <= PRODUCTS.keys():
         raise ValueError("unknown_all_products_selection")
     if "P12" in selected:
         selected.update(DEFAULT_PRODUCTS)
-    if selected & {"P03", "P03S", "P13"}:
+    if selected & {"P03", "P13"}:
         selected.update({"P04", "P06", "P07"})
-    if selected & {"P03M", "P03L"}:
-        selected.update({"P04", "P06"})
     order = (
         "P01",
         "P04",
         "P06",
         "P07",
         "P03",
-        "P03S",
-        "P03M",
-        "P03L",
         "P13",
         "P02",
         "P05",

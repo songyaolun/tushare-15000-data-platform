@@ -38,7 +38,6 @@ from tushare_entitlement_hub.equity_research.consumption_registry import (
     validate_consumption_registry,
 )
 from tushare_entitlement_hub.equity_research.models import (
-    CANDIDATE_RANKING_PRODUCT_IDS,
     MARKET_ENTITY,
     PRODUCT_IDS,
     ResearchConfig,
@@ -119,6 +118,7 @@ def test_missing_or_duplicate_registration_is_rejected(monkeypatch):
         "equity-consumption/v11",
         "equity-consumption/v12",
         "equity-consumption/v13",
+        "equity-consumption/v14",
     ],
 )
 def test_registry_rule_version_prevents_reusing_original_v1_run_key(previous_version):
@@ -138,7 +138,7 @@ def test_registry_rule_version_prevents_reusing_original_v1_run_key(previous_ver
             sorted(selection),
         ]
     )
-    assert CONSUMPTION_VERSION == "equity-consumption/v14"
+    assert CONSUMPTION_VERSION == "equity-consumption/v15"
     assert run_identity("synthetic", NOW, config, selection) != previous_gate_key
     assert all(name.endswith("/v1") for name in PRODUCT_ALIASES.values())
 
@@ -164,9 +164,9 @@ def test_empty_results_execute_all_99_without_claiming_observations():
     assert summary["status_counts"]["unknown"] == 99
 
 
-@pytest.mark.parametrize("product", CANDIDATE_RANKING_PRODUCT_IDS)
-def test_candidate_rankings_reuse_p03_source_contract(product):
-    """场景：三个新榜附加消费记录；预期：均复用 P03 的 16 项来源并可独立校验。"""
+def test_candidate_rankings_reuse_p03_source_contract():
+    """场景：统一右侧榜附加消费记录；预期：复用 P03 的 16 项来源并可独立校验。"""
+    product = PRODUCT_IDS[4]
     context = inputs(entities=())
     result = make_result(context, product, MARKET_ENTITY)
     attached = attach_consumption(context, product, (result,))[0]

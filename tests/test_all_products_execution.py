@@ -107,9 +107,7 @@ def test_dependency_builders_receive_real_parent_results_in_stable_order(
     )
     expected_equity_calls = [shared] + [
         (
-            frozenset(
-                item.spec.api for item in registrations() if item.spec.product == product
-            )
+            frozenset(item.spec.api for item in registrations() if item.spec.product == product)
             - shared
         )
         for product in products
@@ -190,15 +188,13 @@ def test_cross_sources_are_loaded_once_per_selected_product(tmp_path, monkeypatc
 @pytest.mark.parametrize(
     ("product", "builder_name", "parent_names"),
     [
-        ("P03S", "build_short_term_candidates", ("P04", "P06", "P07")),
-        ("P03M", "build_medium_term_candidates", ("P04", "P06")),
-        ("P03L", "build_long_term_candidates", ("P04", "P06")),
+        ("P03", "build_candidates", ("P04", "P06", "P07")),
     ],
 )
 def test_optional_candidate_rankings_execute_with_exact_parent_closure(
     tmp_path, monkeypatch, product, builder_name, parent_names
 ):
-    """场景：显式选择一个周期榜；预期：只展开声明的父产品并调用对应构造器。"""
+    """场景：显式选择统一P03；预期：只展开声明的父产品并调用对应构造器。"""
     config, context, _, _ = prepared_inputs(monkeypatch)
     calls = []
 
@@ -220,7 +216,7 @@ def test_optional_candidate_rankings_execute_with_exact_parent_closure(
         monkeypatch.setattr(execution, function_name, parent_builder(parent_name))
 
     def ranking_builder(current, *parents):
-        """记录新榜及父集合数量；例如 P03M 必须收到两组父结果。"""
+        """记录新榜及父集合数量；例如统一P03必须收到三组父结果。"""
         calls.append((product, len(parents)))
         return (make_result(current, PRODUCTS[product], IDENTITY),)
 
@@ -287,9 +283,7 @@ def test_portfolio_receives_only_relevant_parent_results(tmp_path, monkeypatch, 
         return None if mode == "unresolved" else IDENTITY
 
     monkeypatch.setattr(portfolio_module, "holding_entity", resolve_report_holding)
-    config, context, _, _ = prepared_inputs(
-        monkeypatch, (row,) if mode != "holdings" else ()
-    )
+    config, context, _, _ = prepared_inputs(monkeypatch, (row,) if mode != "holdings" else ())
     captured = []
 
     def theme(current):

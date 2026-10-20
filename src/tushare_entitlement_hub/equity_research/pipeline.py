@@ -16,14 +16,6 @@ from ..standard import normalize_timestamp
 from ..store import encode
 from .adapter import load_inputs
 from .binding_builder import binding_summary, verify_binding_audit
-from .candidate_horizons import (
-    LONG_TERM_PRODUCT_ID,
-    MEDIUM_TERM_PRODUCT_ID,
-    SHORT_TERM_PRODUCT_ID,
-    build_long_term_candidates,
-    build_medium_term_candidates,
-    build_short_term_candidates,
-)
 from .candidates import build_candidates
 from .common import gate, make_result
 from .consumption import attach_consumption, count_consumption, summarize_consumption
@@ -54,7 +46,7 @@ from .storage import initialize_tables, run_identity, save_results, verify_run
 def select_products(selection: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """展开产品别名和依赖并保持拓扑顺序。
 
-    例如选择 P03S 同时运行 P04/P06/P07；空选择仍运行原六项，三个新榜只显式运行。
+    例如选择 P03 同时运行 P04/P06/P07；空选择运行六项，旧三榜入口直接拒绝。
     未知产品直接拒绝，不默默跳过拼写错误。
     """
     available = set(ALL_EQUITY_PRODUCT_IDS)
@@ -64,14 +56,8 @@ def select_products(selection: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[
     if not requested <= available:
         raise ValueError("unknown_research_product")
     expanded = set(requested)
-    if requested & {
-        PRODUCT_IDS[4],
-        SHORT_TERM_PRODUCT_ID,
-        PRODUCT_IDS[5],
-    }:
+    if requested & {PRODUCT_IDS[4], PRODUCT_IDS[5]}:
         expanded.update(PRODUCT_IDS[1:4])
-    if requested & {MEDIUM_TERM_PRODUCT_ID, LONG_TERM_PRODUCT_ID}:
-        expanded.update(PRODUCT_IDS[1:3])
     return tuple(sorted(requested)), tuple(
         name for name in ALL_EQUITY_PRODUCT_IDS if name in expanded
     )
@@ -208,25 +194,6 @@ def _prepare_run(
                 produced[PRODUCT_IDS[1]],
                 produced[PRODUCT_IDS[2]],
                 produced[PRODUCT_IDS[3]],
-            )
-        elif product == SHORT_TERM_PRODUCT_ID:
-            results = build_short_term_candidates(
-                inputs,
-                produced[PRODUCT_IDS[1]],
-                produced[PRODUCT_IDS[2]],
-                produced[PRODUCT_IDS[3]],
-            )
-        elif product == MEDIUM_TERM_PRODUCT_ID:
-            results = build_medium_term_candidates(
-                inputs,
-                produced[PRODUCT_IDS[1]],
-                produced[PRODUCT_IDS[2]],
-            )
-        elif product == LONG_TERM_PRODUCT_ID:
-            results = build_long_term_candidates(
-                inputs,
-                produced[PRODUCT_IDS[1]],
-                produced[PRODUCT_IDS[2]],
             )
         else:
             # select_products 已把执行闭包限制在 ALL_EQUITY_PRODUCT_IDS，前述分支

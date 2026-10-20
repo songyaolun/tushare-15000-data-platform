@@ -15,23 +15,19 @@ from ..product_foundation.model import Count, EntityId, Identifier, Model, Reaso
 from ..product_foundation.numeric import TypedFact, source_evidence
 from ..product_foundation.temporal import AvailabilityFact
 from ..store import encode
+from .right_side_policy import RightSidePolicy
 
-RULE_VERSION = "equity-research/v1"
+RULE_VERSION = "equity-research/v2"
 MARKET_ENTITY = "cn:market:A:all"
 PRODUCT_IDS = (
     "market_context/v1",
     "fundamental_dossier/v1",
     "capital_governance_risks/v1",
     "flow_feasibility/v1",
-    "equity_research_candidates/v1",
+    "equity_right_side_candidates/v1",
     "event_thesis_review/v1",
 )
-CANDIDATE_RANKING_PRODUCT_IDS = (
-    "equity_short_term_candidates/v1",
-    "equity_medium_term_candidates/v1",
-    "equity_long_term_candidates/v1",
-)
-ALL_EQUITY_PRODUCT_IDS = PRODUCT_IDS[:5] + CANDIDATE_RANKING_PRODUCT_IDS + PRODUCT_IDS[5:]
+ALL_EQUITY_PRODUCT_IDS = PRODUCT_IDS
 
 
 def default_thresholds() -> FoundationPolicy:
@@ -47,6 +43,7 @@ class ResearchConfig(Model):
     """范围及口径认证由调用方显式声明，空配置只产生降级结果。"""
 
     version: Identifier = RULE_VERSION
+    right_side: RightSidePolicy = field(default_factory=RightSidePolicy)
     foundation: FoundationBindings = field(default_factory=FoundationBindings)
     thresholds: FoundationPolicy = field(default_factory=default_thresholds)
     peer_paths: dict[EntityId, tuple[Identifier, ...]] = field(default_factory=dict)

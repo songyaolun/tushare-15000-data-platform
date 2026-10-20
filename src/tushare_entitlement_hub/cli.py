@@ -28,7 +28,11 @@ from .products import build_products
 from .quality import audit_rows
 from .raw import RawStore, assert_public
 from .reference import build_reference, rebuild_reference
+from .regime_research.cli import regime_app
+from .signal_research.cli import signal_research_app
 from .store import Store, encode
+from .strategy_discovery.cli import discovery_app
+from .strategy_optimization.cli import optimization_app
 from .survey import survey
 
 app = typer.Typer(help="Tushare 权益总账、离线采集与信息产品。", no_args_is_help=True)
@@ -52,6 +56,10 @@ for command_name, application in (
     ("product-foundation", foundation_app),
     ("research", research_app),
     ("research-all", all_products_app),
+    ("signal-research", signal_research_app),
+    ("strategy-optimize", optimization_app),
+    ("regime-research", regime_app),
+    ("strategy-discovery", discovery_app),
 ):
     app.add_typer(application, name=command_name)
 
