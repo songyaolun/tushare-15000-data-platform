@@ -15,7 +15,6 @@ git clone https://github.com/songyaolun/tushare-15000-data-platform.git
 cd tushare-15000-data-platform
 git switch main
 git pull --ff-only
-git pull --ff-only
 git rev-parse HEAD
 env -u PYTHONPATH uv sync --frozen --python 3.11 --extra rebuild --extra training
 env -u PYTHONPATH uv run --frozen --extra rebuild --extra training return80-research --help
