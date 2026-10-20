@@ -12,6 +12,10 @@ import numpy as np
 
 from tushare_entitlement_hub.progress import progress_event, progress_phase
 from tushare_entitlement_hub.regime_research.attribution import evaluate_portfolio
+from tushare_entitlement_hub.regime_research.capital_sizing import (
+    CapitalSizingRule,
+    parse_capital_tiers,
+)
 from tushare_entitlement_hub.regime_research.liquidity import LiquidityRule
 from tushare_entitlement_hub.regime_research.runner import write_csv
 from tushare_entitlement_hub.strategy_discovery.audit import audit_result
@@ -58,6 +62,10 @@ def main():
     parser.add_argument('--stop-loss', type=float, default=.08)
     parser.add_argument('--maximum-holding', type=int, default=30)
     parser.add_argument('--position-weight', type=float, default=.05)
+    parser.add_argument('--capital-tiers', type=parse_capital_tiers)
+    parser.add_argument('--weak-allocation', type=float, default=.15)
+    parser.add_argument('--weak-position-weight', type=float)
+    parser.add_argument('--breadth-threshold', type=float, default=.4)
     parser.add_argument('--replacement-sessions', type=int, default=10)
     parser.add_argument('--candidate-count', type=int, default=10)
     parser.add_argument('--capture-execution-evidence', action='store_true')
@@ -67,6 +75,13 @@ def main():
     parser.add_argument('--minimum-signal-liquidity', type=float)
     parser.add_argument("--quiet-progress", action="store_true")
     args = parser.parse_args()
+    sizing_rule = CapitalSizingRule(
+        args.capital_tiers or ((0., args.position_weight),),
+        args.weak_allocation, args.weak_position_weight,
+    )
+    if not np.isfinite(args.breadth_threshold) or not 0 < args.breadth_threshold < 1:
+        raise ValueError('invalid_breadth_threshold')
+    adaptive_sizing = args.capital_tiers is not None or args.weak_position_weight is not None
     replay_started = time.monotonic()
     progress = {"enabled": not args.quiet_progress, "account_group": args.output.name}
     liquidity_rule = LiquidityRule(args.maximum_daily_participation, args.liquidity_lookback) \
@@ -114,9 +129,8 @@ def main():
     selected = sector_mask(
         eligible, scores, panel.values['sector_index'], 1, count=parameters.candidate_count,
     )
-    states = (np.isfinite(panel.market['breadth']) & (panel.market['breadth'] >= .4)).astype(
-        np.int8
-    )
+    states = (np.isfinite(panel.market['breadth'])
+              & (panel.market['breadth'] >= args.breadth_threshold)).astype(np.int8)
     definition = replace(
         base, entry_mask=selected, scores=scores, maximum_entry_gap=.05,
         policy=replace(base.policy, take_profit=parameters.take_profit,
@@ -152,6 +166,8 @@ def main():
         'scope_securities': int(scope.sum()), 'mature_fit_scope': 'original full market',
         'sample': 'full-sample fit and selection; not out-of-sample validation',
         'replacement': asdict(rule), 'cost_multipliers': [1, 2],
+        'capital_sizing': asdict(sizing_rule) if adaptive_sizing else None,
+        'weak_allocation': args.weak_allocation, 'breadth_threshold': args.breadth_threshold,
         'execution_parameters': asdict(parameters),
         'capture_execution_evidence': args.capture_execution_evidence,
         'opening_cash_only': args.opening_cash_only,
@@ -165,7 +181,7 @@ def main():
     for multiplier in (1, 2):
         name = f'{args.name}_cost{multiplier}'
         policy = replace(
-            account_policy, allocations=(.15, 1., 1., 1., 1.),
+            account_policy, allocations=(args.weak_allocation, 1., 1., 1., 1.),
             position_weight=parameters.position_weight,
             sector_weight=.4, fee_multiplier=multiplier, slippage_rate=.0005 * multiplier,
         )
@@ -179,6 +195,7 @@ def main():
                 capture_execution_evidence=args.capture_execution_evidence,
                 liquidity_rule=liquidity_rule,
                 opening_cash_only=args.opening_cash_only,
+                account_sizing_provider=sizing_rule if adaptive_sizing else None,
             )
         selections = result.pop('candidate_selections')
         for selection in selections:

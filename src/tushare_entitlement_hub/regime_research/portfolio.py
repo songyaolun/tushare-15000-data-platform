@@ -15,6 +15,7 @@ from .accounting import (
     affordable_shares,
     transaction_fee,
 )
+from .capital_sizing import SizingDecision
 from .execution_evidence import ExecutionEvidence
 from .liquidity import LiquidityRule, historical_notional_limit, liquidity_sale_shares
 from .panel import Panel
@@ -36,6 +37,7 @@ ReplacementProvider = Callable[
 ]
 
 PositionWeightProvider = Callable[[Panel, int, int, float, int, int, "PortfolioPolicy"], float]
+AccountSizingProvider = Callable[[float, int], SizingDecision]
 
 
 @dataclass(frozen=True)
@@ -216,6 +218,7 @@ def simulate_portfolio(
     capture_execution_evidence: bool = False,
     liquidity_rule: LiquidityRule | None = None,
     opening_cash_only: bool = False,
+    account_sizing_provider: AccountSizingProvider | None = None,
 ) -> dict[str, Any]:
     """完整逐日资金回放，返回净值、交易、敞口、成交日和陈旧报价诊断。
 
@@ -252,6 +255,9 @@ def simulate_portfolio(
     opening_cash_only=True在分红账本开盘到账后冻结可买现金，当日卖款不能补充额度；
     各买单累计扣除金额及费用。例如开盘现金1000、卖出净收2000，仍最多花1000买入。
     默认False保留先卖后买；到账股息按现有账本时间假设处理，不证明实际开盘到账时点。
+    account_sizing_provider仅接收当日收盘净值及状态，返回下一开盘适用的单股/总仓上限。
+    例净值跨1000万降至5%，名额同步变为正常20只；不强制卖出或补买旧持仓。
+    开盘仍使用前一收盘决策，不用当日收盘或期末净值倒推仓位。默认None保持原结果。
     """
     if capital <= 0 or len(states) != len(panel.calendar) or type(opening_cash_only) is not bool:
         raise ValueError("invalid_simulation_inputs")
@@ -539,6 +545,16 @@ def simulate_portfolio(
         if cash < -1e-6 or not np.isfinite(assets) or assets <= 0:
             raise ValueError("accounting_invariant_failed")
         stage = int(states[day])
+        sizing = None
+        if account_sizing_provider is not None:
+            sizing = account_sizing_provider(assets, stage)
+            if not isinstance(sizing, SizingDecision):
+                raise ValueError("invalid_account_sizing_provider")
+            policy = replace(
+                policy, position_weight=sizing.position_weight,
+                allocations=(sizing.maximum_total_weight,) * 5,
+                non_stage_allocation=sizing.maximum_total_weight,
+            )
         target = (
             policy.allocations[stage] if policy.stage_allocation else policy.non_stage_allocation
         )
@@ -594,6 +610,12 @@ def simulate_portfolio(
                 "cost": fees - previous_fees + slippage,
             }
         )
+        if sizing is not None:
+            daily[-1].update({
+                "sizing_weight": sizing.position_weight,
+                "sizing_total": sizing.maximum_total_weight,
+                "sizing_tier_floor": sizing.tier_floor,
+            })
         if cancel_pending_provider is not None:
             for security, (confirmation, _, _, _, _) in list(pending.items()):
                 if cancel_pending_provider(panel, confirmation, day, security):
