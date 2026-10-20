@@ -19,7 +19,7 @@ from tushare_entitlement_hub.strategy_discovery.signal_redesign import top_candi
 @pytest.mark.parametrize("count", [None, 20, 30])
 @pytest.mark.parametrize("opening_cash_only", [False, True])
 def test_cli_candidate_limit_reaches_sector_selection_and_allocation(
-    tmp_path, monkeypatch, count, opening_cash_only,
+    tmp_path, monkeypatch, count, opening_cash_only, capsys,
 ):
     """Candidate counts and both cash modes reach allocation and the frozen protocol."""
     script_path = Path(__file__).parents[1] / "scripts/replay_return80_ablation.py"
@@ -55,6 +55,10 @@ def test_cli_candidate_limit_reaches_sector_selection_and_allocation(
     monkeypatch.setattr(sys, "argv", arguments)
     with pytest.raises(RuntimeError, match="allocation_boundary_reached"):
         main()
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [row["event"] for row in records if "event" in row] == [
+        "replay_load_start", "replay_load_done", "account_replay_start", "account_replay_failed",
+    ]
     assert sector_selection.call_count == 2
     for call in sector_selection.call_args_list:
         assert call.args[3] == 1

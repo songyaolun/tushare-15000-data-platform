@@ -4,11 +4,13 @@ import argparse
 import hashlib
 import json
 import runpy
+import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
 
+from tushare_entitlement_hub.progress import progress_event, progress_phase
 from tushare_entitlement_hub.regime_research.attribution import evaluate_portfolio
 from tushare_entitlement_hub.regime_research.liquidity import LiquidityRule
 from tushare_entitlement_hub.regime_research.runner import write_csv
@@ -63,7 +65,10 @@ def main():
     parser.add_argument('--maximum-daily-participation', type=float)
     parser.add_argument('--liquidity-lookback', type=int, default=20)
     parser.add_argument('--minimum-signal-liquidity', type=float)
+    parser.add_argument("--quiet-progress", action="store_true")
     args = parser.parse_args()
+    replay_started = time.monotonic()
+    progress = {"enabled": not args.quiet_progress, "account_group": args.output.name}
     liquidity_rule = LiquidityRule(args.maximum_daily_participation, args.liquidity_lookback) \
         if args.maximum_daily_participation is not None else None
     parameters = ReplayParameters(
@@ -80,7 +85,8 @@ def main():
         raise ValueError('fresh_output_required')
     context_path = cache / 'stockops-candidate-allocation-v2-20261019/run.py'
     cap_path = cache / 'stockops-sector-cap-20261019/run.py'
-    context = runpy.run_path(str(context_path))['context']()
+    with progress_phase('replay_load', **progress):
+        context = runpy.run_path(str(context_path))['context']()
     panel, _, account_policy, base, events, original_states, factors = context
     sector_mask = runpy.run_path(str(cap_path))['sector_capped_mask']
     scores = np.load(scores_path, mmap_mode='r')
@@ -164,15 +170,16 @@ def main():
             sector_weight=.4, fee_multiplier=multiplier, slippage_rate=.0005 * multiplier,
         )
         print(json.dumps({'start': name}), flush=True)
-        result = simulate_candidate_allocation(
-            panel, states, events, replace(definition, name=name), policy,
-            mode='exit_reserve', count=parameters.candidate_count,
-            capital=args.capital, start=args.start,
-            replacement_provider=make_replacement_provider(rule),
-            capture_execution_evidence=args.capture_execution_evidence,
-            liquidity_rule=liquidity_rule,
-            opening_cash_only=args.opening_cash_only,
-        )
+        with progress_phase('account_replay', account=name, **progress):
+            result = simulate_candidate_allocation(
+                panel, states, events, replace(definition, name=name), policy,
+                mode='exit_reserve', count=parameters.candidate_count,
+                capital=args.capital, start=args.start,
+                replacement_provider=make_replacement_provider(rule),
+                capture_execution_evidence=args.capture_execution_evidence,
+                liquidity_rule=liquidity_rule,
+                opening_cash_only=args.opening_cash_only,
+            )
         selections = result.pop('candidate_selections')
         for selection in selections:
             if not scope[selection['selected']].all():
@@ -195,10 +202,14 @@ def main():
             'capital': args.capital, 'replacement_rule': asdict(rule), 'protocol': manifest,
         }, metrics)
         (directory / 'selections.json').write_text(json.dumps(selections, separators=(',', ':')))
-        audited = audit_result(directory, initial_capital=args.capital)
+        with progress_phase('account_audit', account=name, **progress):
+            audited = audit_result(directory, initial_capital=args.capital)
         (directory / 'audit.json').write_text(json.dumps(audited, indent=2))
         reports.append({'name': name, 'cost': multiplier, **metrics})
         (args.output / 'results.json').write_text(json.dumps(reports, indent=2))
+        if not args.quiet_progress:
+            progress_event('replay_accounts_completed', started=replay_started,
+                           account_group=args.output.name, completed=multiplier, total=2)
         print(json.dumps({'done': name, **{
             key: metrics[key] for key in (
                 'annualized_return', 'maximum_drawdown', 'win_rate', 'closed_trades'

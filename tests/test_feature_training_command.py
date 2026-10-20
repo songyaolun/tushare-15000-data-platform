@@ -4,6 +4,7 @@ import hashlib
 import json
 import runpy
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +29,8 @@ def training_spec(tmp_path):
     np.savez(axis_root / "candidate-axis.npz", days=np.arange(40), securities=np.zeros(40, int))
     (panel_root / "panel.json").write_text(
         json.dumps(
-            {"calendar": ["20211018"] + [str(x) for x in range(1, 40)], "codes": ["000001.SZ"]}
+            {"calendar": [(date(2021, 10, 18) + timedelta(days=x)).strftime("%Y%m%d")
+                          for x in range(40)], "codes": ["000001.SZ"]}
         )
     )
     labels = np.column_stack(
@@ -128,3 +130,32 @@ def test_training_command_rejects_changed_contract(training_spec, monkeypatch, f
             str(Path(__file__).parents[1] / "scripts/research/train_feature_case.py"),
             run_name="__main__",
         )
+
+
+def test_training_progress_preserves_portable_model_and_predictions(
+    training_spec, monkeypatch, capsys,
+):
+    """Official verbosity and phase reporting preserve every portable tree and prediction."""
+    path, spec = training_spec
+    exports = []
+    for quiet in (False, True):
+        spec["output_root"] = str(path.parent / ("quiet" if quiet else "progress"))
+        path.write_text(json.dumps(spec))
+        arguments = ["train", "--spec", str(path), "--case", "event"]
+        if quiet:
+            arguments.append("--quiet-progress")
+        monkeypatch.setattr(sys, "argv", arguments)
+        runpy.run_path(str(Path(__file__).parents[1] / "scripts/research/train_feature_case.py"),
+                       run_name="__main__")
+        output = capsys.readouterr().out
+        records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+        events = [record["event"] for record in records if "event" in record]
+        assert events == ([] if quiet else [
+            "fit_start", "fit_done", "native_predict_start", "native_predict_done",
+            "portable_verify_start", "portable_verify_done",
+        ])
+        root = Path(spec["output_root"]) / "event"
+        exports.append(((root / "model-portable.json").read_bytes(),
+                        np.load(root / "candidate-prediction.npy")))
+    assert exports[0][0] == exports[1][0]
+    np.testing.assert_array_equal(exports[0][1], exports[1][1])

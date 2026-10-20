@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import pickle
+import sys
 import time
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import numpy as np
 import sklearn
 from sklearn.ensemble import HistGradientBoostingRegressor
 
+from tushare_entitlement_hub.progress import progress_phase
 from tushare_entitlement_hub.strategy_discovery.boosted_tree_scoring import BoostedTreeModel
 from tushare_entitlement_hub.strategy_discovery.feature_experiments import (
     portable_numeric_model,
@@ -43,7 +45,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", type=Path, required=True)
     parser.add_argument("--case", required=True)
+    parser.add_argument("--quiet-progress", action="store_true")
+    parser.add_argument("--training-verbose", type=int, choices=(0, 1, 2), default=1)
     args = parser.parse_args()
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     spec = json.loads(args.spec.read_text())
     if args.case not in spec["cases"]:
         raise ValueError("unregistered experiment case")
@@ -119,12 +125,18 @@ def main() -> None:
     started = time.monotonic()
     print(json.dumps({"fit_start": args.case, "columns": len(names)}), flush=True)
     model = HistGradientBoostingRegressor(**parameters)
-    model.fit(features[fit], response, sample_weight=weights)
-    prediction = model.predict(features)
-    portable = portable_numeric_model(model, names)
-    restored = BoostedTreeModel.from_dict(portable)
-    verified = restored.predict(features, feature_names=names)
-    np.testing.assert_array_equal(prediction, verified)
+    # sklearn verbosity controls only reporting; keep numerical parameters in the protocol.
+    model.set_params(verbose=0 if args.quiet_progress else args.training_verbose)
+    progress = {"enabled": not args.quiet_progress, "case": args.case}
+    with progress_phase("fit", **progress):
+        model.fit(features[fit], response, sample_weight=weights)
+    with progress_phase("native_predict", **progress):
+        prediction = model.predict(features)
+    with progress_phase("portable_verify", **progress):
+        portable = portable_numeric_model(model, names)
+        restored = BoostedTreeModel.from_dict(portable)
+        verified = restored.predict(features, feature_names=names)
+        np.testing.assert_array_equal(prediction, verified)
     model_path = root / "model-portable.json"
     model_path.write_text(json.dumps(portable, separators=(",", ":"), allow_nan=False))
     with (root / "model.pickle").open("wb") as stream:

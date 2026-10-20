@@ -35,6 +35,26 @@ Tushare 凭据放在仓库外、权限为 `0600` 的 dotenv 文件，内容键�
 
 ## 原始下载入口及其边界
 
+每次新训练先实时检查CPU affinity、cgroup各级配额、可用内存和已有负载，再确认GPU
+型号/显存以及所用算法是否支持GPU；GPU存在不等于sklearn HGB能够使用它。记录
+OMP/BLAS/MKL设置，用同一输入做有界短测并核对数值一致性，再选择模型并行数和每模型
+线程数。本次3×16只适用于当前64核机器的实测，不是跨机器固定配置。Linux可用
+`lscpu`、`taskset -pc $$`、`cat /proc/self/cgroup`、`free -h`、`ps`查看资源；沿cgroup
+所属路径向上核对`cpu.max`，不能只看宿主机核心数。GPU驱动可用时以`nvidia-smi`核验。
+已运行任务改变设置前先评估重启成本，不为了补日志重新训练已完成拟合的模型。
+
+新训练默认输出框架迭代和fit/native_predict/portable_verify阶段，长阶段30秒心跳；
+`--training-verbose 0`只关框架逐轮信息，`--quiet-progress`关闭新增细节。当前已加载的
+旧任务不能热加轮数日志，只能报告真实进程观测和上一次经证据确认的阶段。研究观察入口：
+
+```bash
+env -u PYTHONPATH uv run --frozen --python 3.11 python \
+  scripts/research/watch_return80_progress.py --root /你的研究产物目录 --pid 你的进程号
+```
+
+该观察器适用本次四模型32账户目录协议；只读转发日志及已保存的完成数，不下载数据，
+不启动任务，不以CPU活跃或elapsed冒充完成百分比。实际运行请把目录和PID替换为本机值。
+
 先导入仓库提供的公开接口目录，再查看实际登记结果：
 
 ```bash
