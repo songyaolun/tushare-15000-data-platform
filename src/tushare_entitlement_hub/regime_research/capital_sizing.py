@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from math import isfinite
 from numbers import Real
+from typing import cast
 
 
 def finite_number(value: object) -> bool:
@@ -89,7 +90,8 @@ def parse_capital_tiers(value: str) -> tuple[tuple[float, float], ...]:
         )
         if any(len(pair) != 2 for pair in tiers):
             raise ValueError("invalid_capital_tiers")
-        CapitalSizingRule(tiers)
+        validated_tiers = cast(tuple[tuple[float, float], ...], tiers)
+        CapitalSizingRule(validated_tiers)
     except (ValueError, TypeError, IndexError) as error:
         raise ValueError("invalid_capital_tiers") from error
-    return tiers
+    return validated_tiers
