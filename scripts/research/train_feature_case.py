@@ -23,6 +23,9 @@ from tushare_entitlement_hub.strategy_discovery.frozen_feature_combination impor
 )
 from tushare_entitlement_hub.strategy_discovery.joint_exit_scoring import exit_training_targets
 from tushare_entitlement_hub.strategy_discovery.model_capacity import resolve_model_capacity
+from tushare_entitlement_hub.strategy_discovery.portable_validation import (
+    validate_portable_predictions,
+)
 from tushare_entitlement_hub.strategy_discovery.training_weights import daily_equal_training_weights
 
 
@@ -40,11 +43,14 @@ def main() -> None:
     spec.half_life_sessions applies predeclared trading-session decay; spec.training_cutoff
     defaults to the final panel date and rejects any selected label not yet mature.
     spec.model_capacity explicitly overrides only tree depth, leaves or rounds;
-    omitted overrides preserve the original parameters exactly.
+    omitted overrides preserve the original parameters exactly. Research defaults to
+    bounded portable checks; --portable-validation full explicitly checks every row.
+    Native model/predictions are checkpointed before export validation.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", type=Path, required=True)
     parser.add_argument("--case", required=True)
+    parser.add_argument("--portable-validation", choices=("bounded", "full"), default="bounded")
     parser.add_argument("--quiet-progress", action="store_true")
     parser.add_argument("--training-verbose", type=int, choices=(0, 1, 2), default=1)
     args = parser.parse_args()
@@ -119,6 +125,7 @@ def main() -> None:
         "placebo": placebo_audit,
         "training_weights": weight_audit,
         "historical_pit_certified": False,
+        "portable_validation_mode": args.portable_validation,
         "sample": "full five-year fit and selection; no financial holdout",
     }
     (root / "protocol.json").write_text(json.dumps(protocol, indent=2))
@@ -132,27 +139,38 @@ def main() -> None:
         model.fit(features[fit], response, sample_weight=weights)
     with progress_phase("native_predict", **progress):
         prediction = model.predict(features)
-    with progress_phase("portable_verify", **progress):
+    # Persist native results before optional export validation so research work is recoverable.
+    with progress_phase("native_checkpoint", **progress):
+        with (root / "model.pickle").open("wb") as stream:
+            pickle.dump(model, stream, protocol=5)
+        np.save(root / "candidate-prediction.npy", prediction)
+        matrix = np.full((len(calendar), len(panel["codes"])), np.nan)
+        matrix[axis["days"], axis["securities"]] = prediction
+        score_path = root / "scores.npy"
+        np.save(score_path, matrix)
+        checkpoint = {"status": "native_ready", "replay_score_source": "native_predictions",
+                      "portable_validation_pending": True,
+                      "files": {name: digest(root / name) for name in
+                                ("model.pickle", "candidate-prediction.npy", "scores.npy")}}
+        temporary_checkpoint = root / "native-checkpoint.json.tmp"
+        temporary_checkpoint.write_text(json.dumps(checkpoint, indent=2))
+        temporary_checkpoint.replace(root / "native-checkpoint.json")
+    with progress_phase("portable_verify", mode=args.portable_validation, **progress):
         portable = portable_numeric_model(model, names)
         restored = BoostedTreeModel.from_dict(portable)
-        verified = restored.predict(features, feature_names=names)
-        np.testing.assert_array_equal(prediction, verified)
+        validation = validate_portable_predictions(
+            restored, features, prediction, feature_names=names, mode=args.portable_validation,
+        )
     model_path = root / "model-portable.json"
     model_path.write_text(json.dumps(portable, separators=(",", ":"), allow_nan=False))
-    with (root / "model.pickle").open("wb") as stream:
-        pickle.dump(model, stream, protocol=5)
-    np.save(root / "candidate-prediction.npy", prediction)
-    matrix = np.full((len(calendar), len(panel["codes"])), np.nan)
-    matrix[axis["days"], axis["securities"]] = prediction
-    score_path = root / "scores.npy"
-    np.save(score_path, matrix)
     audit = {
         "case": args.case,
         "seconds": time.monotonic() - started,
         "columns": len(names),
         "trees": len(portable["trees"]),
         "fit_rows": int(fit.sum()),
-        "portable_prediction_max_error": 0.0,
+        "portable_validation": validation,
+        "portable_prediction_max_error": 0.0 if validation["full_portable_verified"] else None,
         "additional_fit_finite_counts": np.isfinite(additional[fit]).sum(axis=0).tolist(),
         "model_sha256": digest(model_path),
         "score_sha256": digest(score_path),
