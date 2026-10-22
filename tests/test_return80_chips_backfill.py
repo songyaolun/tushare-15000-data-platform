@@ -72,6 +72,23 @@ def test_provider_unavailable_is_persisted_once(tmp_path):
     assert not (partition / "raw").exists()
 
 
+def test_rate_limit_is_failed_then_resumable_without_erasing_evidence(tmp_path):
+    """A full-window 40203 is transient, never absence; later success retains both errors.
+
+    A short successful probe is not evidence of a sustainable rolling-window rate.
+    """
+    limited = {"code": 40203, "msg": "cyq_chips接口每分钟最多访问1000次", "data": None}
+    with pytest.raises(ProviderError) as error:
+        collect(tmp_path, FakeTransport([limited, limited]))
+    assert error.value.kind == "transient_failure"
+    assert not list(tmp_path.rglob("receipt.json"))
+    errors = list(tmp_path.rglob("errors/*.json"))
+    assert len(errors) == 2
+    result = collect(tmp_path, FakeTransport([response([["000001.SZ", "20261015", 10, 100]])]))
+    assert result["status"] == "source_dates_missing"
+    assert all(path.exists() for path in errors)
+
+
 @pytest.mark.parametrize("second", [
     [["000001.SZ", "20261015", 10, 100]],
     [["000002.SZ", "20261015", 10, 100]],
