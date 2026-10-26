@@ -128,12 +128,36 @@ class RawStore:
         返回包含 JSON 文件路径、响应哈希及原始 data 字段的 RawRecord。
         不同抓取时间分别保留，完全相同的观测重复写入使用同一文件。
         """
+        if type(response.get("code")) is not int or response["code"] != 0:
+            raise ValueError("只有成功响应可以进入原始数据层")
+        return self._write(api_name, params, response, observed_at)
+
+    def write_error(
+        self, api_name: str, params: dict[str, Any], response: dict[str, Any], observed_at: str
+    ) -> RawRecord:
+        """Preserve a provider rejection separately from successful raw pages.
+
+        Example: code=50101 produces errors/<api>/... with the original error code;
+        code=0 is rejected here. Public-data checks and atomic readback still apply.
+        """
+        if type(response.get("code")) is not int or response["code"] == 0:
+            raise ValueError("错误证据必须包含非零提供方状态码")
+        return RawStore(self.root / "errors")._write(
+            api_name, params, response, observed_at, error=True
+        )
+
+    def _write(
+        self, api_name: str, params: dict[str, Any], response: dict[str, Any], observed_at: str,
+        *, error: bool = False,
+    ) -> RawRecord:
+        """Atomically preserve public bytes and verify their complete envelope hash.
+
+        Example: an error envelope includes evidence_kind=provider_error_not_successful_raw.
+        """
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", api_name):
             raise ValueError("接口名格式无效")
         if not isinstance(observed_at, str) or not observed_at.strip():
             raise ValueError("必须提供抓取时间")
-        if type(response.get("code")) is not int or response["code"] != 0:
-            raise ValueError("只有成功响应可以进入原始数据层")
         response_text = canonical_json(response)
         request_text = canonical_json({"api_name": api_name, "params": params})
         response_hash = hashlib.sha256(response_text.encode()).hexdigest()
@@ -142,6 +166,8 @@ class RawStore:
             "api_name": api_name, "params": params, "observed_at": observed_at,
             "request_id": request_id, "response_hash": response_hash, "response": response,
         }
+        if error:
+            envelope["evidence_kind"] = "provider_error_not_successful_raw"
         encoded = canonical_json(envelope).encode()
         content_hash = hashlib.sha256(encoded).hexdigest()
         directory = self.root / api_name / request_id

@@ -11,6 +11,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal, Protocol
 
 import httpx
@@ -31,6 +32,55 @@ class ProviderError(Exception):
         """
         self.kind = kind
         super().__init__(message)
+
+
+class ProviderDataUnavailable(ProviderError):
+    """A bounded chips request has verified missing-data evidence, never an empty Page."""
+
+    def __init__(self, raw: RawRecord) -> None:
+        """Keep public evidence for opt-in consumers; e.g. raw.response retains code=50101."""
+        self.raw = raw
+        super().__init__("contract_failure", "筹码源明确报告指定数据不存在")
+
+
+def chips_data_unavailable(
+    api_name: str, params: dict[str, Any], response: dict[str, Any]
+) -> bool:
+    """Recognize only an explicit first-page missing response for one stock and date range.
+
+    Example: cyq_chips(600898.SH, trade_date=20240920), code=50101 and the known
+    missing-data message returns True; permission errors and later pages return False.
+    """
+    if (
+        api_name != "cyq_chips"
+        or type(response.get("code")) is not int
+        or response["code"] != 50101
+        or response.get("msg") not in {
+            "指定数据不存在", "指定数据不存在，请确认参数！", "指定数据不存在，请确认参数!"
+        }
+        or response.get("data") is not None
+        or type(params.get("offset", 0)) is not int
+        or params.get("offset", 0) != 0
+        or not re.fullmatch(r"[0-9]{6}\.(SH|SZ)", str(params.get("ts_code", "")))
+        or set(params) - {
+            "ts_code", "trade_date", "start_date", "end_date", "fields", "limit", "offset"
+        }
+    ):
+        return False
+    dates = (
+        [params["trade_date"]] if "trade_date" in params
+        else [params.get("start_date"), params.get("end_date")]
+    )
+    if "trade_date" in params and ({"start_date", "end_date"} & params.keys()):
+        return False
+    if not all(isinstance(value, str) for value in dates):
+        return False
+    date_strings = [str(value) for value in dates]
+    try:
+        parsed = [datetime.strptime(value, "%Y%m%d") for value in date_strings]
+        return all(re.fullmatch(r"[0-9]{8}", v) for v in date_strings) and parsed == sorted(parsed)
+    except (TypeError, ValueError):
+        return False
 
 
 class Transport(Protocol):
@@ -367,7 +417,12 @@ class Client:
                 if self.limiter is not None:
                     self.limiter.acquire(self.account, api_name, self.rate_per_minute)
                 response = self.transport.request(api_name, params)
+                if chips_data_unavailable(api_name, params, response):
+                    evidence = self.raw_store.write_error(api_name, params, response, observed_at)
+                    raise ProviderDataUnavailable(evidence)
                 self._check_status(response)
+            except ProviderDataUnavailable:
+                raise
             except ProviderError as error:
                 failure = (error.kind, "请求失败，已终止当前采集")
             except httpx.RequestError:
