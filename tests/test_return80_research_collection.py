@@ -6,13 +6,19 @@ import numpy as np
 import pytest
 from test_return80_research_dataset import arrays_fixture
 
-from tushare_entitlement_hub.client import Client, FakeTransport, ProviderError
+from tushare_entitlement_hub.client import (
+    Client,
+    FakeTransport,
+    ProviderError,
+    chips_data_unavailable,
+)
 from tushare_entitlement_hub.raw import RawStore
 from tushare_entitlement_hub.return80_research.cli import main
 from tushare_entitlement_hub.return80_research.collection import (
     collect_plan,
     load_collection_plan,
     read_collection,
+    verify_chips_unavailable,
 )
 from tushare_entitlement_hub.return80_research.dataset import (
     load_dataset,
@@ -53,6 +59,101 @@ def response(rows):
         "code": 0,
         "data": {"fields": ["ts_code", "trade_date", "turnover_rate"], "items": rows},
     }
+
+
+def chips_plan(root):
+    """Two stocks share a plan: the unavailable one must not block its healthy neighbour."""
+    path = plan_fixture(root)
+    plan = json.loads(path.read_text())
+    request = plan["requests"][0]
+    request.update(api="cyq_chips", fields=["ts_code", "trade_date", "price", "percent"],
+                   primary_key=["ts_code", "trade_date", "price"])
+    plan["requests"] = [
+        {**request, "parameters": {"ts_code": code, "trade_date": "20240920"}}
+        for code in ["600898.SH", "600000.SH"]
+    ]
+    path.write_text(json.dumps(plan))
+    return path
+
+
+def test_chips_missing_source_keeps_error_and_resumes_without_fake_success(tmp_path):
+    """An explicit missing source is retained separately; healthy data and resumption still work."""
+    path, root = chips_plan(tmp_path), tmp_path / "collected"
+    missing = {"code": 50101, "msg": "指定数据不存在，请确认参数！", "data": None}
+    healthy = {"code": 0, "data": {
+        "fields": ["ts_code", "trade_date", "price", "percent"],
+        "items": [["600000.SH", "20240920", 10, 100]],
+    }}
+    transport = FakeTransport([missing, healthy])
+    client = Client(transport, RawStore(root / "raw"))
+    collect_plan(client, path, root, allow_chips_unavailable=True)
+    manifest = json.loads((root / "collection.json").read_text())
+    assert manifest["status"] == "completed_with_source_gaps"
+    partition = manifest["partitions"][0]
+    assert partition["status"] == "provider_data_unavailable" and partition["rows"] == 0
+    evidence = root / partition["files"][0]["path"]
+    assert "/errors/" in str(evidence)
+    assert json.loads(evidence.read_text())["response"] == missing
+    with pytest.raises(ValueError, match="policy_required"):
+        read_collection(root, "cyq_chips")
+    rows = read_collection(root, "cyq_chips", allow_chips_unavailable=True)
+    assert len(rows) == 1 and rows[0]["ts_code"] == "600000.SH"
+    collect_plan(client, path, root, allow_chips_unavailable=True)
+    assert len(transport.calls) == 2
+    with pytest.raises(ValueError, match="policy_required"):
+        collect_plan(client, path, root)
+    forged = {**partition, "provider_code": 0}
+    with pytest.raises(ValueError, match="invalid_chips_unavailable_receipt"):
+        verify_chips_unavailable(root, forged)
+    evidence.write_text("{}")
+    with pytest.raises(ValueError, match="collection_raw_changed"):
+        collect_plan(client, path, root, allow_chips_unavailable=True)
+
+
+@pytest.mark.parametrize("failure", ["strict", "permission", "unknown", "later_page", "timeout"])
+def test_chips_other_failures_never_become_missing_success(tmp_path, failure):
+    """Default policy, permission/unknown errors, network failure and pagination gaps all stop."""
+    path, root = chips_plan(tmp_path), tmp_path / "collected"
+    missing = {"code": 50101, "msg": "指定数据不存在，请确认参数！", "data": None}
+    responses = [missing]
+    if failure == "permission":
+        responses = [{"code": 50101, "msg": "权限不足", "data": None}]
+    elif failure == "unknown":
+        responses = [{"code": 50101, "msg": "未知参数错误", "data": None}]
+    elif failure == "timeout":
+        responses = [ProviderError("transient_failure", "fixture timeout")]
+    elif failure == "later_page":
+        responses = [{"code": 0, "data": {
+            "fields": ["ts_code", "trade_date", "price", "percent"],
+            "items": [["600898.SH", "20240920", 10, 50],
+                      ["600898.SH", "20240920", 11, 50]],
+        }}, missing]
+    client = Client(FakeTransport(responses), RawStore(root / "raw"), retries=0)
+    with pytest.raises(ProviderError):
+        collect_plan(client, path, root, allow_chips_unavailable=failure != "strict")
+    assert not (root / "collection.json").exists()
+
+
+@pytest.mark.parametrize("params", [
+    {}, {"ts_code": "600898.SH", "trade_date": "20240230"},
+    {"ts_code": "600898.SH", "start_date": "20250110", "end_date": "20240920"},
+    {"ts_code": "600898.SH", "trade_date": "20240920", "offset": 2},
+    {"ts_code": "600898.SH", "trade_date": "20240920", "start_date": "20240920"},
+])
+def test_missing_chips_requires_valid_bounded_first_page(params):
+    """A missing message never hides malformed dates, ambiguous windows or later pages."""
+    value = {"code": 50101, "msg": "指定数据不存在，请确认参数！", "data": None}
+    assert not chips_data_unavailable("cyq_chips", params, value)
+    assert not chips_data_unavailable("daily", {"ts_code": "600898.SH"}, value)
+
+
+def test_error_store_rejects_success_and_credential_fields(tmp_path):
+    """Error storage never accepts a success page or persists credential-bearing errors."""
+    store = RawStore(tmp_path)
+    with pytest.raises(ValueError):
+        store.write_error("cyq_chips", {}, {"code": 0}, "fixture")
+    with pytest.raises(ValueError):
+        store.write_error("cyq_chips", {}, {"code": 50101, "token": "fixture"}, "fixture")
 
 
 def test_collection_resume_build_append_end_to_end(tmp_path, capsys):
