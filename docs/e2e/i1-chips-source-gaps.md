@@ -28,4 +28,12 @@ codegraph status .
 桌面及390x844浏览器not applicable：无UI。跨端用同一请求/fixture验证状态、内容
 和SHA；本机测试不代表Mac实测。通过标准为全部上述门禁通过、证据独立且可恢复、
 CodeGraph无pendingChanges。保存revision、退出码和日志到仓外。
+
+2026-10-27公共采集迁移适用本文件所在提交：`return80_research/collection.py`迁至
+`market_collection/collection.py`、`EXTRA_FIELDS`迁至`market_collection/fields.py`，
+旧`return80_research.collection`保留薄re-export（对象同一）。请求字段、分页键、
+`return80-collection-plan/v1` schema、原始页SHA/digest与缓存键均不变。
+新增回归`tests/test_market_collection_contract.py`锁定re-export同一性、
+`request`冻结契约与plan schema/digest稳定；Research I1已改指
+`tushare_entitlement_hub.market_collection.*`。
 不发送通知、不部署、不交易、不注册调度；失败保留证据并回滚上一个冻结SHA。
