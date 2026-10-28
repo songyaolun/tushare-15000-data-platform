@@ -37,6 +37,38 @@ def client_for(tmp_path, responses, **kwargs):
     return Client(FakeTransport(responses), RawStore(tmp_path), **kwargs)
 
 
+@pytest.mark.parametrize("first", [None, ""])
+def test_forecast_nullable_date_keeps_raw_identity_across_pages(tmp_path, first):
+    """同公告日空首次日期及更晚首次日期跨页保留，原响应和值均不填补。"""
+    fields = ["ts_code", "end_date", "ann_date", "first_ann_date"]
+    rows = [["000001.SZ", "20231231", "20240320", first],
+            ["000001.SZ", "20231231", "20240320", "20240420"]]
+    responses = [response([row], fields) for row in rows] + [response([], fields)]
+    client = client_for(tmp_path, responses)
+    pages = client.pages("forecast_vip", {}, OBSERVED, fields, 1, 3)
+    assert [page.rows[0]["first_ann_date"] for page in pages[:-1]] == [first, "20240420"]
+    assert pages[0].raw.response["data"]["items"][0][-1] == first
+
+
+@pytest.mark.parametrize("api, missing", [("daily", "first_ann_date"), ("forecast_vip", "ts_code")])
+def test_nullable_forecast_date_does_not_relax_other_required_keys(tmp_path, api, missing):
+    """只有预告首次日期可空；daily同名键或预告证券代码为空均失败。"""
+    fields = ["ts_code", "first_ann_date"]
+    row = {"ts_code": "000001.SZ", "first_ann_date": "20240320", missing: None}
+    client = client_for(tmp_path, [response([[row[name] for name in fields]], fields)])
+    with pytest.raises(ProviderError, match="主键为空"):
+        client.pages(api, {}, OBSERVED, fields, 2, 1)
+
+
+def test_nullable_forecast_date_rejects_duplicate_record(tmp_path):
+    """同证券报告期公告日及空首次日期完全相同的跨页记录仍拒绝重复。"""
+    fields = ["ts_code", "end_date", "ann_date", "first_ann_date"]
+    row = ["000001.SZ", "20231231", "20240320", None]
+    client = client_for(tmp_path, [response([row], fields)] * 2)
+    with pytest.raises(ProviderError, match="主键重复"):
+        client.pages("forecast_vip", {}, OBSERVED, fields, 1, 3)
+
+
 @pytest.mark.parametrize("value", [
     {1: "public"}, {"nested": {"access_token": PLACEHOLDER}},
     {"fields": ["client_secret"]}, {"msg": "token=<REDACTED>"},
