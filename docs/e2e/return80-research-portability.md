@@ -1,5 +1,15 @@
 # Return80 独立研究机验收
 
+## I1预告可空首次公告日（2026-10-28）
+
+适用本节所在提交。Client.pages仅对forecast/forecast_vip的first_ann_date保留空值作为
+复合键一部分，不补公告日；其他必需主键、重复/冲突及完整短页证据仍失败关闭。
+Python3.11及uv冻结环境，离线运行tests/test_client_raw.py；跨页None/空字符串及真实日期
+原响应均保留，空证券及非预告接口同名空键失败，空日期重复记录仍拒绝。
+运行tests/test_return80_research_collection.py检查实际采集回执路径。
+无凭据、联网和UI，桌面/手机not applicable；生产更新由App显式授权流程执行。
+原始响应不改写，精确Hub生产版本与跨端回归由App源统一E2E记录，不认证历史PIT。
+
 ## Revision 与范围
 
 实现基于研究分支 `42cb57f0706a010337952d23cca7be691d3db1be`，通过

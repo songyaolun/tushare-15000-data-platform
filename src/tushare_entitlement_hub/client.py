@@ -486,6 +486,8 @@ class Client:
         max_pages=1 时抛契约错误，调用方应缩小日期或实体分片重新采集。
         主键重复或冲突、跨页字段变化、超限及缺少主键全部关闭流程。
         paginate=False 时不注入 limit/offset，但达到页上限仍要求进一步分片。
+        forecast/forecast_vip的first_ann_date可为空并原样保留；例如同公告日的
+        None与20241001是不同键，必需的证券/报告期/公告日仍不能缺失。
         """
         if (type(page_size) is not int or type(max_pages) is not int
                 or page_size <= 0 or max_pages <= 0 or not primary_key
@@ -513,7 +515,10 @@ class Client:
             if len(page.rows) > page_size:
                 raise ProviderError("contract_failure", "响应行数超过声明页上限")
             for row in page.rows:
-                if any(row[name] is None or row[name] == "" for name in primary_key):
+                if any((row[name] is None or row[name] == "")
+                       and not (api_name in {"forecast", "forecast_vip"}
+                                and name == "first_ann_date")
+                       for name in primary_key):
                     raise ProviderError("contract_failure", "响应主键为空")
                 key = canonical_json([row[name] for name in primary_key])
                 content = canonical_json(row)
